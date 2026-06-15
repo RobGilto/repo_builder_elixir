@@ -52,3 +52,8 @@ npm-debug.log
 /.playwright-mcp/
 /console-current-state.png
 
+
+# ADW (adws/) run scaffolding — never commit isolated worktrees, run state, or port files.
+/agents/
+/trees/
+/.ports.env
