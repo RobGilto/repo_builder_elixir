@@ -48,3 +48,7 @@ npm-debug.log
 # Local semantic-search index cache (machine-local, not part of the project).
 /.memsearch/
 
+# Playwright MCP scratch output (screenshots/snapshots/console logs).
+/.playwright-mcp/
+/console-current-state.png
+
