@@ -1,0 +1,11 @@
+{"type":"session","id":"pi_sess_1"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start"}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","text":"Hi "}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","text":"pondering"}}
+{"type":"tool_execution_start","toolName":"bash","toolCallId":"tc_1","args":{"cmd":"echo hi"}}
+{"type":"tool_execution_end","toolName":"bash","toolCallId":"tc_1","isError":false,"result":"hi"}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Hello 世界 🌏"}],"usage":{"input_tokens":100,"output_tokens":50}}}
+{"type":"turn_end","message":{"usage":{"prompt_tokens":100,"completion_tokens":50}}}
+{"type":"agent_end","messages":[{"role":"assistant","usage":{"input":120,"output":60,"cacheRead":5,"totalTokens":180}}]}

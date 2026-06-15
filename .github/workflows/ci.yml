@@ -1,0 +1,107 @@
+# CI for repo_builder_elixir — the typed green gate (BUILD_PROMPT.md §3, §12 M0).
+#
+# Step order is LOAD-BEARING:
+#   deps.get -> patch_deps.sh -> compile (warnings-as-errors) -> format -> credo
+#   -> test (warnings-as-errors) -> dialyzer
+#
+# `scripts/patch_deps.sh` MUST run before any compile: type_check 0.13.7 does not
+# compile on Elixir 1.20 until that patch removes the dropped `Regex.re_version`
+# reference (see project memory `native-dep-space-path`).
+#
+# Toolchain pins come straight from mise.toml and must never be substituted:
+#   OTP 28.4 / Elixir 1.20.1.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  # Single source of truth for the pinned pair; reused in every cache key so the
+  # PLT cache is correctly invalidated when the toolchain changes.
+  OTP_VERSION: "28.4"
+  ELIXIR_VERSION: "1.20.1"
+  MIX_ENV: test
+
+jobs:
+  gate:
+    name: Typed green gate
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: repo_builder_test
+        ports:
+          - 5432:5432
+        # pg_isready health gating so the test DB is reachable before `mix test`.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Erlang/OTP + Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+
+      # deps + _build cache, keyed on the pinned pair + mix.lock hash.
+      - name: Cache deps and _build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-mix-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-mix-
+
+      # PLT cache, kept SEPARATE so a code change does not invalidate the
+      # (expensive) PLT. Keyed on OTP + Elixir + mix.lock hash per §3 / M0.
+      - name: Cache Dialyzer PLTs
+        uses: actions/cache@v4
+        with:
+          path: priv/plts
+          key: ${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-plt-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-plt-
+
+      - name: Fetch dependencies
+        run: mix deps.get
+
+      # MUST run before compile (Elixir 1.20 / type_check compat patch).
+      - name: Apply dependency patches
+        run: bash scripts/patch_deps.sh
+
+      - name: Compile (warnings as errors)
+        run: mix compile --warnings-as-errors
+
+      - name: Check formatting
+        run: mix format --check-formatted
+
+      - name: Credo (strict — includes the @spec gate)
+        run: mix credo --strict
+
+      - name: Run tests (warnings as errors)
+        run: mix test --warnings-as-errors
+
+      # Build the PLT(s) into the cached dir, then run with stale-filter detection.
+      - name: Dialyzer
+        run: |
+          mkdir -p priv/plts
+          mix dialyzer --plt
+          mix dialyzer --format github --list-unused-filters

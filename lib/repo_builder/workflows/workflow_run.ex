@@ -1,0 +1,43 @@
+defmodule RepoBuilder.Workflows.WorkflowRun do
+  @moduledoc """
+  One row per ADW execution — the SOURCE OF TRUTH for run position (BUILD_PROMPT.md
+  §7/§8). Every deterministic transition is persisted here before the next step.
+
+  `total_cost_usd` is nullable: `NULL` = unpriced (never defaulted to 0).
+  """
+  use RepoBuilder.Schema
+
+  import Ecto.Changeset
+
+  @type status :: :queued | :running | :succeeded | :failed | :cancelled
+
+  @type t :: %__MODULE__{
+          id: Ecto.UUID.t() | nil,
+          workflow_id: Ecto.UUID.t() | nil,
+          status: status() | nil,
+          current_step: String.t() | nil,
+          artifacts: map(),
+          total_cost_usd: Decimal.t() | nil,
+          inserted_at: DateTime.t() | nil,
+          updated_at: DateTime.t() | nil
+        }
+
+  @statuses ~w(queued running succeeded failed cancelled)a
+
+  schema "workflow_runs" do
+    field :workflow_id, :binary_id
+    field :status, Ecto.Enum, values: @statuses, default: :queued
+    field :current_step, :string
+    field :artifacts, :map, default: %{}
+    field :total_cost_usd, :decimal
+    timestamps()
+  end
+
+  @spec changeset(t(), map()) :: Ecto.Changeset.t()
+  def changeset(run, params) do
+    run
+    |> cast(params, [:workflow_id, :status, :current_step, :artifacts, :total_cost_usd])
+    |> validate_required([:workflow_id, :status])
+    |> foreign_key_constraint(:workflow_id)
+  end
+end

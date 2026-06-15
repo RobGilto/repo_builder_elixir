@@ -1,0 +1,37 @@
+# Conditional Documentation Router
+
+> Read during the **research** phase of planning (`feature`/`bug`/`chore`) and at
+> `prime` time. This is a triage map: load a heavy reference doc **only when** the
+> task matches its condition, so context stays lean. Match every row that applies
+> and add the listed docs to your plan's `Relevant Files`.
+
+## How to use
+
+1. Read the task (issue title/body or the user's request).
+2. For each row below, decide if the **Condition** applies.
+3. For every matching row, read the listed docs and cite them in the plan.
+4. The **always** row applies to every implementation task.
+
+## Routing table
+
+| Condition — your task involves… | Read these docs |
+|---|---|
+| **(always)** writing or changing any public function, struct, schema, or behaviour | `ai_docs/typed-elixir-standard.md` — the typed coding standard (enforced; see `.credo.exs` + `mix dialyzer`) |
+| Architecture, milestones, or any cross-cutting design question | `BUILD_PROMPT.md` (the authoritative spec) |
+| Harness adapters, event normalization, or the canonical event contract | `BUILD_PROMPT.md` §4 (event contract) + §10 (extensibility); `ai_docs/typed-elixir-standard.md` (rule 6, wire vs domain) |
+| The session runtime, erlexec/muontrap, OS-process lifecycle, or orphan reaping | `BUILD_PROMPT.md` §6; `ai_docs/adw-primitives.md` |
+| The workflow/ADW engine, step state machine, or run resumption | `BUILD_PROMPT.md` §7; `ai_docs/adw-orchestration.md` |
+| Oban — workers, queues, cron, webhooks, durable triggers, idempotency | `BUILD_PROMPT.md` §7 (durable split) + §13 (Oban testing); `ai_docs/adw-orchestration.md` |
+| Ecto schemas, migrations, contexts, JSONB, Enum, or the cost float→Decimal boundary | `BUILD_PROMPT.md` §8; `ai_docs/typed-elixir-standard.md` (rule 10) |
+| The LiveView dashboard, streams, swimlanes, `assign_async`, or reconnect handling | `BUILD_PROMPT.md` §9; `AGENTS.md` (Phoenix v1.8 + LiveView guidelines) |
+| Adding or swapping a harness/provider | `BUILD_PROMPT.md` §10 (add a harness = one module + config) |
+| Secrets, credential sourcing, or `raw` redaction | `BUILD_PROMPT.md` §4.1 (redaction) + §6 (secrets) |
+| Tests, Mox, the FakeHarness, normalizer property tests, or crash-isolation tests | `BUILD_PROMPT.md` §13; `ai_docs/typed-elixir-standard.md` (Enforcement) |
+| Anything touching the existing Python ADW scripts | `adws/README.md` (scripts are Astral `uv` single-file Python) |
+
+## Notes
+
+- When in doubt, the **(always)** row plus `BUILD_PROMPT.md` is the safe minimum.
+- Runtime verification for any of the above is available via **Tidewave** MCP
+  (`http://localhost:4000/tidewave/mcp`): `project_eval`, `execute_sql_query`,
+  `get_logs`, `get_docs`, `get_source_location`, `get_ecto_schemas`.

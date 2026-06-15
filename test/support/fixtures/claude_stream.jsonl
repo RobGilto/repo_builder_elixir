@@ -1,0 +1,9 @@
+{"type":"system","subtype":"init","session_id":"sess_abc123","model":"claude-sonnet-4-6","tools":["Bash","Read"],"mcp_servers":[]}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel"}}}
+{"type":"assistant","message":{"id":"msg_1","content":[{"type":"text","text":"Hello, world"}],"usage":{"input_tokens":12,"output_tokens":3}}}
+{"type":"assistant","message":{"id":"msg_2","content":[{"type":"thinking","thinking":"Let me think about this."}]}}
+{"type":"assistant","message":{"id":"msg_3","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"file.txt","is_error":false}]}}
+{"type":"system","subtype":"api_retry","attempt":1,"max_retries":3,"retry_delay_ms":1000,"error":"overloaded","error_status":529}
+{"type":"assistant","message":{"id":"msg_4","content":[{"type":"text","text":"こんにちは 🌍 café —  not a break  still text"}]}}
+{"type":"result","subtype":"success","total_cost_usd":0.0123,"usage":{"input_tokens":120,"output_tokens":45,"cache_read_input_tokens":10},"duration_ms":3400,"num_turns":2,"result":"All done","is_error":false}

@@ -1,0 +1,3 @@
+{"type":"session","id":"pi_zai_1"}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","text":"GLM output"}}
+{"type":"message_end","message":{"content":[{"type":"text","text":"GLM final"}],"usage":{"input":10,"output":20}}}

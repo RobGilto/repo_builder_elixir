@@ -1,0 +1,91 @@
+import Config
+
+# Configure your database
+#
+# The MIX_TEST_PARTITION environment variable can be used
+# to provide built-in test partitioning in CI environment.
+# Run `mix help test` for more information.
+config :repo_builder, RepoBuilder.Repo,
+  username: "postgres",
+  password: "postgres",
+  hostname: "localhost",
+  database: "repo_builder_test#{System.get_env("MIX_TEST_PARTITION")}",
+  pool: Ecto.Adapters.SQL.Sandbox,
+  pool_size: System.schedulers_online() * 2
+
+# We don't run a server during test. If one is required,
+# you can enable the server option below.
+config :repo_builder, RepoBuilderWeb.Endpoint,
+  http: [ip: {127, 0, 0, 1}, port: 4002],
+  secret_key_base: "AfqOUq7O65Qq60G9/+lGDT7ZtYqjFEBBeSwYFVyJUCrnFBri0Tnuf5EKZSASsxXS",
+  server: false
+
+# In test we don't send emails
+config :repo_builder, RepoBuilder.Mailer, adapter: Swoosh.Adapters.Test
+
+# Disable swoosh api client as it is only required for production adapters
+config :swoosh, :api_client, false
+
+# Print only warnings and errors during test
+config :logger, level: :warning
+
+# Initialize plugs at runtime for faster test compilation
+config :phoenix, :plug_init_mode, :runtime
+
+# Enable helpful, but potentially expensive runtime checks
+config :phoenix_live_view,
+  enable_expensive_runtime_checks: true
+
+# Sort query params output of verified routes for robust url comparisons
+config :phoenix,
+  sort_verified_routes_query_params: true
+
+# Baseline harness registry for tests. Per-test setup overrides the entry for the
+# harness under test (e.g. point "claude" at RepoBuilder.Harness.Mock) — the
+# registry is the single injection seam (BUILD_PROMPT.md §13). "fake" lets
+# session/workflow tests resolve a real canned-event adapter without a CLI.
+config :repo_builder, :harnesses, %{
+  "claude" => %{
+    module: RepoBuilder.Harness.Claude,
+    exe: "claude",
+    default_model: nil,
+    price_table: %{}
+  },
+  "pi" => %{
+    module: RepoBuilder.Harness.Pi,
+    exe: "pi",
+    default_model: "glm-4.6",
+    price_table: %{"glm-4.6" => 0.6}
+  },
+  "cursor" => %{
+    module: RepoBuilder.Harness.Cursor,
+    exe: "cursor-agent",
+    default_model: nil,
+    price_table: %{}
+  },
+  "fake" => %{
+    module: RepoBuilder.Harness.Fake,
+    exe: "printf",
+    default_model: nil,
+    price_table: %{}
+  }
+}
+
+# Don't reap on boot in tests — the suite drives OrphanReaper.reap_node/1 explicitly
+# so it doesn't race the Ecto sandbox.
+config :repo_builder, :orphan_reaper, reap_on_boot: false
+
+# Oban in manual testing mode: jobs are inserted (assert_enqueued) but not run by
+# queues/cron; execution tests use Oban.Testing helpers / perform_job.
+config :repo_builder, Oban, testing: :manual
+
+# Webhook secret for signing tests.
+config :repo_builder, :webhooks, replay_window_seconds: 300, secret: "test-webhook-secret"
+
+# Faster, more deterministic session runtime in tests.
+config :repo_builder, :session,
+  max_live_sessions: 100,
+  max_children: 200,
+  idle_ms: 300_000,
+  max_line_bytes: 1_048_576,
+  workspace_base: "priv/workspaces"
