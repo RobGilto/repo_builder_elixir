@@ -21,6 +21,9 @@ defmodule RepoBuilder.Agents.Agent do
           harness: String.t() | nil,
           provider: provider() | nil,
           status: status(),
+          model: String.t() | nil,
+          system_prompt: String.t() | nil,
+          archived: boolean(),
           config: map(),
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
@@ -31,6 +34,9 @@ defmodule RepoBuilder.Agents.Agent do
     field :harness, :string
     field :provider, Ecto.Enum, values: [:anthropic, :openai, :local]
     field :status, Ecto.Enum, values: [:idle, :running, :error], default: :idle
+    field :model, :string
+    field :system_prompt, :string
+    field :archived, :boolean, default: false
     field :config, :map, default: %{}
     timestamps()
   end
@@ -38,11 +44,27 @@ defmodule RepoBuilder.Agents.Agent do
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(agent, params) do
     agent
-    |> cast(params, [:name, :harness, :provider, :status, :config])
+    |> cast(params, [
+      :name,
+      :harness,
+      :provider,
+      :status,
+      :model,
+      :system_prompt,
+      :archived,
+      :config
+    ])
     |> validate_required([:name, :harness, :provider])
     |> validate_length(:name, min: 1, max: 200)
+    |> validate_length(:system_prompt, max: 20_000)
     |> validate_inclusion(:harness, Registry.known(), message: "is not a registered harness")
     |> unique_constraint(:name)
+  end
+
+  @doc "Soft-archive changeset: flips `archived` to true, preserving log/cost history."
+  @spec archive_changeset(t()) :: Ecto.Changeset.t()
+  def archive_changeset(agent) do
+    change(agent, archived: true)
   end
 
   @spec status_changeset(t(), status()) :: Ecto.Changeset.t()

@@ -9,7 +9,25 @@ defmodule RepoBuilder.Agents do
   alias RepoBuilder.Repo
 
   @spec list_agents() :: [Agent.t()]
-  def list_agents, do: Repo.all(from(a in Agent, order_by: [asc: a.name]))
+  def list_agents, do: list_agents([])
+
+  @doc """
+  List agents ordered by name. Archived agents are excluded by default; pass
+  `include_archived: true` to include them.
+  """
+  @spec list_agents(keyword()) :: [Agent.t()]
+  def list_agents(opts) when is_list(opts) do
+    query = from(a in Agent, order_by: [asc: a.name])
+
+    query =
+      if Keyword.get(opts, :include_archived, false) do
+        query
+      else
+        from(a in query, where: a.archived == false)
+      end
+
+    Repo.all(query)
+  end
 
   @spec get_agent(Ecto.UUID.t()) :: Agent.t() | nil
   def get_agent(id), do: Repo.get(Agent, id)
@@ -33,6 +51,17 @@ defmodule RepoBuilder.Agents do
   def update_agent(%Agent{} = agent, params) do
     agent
     |> Agent.changeset(params)
+    |> Repo.update()
+  end
+
+  @doc """
+  Soft-archive an agent (`archived: true`). Preserves `agent_logs`/cost history,
+  unlike the hard `delete_agent/1`. The agent is excluded from `list_agents/0`.
+  """
+  @spec archive_agent(Agent.t()) :: {:ok, Agent.t()} | {:error, Ecto.Changeset.t()}
+  def archive_agent(%Agent{} = agent) do
+    agent
+    |> Agent.archive_changeset()
     |> Repo.update()
   end
 

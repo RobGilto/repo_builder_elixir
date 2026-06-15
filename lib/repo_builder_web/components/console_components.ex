@@ -97,26 +97,66 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   attr :name, :string, required: true
   attr :status, :atom, required: true, values: @statuses
   attr :harness, :string, default: nil
+  attr :model, :string, default: nil
+  attr :cost, :any, default: nil, doc: "per-agent cost Decimal (nil = unpriced)"
   attr :selected?, :boolean, default: false
 
-  @doc "One left-rail agent entry: a status dot, the name, the harness, selectable."
+  @doc """
+  One left-rail agent entry: a selectable area (status dot + name + harness +
+  model badge + status badge + per-agent cost) plus discrete Edit and Archive
+  controls. The row container is a `div` with sibling interactive elements — the
+  selectable area and the Edit/Archive buttons are NOT nested (valid HTML).
+  """
   @spec agent_rail_item(map()) :: Phoenix.LiveView.Rendered.t()
   def agent_rail_item(assigns) do
     ~H"""
-    <button
-      id={"agent-#{@id}"}
-      type="button"
-      phx-click="select_agent"
-      phx-value-id={@id}
+    <div
+      id={"agent-row-#{@id}"}
       class={[
-        "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors",
+        "flex items-center gap-1 rounded px-1 text-sm transition-colors",
         (@selected? && "bg-primary/15 ring-1 ring-primary/40") || "hover:bg-base-200"
       ]}
     >
-      <span class={["inline-block size-2.5 shrink-0 rounded-full", status_class(@status)]} />
-      <span class="flex-1 truncate font-medium">{@name}</span>
-      <span :if={@harness} class="badge badge-ghost badge-sm">{@harness}</span>
-    </button>
+      <button
+        id={"agent-#{@id}"}
+        type="button"
+        phx-click="select_agent"
+        phx-value-id={@id}
+        class="flex min-w-0 flex-1 flex-col gap-0.5 rounded px-1 py-1.5 text-left"
+      >
+        <span class="flex items-center gap-2">
+          <span class={["inline-block size-2.5 shrink-0 rounded-full", status_class(@status)]} />
+          <span class="min-w-0 flex-1 truncate font-medium">{@name}</span>
+          <span :if={@harness} class="badge badge-ghost badge-sm">{@harness}</span>
+        </span>
+        <span class="flex items-center gap-1 pl-4.5 text-xs">
+          <span class={["badge badge-xs", status_badge_class(@status)]}>{@status}</span>
+          <span :if={@model} class="badge badge-xs badge-outline">{@model}</span>
+          <.cost_badge cost={@cost} />
+        </span>
+      </button>
+      <div class="flex shrink-0 items-center">
+        <button
+          type="button"
+          phx-click="edit_agent"
+          phx-value-id={@id}
+          class="btn btn-ghost btn-xs"
+          title="Edit agent"
+        >
+          Edit
+        </button>
+        <button
+          type="button"
+          phx-click="archive_agent"
+          phx-value-id={@id}
+          data-confirm="Archive this agent?"
+          class="btn btn-ghost btn-xs"
+          title="Archive agent"
+        >
+          Archive
+        </button>
+      </div>
+    </div>
     """
   end
 
@@ -206,4 +246,12 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   defp status_class(:error), do: "bg-error"
   defp status_class(:queued), do: "bg-warning"
   defp status_class(_status), do: "bg-base-content/40"
+
+  @spec status_badge_class(atom()) :: String.t()
+  defp status_badge_class(:running), do: "badge-info"
+  defp status_badge_class(:succeeded), do: "badge-success"
+  defp status_badge_class(:failed), do: "badge-error"
+  defp status_badge_class(:error), do: "badge-error"
+  defp status_badge_class(:queued), do: "badge-warning"
+  defp status_badge_class(_status), do: "badge-ghost"
 end

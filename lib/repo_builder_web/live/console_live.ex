@@ -39,10 +39,15 @@ defmodule RepoBuilderWeb.ConsoleLive do
       |> stream(:events, [])
       |> stream(:lanes, [])
       |> assign(
+        page_title: "Orchestration Console",
         agents: [],
         agent_names: %{},
         statuses: %{},
+        # per-agent cost (%{agent_id => Decimal.t() | nil}); nil stays unpriced.
+        agent_costs: %{},
         selected_agent_id: nil,
+        editing_agent_id: nil,
+        edit_agent_form: nil,
         view_mode: :logs,
         show_new_agent?: false,
         prompt_open?: true,
@@ -99,12 +104,22 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   @spec seed_cost(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp seed_cost(socket) do
-    cost =
-      Enum.reduce(socket.assigns.agents, nil, fn agent, acc ->
-        accumulate_cost(acc, Logs.cost_rollup!(agent.id))
+    # One pass over the agents: a per-agent rollup feeds both the per-agent cost
+    # map (rail badges) and the accumulated global cost (header pill).
+    {agent_costs, cost} =
+      Enum.reduce(socket.assigns.agents, {%{}, nil}, fn agent, {costs, total} ->
+        rollup = rollup_or_nil(Logs.cost_rollup!(agent.id))
+        {Map.put(costs, agent.id, rollup), accumulate_cost(total, rollup)}
       end)
 
-    assign(socket, :cost, cost)
+    assign(socket, cost: cost, agent_costs: agent_costs)
+  end
+
+  # A zero rollup means no priced logs yet — keep it unpriced (nil → "—") rather
+  # than rendering "$0.000". A genuine priced amount accumulates as a Decimal.
+  @spec rollup_or_nil(Decimal.t()) :: Decimal.t() | nil
+  defp rollup_or_nil(%Decimal{} = rollup) do
+    if Decimal.equal?(rollup, 0), do: nil, else: rollup
   end
 
   @spec agent_lanes([Agent.t()]) :: [Dashboard.lane()]
@@ -154,10 +169,14 @@ defmodule RepoBuilderWeb.ConsoleLive do
   end
 
   def handle_event("select_agent", %{"id" => id}, socket) do
-    harness =
-      harness_for_agent(socket.assigns.agents, id) || socket.assigns.launch_form.params["harness"]
+    agent = Enum.find(socket.assigns.agents, &(&1.id == id))
+    harness = (agent && agent.harness) || socket.assigns.launch_form.params["harness"]
+    model = (agent && agent.model) || socket.assigns.launch_form.params["model"] || ""
 
-    params = Map.put(socket.assigns.launch_form.params, "harness", harness)
+    params =
+      socket.assigns.launch_form.params
+      |> Map.put("harness", harness)
+      |> Map.put("model", model)
 
     {:noreply,
      socket
@@ -192,6 +211,78 @@ defmodule RepoBuilderWeb.ConsoleLive do
     end
   end
 
+  def handle_event("edit_agent", %{"id" => id}, socket) do
+    case Agents.fetch_agent(id) do
+      {:ok, agent} ->
+        {:noreply,
+         socket
+         |> assign(:editing_agent_id, agent.id)
+         |> assign(:edit_agent_form, to_form(Agent.changeset(agent, %{}), as: :agent))}
+
+      {:error, :not_found} ->
+        {:noreply, put_flash(socket, :error, "Agent no longer exists")}
+    end
+  end
+
+  def handle_event("cancel_edit_agent", _params, socket) do
+    {:noreply, assign(socket, editing_agent_id: nil, edit_agent_form: nil)}
+  end
+
+  def handle_event("validate_edit_agent", %{"agent" => params}, socket) do
+    case socket.assigns.editing_agent_id && Agents.get_agent(socket.assigns.editing_agent_id) do
+      %Agent{} = agent ->
+        form = agent |> Agent.changeset(params) |> to_form(action: :validate, as: :agent)
+        {:noreply, assign(socket, :edit_agent_form, form)}
+
+      _missing ->
+        {:noreply, assign(socket, editing_agent_id: nil, edit_agent_form: nil)}
+    end
+  end
+
+  def handle_event("update_agent", %{"agent" => params}, socket) do
+    with id when is_binary(id) <- socket.assigns.editing_agent_id,
+         {:ok, agent} <- Agents.fetch_agent(id),
+         {:ok, updated} <- Agents.update_agent(agent, params) do
+      {:noreply,
+       socket
+       |> load_agents()
+       |> reseed_agent_lanes()
+       |> assign(editing_agent_id: nil, edit_agent_form: nil)
+       |> put_flash(:info, "Updated agent #{updated.name}")}
+    else
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply,
+         assign(socket, :edit_agent_form, to_form(changeset, action: :validate, as: :agent))}
+
+      {:error, :not_found} ->
+        {:noreply,
+         socket
+         |> assign(editing_agent_id: nil, edit_agent_form: nil)
+         |> put_flash(:error, "Agent no longer exists")}
+
+      nil ->
+        {:noreply, assign(socket, editing_agent_id: nil, edit_agent_form: nil)}
+    end
+  end
+
+  def handle_event("archive_agent", %{"id" => id}, socket) do
+    with {:ok, agent} <- Agents.fetch_agent(id),
+         {:ok, _archived} <- Agents.archive_agent(agent) do
+      {:noreply,
+       socket
+       |> load_agents()
+       |> stream_delete(:lanes, %{id: "agent:#{id}"})
+       |> clear_if_target(id)
+       |> put_flash(:info, "Archived agent #{agent.name}")}
+    else
+      {:error, :not_found} ->
+        {:noreply, socket |> load_agents() |> put_flash(:error, "Agent no longer exists")}
+
+      {:error, %Ecto.Changeset{}} ->
+        {:noreply, put_flash(socket, :error, "Could not archive agent")}
+    end
+  end
+
   def handle_event("validate_launch", %{"launch" => params}, socket) do
     {:noreply, assign(socket, :launch_form, to_form(params, as: :launch))}
   end
@@ -202,16 +293,27 @@ defmodule RepoBuilderWeb.ConsoleLive do
         {:noreply, put_flash(socket, :error, "Select an agent before running")}
 
       agent_id ->
-        opts = [
-          agent_id: agent_id,
-          agent_db_id: agent_id,
-          session_id: "console-#{System.unique_integer([:positive])}",
-          harness: params["harness"],
-          prompt: params["prompt"] || "",
-          model: blank_to_nil(params["model"])
-        ]
+        # Re-fetch through the context: the agent may have been archived or deleted
+        # concurrently. An archived agent is not a valid launch target.
+        case Agents.fetch_agent(agent_id) do
+          {:ok, %Agent{archived: false}} ->
+            opts = [
+              agent_id: agent_id,
+              agent_db_id: agent_id,
+              session_id: "console-#{System.unique_integer([:positive])}",
+              harness: params["harness"],
+              prompt: params["prompt"] || "",
+              model: blank_to_nil(params["model"])
+            ]
 
-        {:noreply, start_session(socket, opts)}
+            {:noreply, start_session(socket, opts)}
+
+          _archived_or_missing ->
+            {:noreply,
+             socket
+             |> assign(:selected_agent_id, nil)
+             |> put_flash(:error, "That agent is no longer available")}
+        end
     end
   end
 
@@ -257,6 +359,20 @@ defmodule RepoBuilderWeb.ConsoleLive do
     Enum.reduce(agent_lanes(socket.assigns.agents), socket, &stream_insert(&2, :lanes, &1))
   end
 
+  # When the archived agent is the current selection/edit target, clear it so the
+  # launch panel and edit form don't point at a gone agent.
+  @spec clear_if_target(Phoenix.LiveView.Socket.t(), String.t()) :: Phoenix.LiveView.Socket.t()
+  defp clear_if_target(socket, id) do
+    socket =
+      if socket.assigns.selected_agent_id == id,
+        do: assign(socket, :selected_agent_id, nil),
+        else: socket
+
+    if socket.assigns.editing_agent_id == id,
+      do: assign(socket, editing_agent_id: nil, edit_agent_form: nil),
+      else: socket
+  end
+
   # --- event / lane handlers (one clause per canonical variant) ---
 
   @impl true
@@ -285,6 +401,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
     {:noreply,
      socket
      |> add_cost(event.cost_usd)
+     |> add_agent_cost(agent_id, event.cost_usd)
      |> push_event(
        agent_id,
        "usage",
@@ -305,6 +422,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
      socket
      |> set_status(agent_id, status)
      |> add_cost(event.cost_usd)
+     |> add_agent_cost(agent_id, event.cost_usd)
      |> push_event(agent_id, "done", "reason=#{event.reason}", false)}
   end
 
@@ -348,6 +466,13 @@ defmodule RepoBuilderWeb.ConsoleLive do
   @spec add_cost(Phoenix.LiveView.Socket.t(), float() | nil) :: Phoenix.LiveView.Socket.t()
   defp add_cost(socket, cost_usd) do
     assign(socket, :cost, accumulate_cost(socket.assigns.cost, cost_usd))
+  end
+
+  @spec add_agent_cost(Phoenix.LiveView.Socket.t(), String.t(), float() | nil) ::
+          Phoenix.LiveView.Socket.t()
+  defp add_agent_cost(socket, agent_id, cost_usd) do
+    updated = accumulate_cost(Map.get(socket.assigns.agent_costs, agent_id), cost_usd)
+    assign(socket, :agent_costs, Map.put(socket.assigns.agent_costs, agent_id, updated))
   end
 
   # nil never coerced to 0 (preserves the unpriced distinction); a float crosses the
@@ -403,9 +528,49 @@ defmodule RepoBuilderWeb.ConsoleLive do
               name={agent.name}
               status={Map.get(@statuses, agent.id, agent.status)}
               harness={agent.harness}
+              model={agent.model}
+              cost={Map.get(@agent_costs, agent.id)}
               selected?={@selected_agent_id == agent.id}
             />
             <p :if={@agents == []} class="px-2 py-1 text-xs text-base-content/50">No agents yet.</p>
+          </div>
+
+          <div :if={@editing_agent_id} class="mt-2 rounded border border-primary/40 p-2">
+            <.form
+              for={@edit_agent_form}
+              id="edit-agent-form"
+              phx-submit="update_agent"
+              phx-change="validate_edit_agent"
+              class="space-y-1"
+            >
+              <p class="text-xs font-semibold uppercase text-base-content/60">Edit agent</p>
+              <.input field={@edit_agent_form[:name]} type="text" label="Name" />
+              <.input
+                field={@edit_agent_form[:harness]}
+                type="select"
+                label="Harness"
+                options={@harness_options}
+              />
+              <.input
+                field={@edit_agent_form[:provider]}
+                type="select"
+                label="Provider"
+                options={provider_options()}
+              />
+              <.input field={@edit_agent_form[:model]} type="text" label="Model (optional)" />
+              <.input
+                field={@edit_agent_form[:system_prompt]}
+                type="textarea"
+                label="System prompt (optional)"
+                rows="3"
+              />
+              <div class="flex gap-2">
+                <button type="submit" class="btn btn-primary btn-xs flex-1">Save</button>
+                <button type="button" phx-click="cancel_edit_agent" class="btn btn-ghost btn-xs">
+                  Cancel
+                </button>
+              </div>
+            </.form>
           </div>
 
           <div :if={@show_new_agent?} class="mt-2 rounded border border-base-300 p-2">
@@ -428,6 +593,13 @@ defmodule RepoBuilderWeb.ConsoleLive do
                 type="select"
                 label="Provider"
                 options={provider_options()}
+              />
+              <.input field={@agent_form[:model]} type="text" label="Model (optional)" />
+              <.input
+                field={@agent_form[:system_prompt]}
+                type="textarea"
+                label="System prompt (optional)"
+                rows="3"
               />
               <div class="flex gap-2">
                 <button type="submit" class="btn btn-primary btn-xs flex-1">Create</button>
@@ -503,11 +675,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   @spec short_id(String.t()) :: String.t()
   defp short_id(id), do: id |> to_string() |> String.slice(0, 8)
-
-  @spec harness_for_agent([Agent.t()], String.t()) :: String.t() | nil
-  defp harness_for_agent(agents, id) do
-    Enum.find_value(agents, fn agent -> if agent.id == id, do: agent.harness end)
-  end
 
   @spec selected_agent_name([Agent.t()], String.t() | nil) :: String.t() | nil
   defp selected_agent_name(_agents, nil), do: nil

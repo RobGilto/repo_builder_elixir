@@ -50,11 +50,17 @@ defmodule RepoBuilderWeb.DashboardComponents do
   @spec cost_badge(map()) :: Phoenix.LiveView.Rendered.t()
   def cost_badge(assigns) do
     ~H"""
-    <span class="badge badge-outline">
-      {if @cost, do: "$" <> Decimal.to_string(@cost), else: "—"}
-    </span>
+    <span class="badge badge-outline">{format_cost(@cost)}</span>
     """
   end
+
+  @doc """
+  Human-format a cost `Decimal` to 3 decimal places (e.g. `$0.873`). A priced
+  zero renders `$0.000`; an unpriced (`nil`) cost renders `—` (never `$0`).
+  """
+  @spec format_cost(Decimal.t() | nil) :: String.t()
+  def format_cost(nil), do: "—"
+  def format_cost(%Decimal{} = cost), do: "$" <> Decimal.to_string(Decimal.round(cost, 3))
 
   @spec status_class(atom()) :: String.t()
   defp status_class(:running), do: "badge-info"
