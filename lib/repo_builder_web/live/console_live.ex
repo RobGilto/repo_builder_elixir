@@ -58,6 +58,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
         selected_agent_id: nil,
         orchestrator_id: nil,
         orchestrator_harness: nil,
+        orchestrator_provider: nil,
+        orchestrator_model: nil,
+        provider_options: [],
+        model_options: [],
         view_mode: :logs,
         show_new_agent?: false,
         rail_collapsed?: false,
@@ -108,15 +112,42 @@ defmodule RepoBuilderWeb.ConsoleLive do
   @spec assign_orchestrator(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp assign_orchestrator(socket) do
     case Orchestrators.get_or_create_default() do
-      {:ok, orchestrator} ->
-        assign(socket,
-          orchestrator_id: orchestrator.id,
-          orchestrator_harness: orchestrator.harness
-        )
-
-      {:error, _reason} ->
-        socket
+      {:ok, orchestrator} -> assign_orchestrator_selection(socket, orchestrator)
+      {:error, _reason} -> socket
     end
+  end
+
+  # Reflect an orchestrator's full selection (harness + provider + model) and the
+  # per-harness option lists (from the registry) in the header assigns.
+  @spec assign_orchestrator_selection(
+          Phoenix.LiveView.Socket.t(),
+          RepoBuilder.Orchestrator.Orchestrator.t()
+        ) :: Phoenix.LiveView.Socket.t()
+  defp assign_orchestrator_selection(socket, orchestrator) do
+    assign(socket,
+      orchestrator_id: orchestrator.id,
+      orchestrator_harness: orchestrator.harness,
+      orchestrator_provider: orchestrator.provider,
+      orchestrator_model: orchestrator.model,
+      provider_options: provider_options_for(orchestrator.harness),
+      model_options: model_options_for(orchestrator.harness)
+    )
+  end
+
+  @spec provider_options_for(String.t()) :: [String.t()]
+  defp provider_options_for(harness) do
+    defaults = HarnessRegistry.orchestrator_defaults(harness)
+
+    case defaults[:providers] do
+      [_ | _] = providers -> providers
+      _ -> [defaults[:default_provider]] |> Enum.reject(&is_nil/1)
+    end
+  end
+
+  @spec model_options_for(String.t()) :: [String.t()]
+  defp model_options_for(harness) do
+    HarnessRegistry.orchestrator_defaults(harness)[:default_model]
+    |> List.wrap()
   end
 
   @spec subscribe_feeds(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
@@ -220,21 +251,32 @@ defmodule RepoBuilderWeb.ConsoleLive do
   @impl true
   def handle_event("toggle_view", _params, socket), do: {:noreply, toggle_view(socket)}
 
-  # Switch the orchestrator's harness (Claude ⇄ pi ⇄ …). The next run_turn picks it up.
+  # Switch the orchestrator's harness (Claude ⇄ pi ⇄ …). Applies that harness's
+  # provider/model defaults (Claude ⇒ anthropic/opus; pi ⇒ operator-chosen), so the
+  # header reflects the full selection. The next run_turn picks it up.
   def handle_event("set_harness", %{"harness" => harness}, socket) do
-    case socket.assigns.orchestrator_id do
-      nil ->
-        {:noreply, put_flash(socket, :error, "No orchestrator available")}
+    update_orchestrator(
+      socket,
+      &Orchestrators.set_harness(&1, harness),
+      "Could not switch harness"
+    )
+  end
 
-      id ->
-        case Orchestrators.set_harness(id, harness) do
-          {:ok, orchestrator} ->
-            {:noreply, assign(socket, :orchestrator_harness, orchestrator.harness)}
+  # Set the orchestrator's provider (open identity). An empty selection clears it.
+  def handle_event("set_provider", %{"provider" => provider}, socket) do
+    provider = nilify_blank(provider)
 
-          {:error, _reason} ->
-            {:noreply, put_flash(socket, :error, "Could not switch harness")}
-        end
-    end
+    update_orchestrator(
+      socket,
+      &Orchestrators.set_provider(&1, provider),
+      "Could not set provider"
+    )
+  end
+
+  # Set the orchestrator's model (free text / suggested). Empty clears it.
+  def handle_event("set_model", %{"model" => model}, socket) do
+    model = nilify_blank(model)
+    update_orchestrator(socket, &Orchestrators.set_model(&1, model), "Could not set model")
   end
 
   def handle_event("view:toggle", _params, socket), do: {:noreply, toggle_view(socket)}
@@ -401,6 +443,38 @@ defmodule RepoBuilderWeb.ConsoleLive do
           {:error, _reason} ->
             put_flash(socket, :error, "Could not start the orchestrator")
         end
+    end
+  end
+
+  # Run an orchestrator mutation (set_harness/provider/model) and re-reflect the full
+  # selection in the header on success; flash on error. Shared by the three setters.
+  @spec update_orchestrator(
+          Phoenix.LiveView.Socket.t(),
+          (Ecto.UUID.t() ->
+             {:ok, RepoBuilder.Orchestrator.Orchestrator.t()} | {:error, term()}),
+          String.t()
+        ) :: {:noreply, Phoenix.LiveView.Socket.t()}
+  defp update_orchestrator(socket, mutate, error_message) do
+    case socket.assigns.orchestrator_id do
+      nil ->
+        {:noreply, put_flash(socket, :error, "No orchestrator available")}
+
+      id ->
+        case mutate.(id) do
+          {:ok, orchestrator} ->
+            {:noreply, assign_orchestrator_selection(socket, orchestrator)}
+
+          {:error, _reason} ->
+            {:noreply, put_flash(socket, :error, error_message)}
+        end
+    end
+  end
+
+  @spec nilify_blank(String.t()) :: String.t() | nil
+  defp nilify_blank(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
     end
   end
 
@@ -762,6 +836,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
         view_mode={@view_mode}
         orchestrator_harness={@orchestrator_harness}
         orchestrating_harnesses={orchestrator_harness_options()}
+        orchestrator_provider={@orchestrator_provider}
+        orchestrator_model={@orchestrator_model}
+        provider_options={@provider_options}
+        model_options={@model_options}
       />
 
       <div

@@ -10,6 +10,7 @@ defmodule RepoBuilder.Orchestrators do
   """
   import Ecto.Query, only: [from: 2]
 
+  alias RepoBuilder.Harness.Registry
   alias RepoBuilder.Orchestrator.Orchestrator
   alias RepoBuilder.Repo
 
@@ -53,15 +54,36 @@ defmodule RepoBuilder.Orchestrators do
         harness = harness || default_harness()
 
         %Orchestrator{}
-        |> Orchestrator.changeset(%{
-          name: @default_name,
-          harness: harness,
-          model: config()[:default_model]
-        })
+        |> Orchestrator.changeset(
+          apply_harness_defaults(%{name: @default_name, harness: harness}, harness)
+        )
         |> Repo.insert()
         |> handle_default_race()
     end
   end
+
+  @doc """
+  Merge the per-harness orchestrator defaults (provider/model from the registry)
+  into `params`/an orchestrator's attrs for `harness`. Switching to Claude yields
+  provider `anthropic`/model `opus`; switching to pi clears both (operator-chosen).
+  The registry default falls back to the configured global `:default_model`.
+  """
+  @spec apply_harness_defaults(Orchestrator.t() | map(), String.t()) :: map()
+  def apply_harness_defaults(base, harness) do
+    defaults = Registry.orchestrator_defaults(harness)
+
+    base
+    |> to_attrs()
+    |> Map.merge(%{
+      harness: harness,
+      provider: Map.get(defaults, :default_provider),
+      model: Map.get(defaults, :default_model) || config()[:default_model]
+    })
+  end
+
+  @spec to_attrs(Orchestrator.t() | map()) :: map()
+  defp to_attrs(%Orchestrator{} = orchestrator), do: Map.from_struct(orchestrator)
+  defp to_attrs(map) when is_map(map), do: map
 
   # Two concurrent first-calls can race on the unique :name; the loser hits the
   # constraint and we read the winner's row instead of surfacing an error.
@@ -92,9 +114,23 @@ defmodule RepoBuilder.Orchestrators do
           {:ok, Orchestrator.t()} | {:error, :not_found}
   def set_status(id, status), do: update_fields(id, %{status: status})
 
-  @doc "Switch the orchestrator's harness (validated against the registry by the changeset)."
+  @doc """
+  Switch the orchestrator's harness (validated against the registry by the
+  changeset) AND apply that harness's orchestrator defaults to provider/model:
+  flipping to Claude restores Opus, flipping to pi clears the Claude-only model.
+  """
   @spec set_harness(Ecto.UUID.t(), String.t()) :: {:ok, Orchestrator.t()} | {:error, :not_found}
-  def set_harness(id, harness), do: update_fields(id, %{harness: harness})
+  def set_harness(id, harness), do: update_fields(id, apply_harness_defaults(%{}, harness))
+
+  @doc "Set the orchestrator's provider (open identity; nil clears it)."
+  @spec set_provider(Ecto.UUID.t(), String.t() | nil) ::
+          {:ok, Orchestrator.t()} | {:error, :not_found}
+  def set_provider(id, provider), do: update_fields(id, %{provider: provider})
+
+  @doc "Set the orchestrator's model (nil clears it)."
+  @spec set_model(Ecto.UUID.t(), String.t() | nil) ::
+          {:ok, Orchestrator.t()} | {:error, :not_found}
+  def set_model(id, model), do: update_fields(id, %{model: model})
 
   @doc """
   Add `amount` USD to the running total (float→Decimal boundary, §8 rule 10). A

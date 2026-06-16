@@ -7,7 +7,7 @@ defmodule RepoBuilder.Orchestrator.ServerTest do
   """
   use RepoBuilder.SessionCase, async: false
 
-  alias RepoBuilder.{Agents, Dashboard, Orchestrators}
+  alias RepoBuilder.{Agents, Dashboard, Logs, Orchestrators}
   alias RepoBuilder.Harness.Event
   alias RepoBuilder.Orchestrator.Server
 
@@ -68,6 +68,18 @@ defmodule RepoBuilder.Orchestrator.ServerTest do
   test "an orchestrator on a non-orchestrating harness is rejected" do
     {:ok, orch} = Orchestrators.create(%{name: "orch-#{uniq()}", harness: "cursor"})
     assert {:error, :not_orchestrator_capable} = Server.run_turn(orch.id, "go")
+  end
+
+  test "a Fake orchestrator turn persists at least one agent_logs row under orchestrator_id" do
+    {:ok, orch} = Orchestrators.create(%{name: "orch-#{uniq()}", harness: "fake"})
+    assert {:ok, _agent_id} = Server.run_turn(orch.id, "persist me")
+
+    # The orchestrator session carries orchestrator_db_id, so its canonical events
+    # persist to agent_logs keyed by orchestrator_id (observability parity).
+    assert eventually(fn ->
+             Logs.list_recent_global(500)
+             |> Enum.any?(&(&1.orchestrator_id == orch.id))
+           end)
   end
 
   defp eventually(fun, attempts \\ 100) do

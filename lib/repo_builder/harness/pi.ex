@@ -49,14 +49,44 @@ defmodule RepoBuilder.Harness.Pi do
 
   @impl true
   def command(opts) do
-    base = ["--mode", "json"]
     model = opts[:model]
-    args = if model, do: base ++ ["--model", model], else: base
+    provider = opts[:provider]
+
+    # pi has NO permission popups by design (§4.3) — its programmatic autonomy is
+    # `--approve` (trust project-local resources non-interactively), NOT a skip flag.
+    # `--provider` is omitted entirely when unset (never an empty `--provider ""`).
+    args =
+      ["--mode", "json"]
+      |> append_provider(provider)
+      |> append_model(model)
+      |> append_approve(Map.get(opts, :config, %{}))
+
     # Thread model + price table into the session_ctx so normalize/2 can derive cost
     # (pi reports no USD in its stream — §4.3).
     ctx = %{harness: :pi, model: model, price_table: Map.get(opts, :price_table, %{})}
     {"pi", args ++ [opts.prompt], env(opts), ctx}
   end
+
+  @spec append_provider([String.t()], term()) :: [String.t()]
+  defp append_provider(args, provider) when is_binary(provider) and provider != "",
+    do: args ++ ["--provider", provider]
+
+  defp append_provider(args, _provider), do: args
+
+  @spec append_model([String.t()], term()) :: [String.t()]
+  defp append_model(args, model) when is_binary(model) and model != "",
+    do: args ++ ["--model", model]
+
+  defp append_model(args, _model), do: args
+
+  @spec append_approve([String.t()], map()) :: [String.t()]
+  defp append_approve(args, config) when is_map(config) do
+    if Map.get(config, :orchestrator) == true or Map.get(config, :autonomous) == true,
+      do: args ++ ["--approve"],
+      else: args
+  end
+
+  defp append_approve(args, _config), do: args
 
   @impl true
   def normalize(%{"type" => "session"} = raw, _ctx) do
@@ -295,10 +325,15 @@ defmodule RepoBuilder.Harness.Pi do
   defp pi_map(value) when is_map(value), do: value
   defp pi_map(_value), do: %{}
 
+  # Secrets stay in env (never argv, never logged). `PI_SKIP_VERSION_CHECK=1` is
+  # hygiene for non-interactive runs (no network version check / update nag).
   @spec env(RepoBuilder.Harness.start_opts()) :: [{String.t(), String.t()}]
   defp env(opts) do
-    opts
-    |> Map.get(:secrets, %{})
-    |> Enum.map(fn {k, v} -> {to_string(k), to_string(v)} end)
+    secret_env =
+      opts
+      |> Map.get(:secrets, %{})
+      |> Enum.map(fn {k, v} -> {to_string(k), to_string(v)} end)
+
+    [{"PI_SKIP_VERSION_CHECK", "1"} | secret_env]
   end
 end

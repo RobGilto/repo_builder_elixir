@@ -36,6 +36,35 @@ defmodule RepoBuilder.Logs do
     |> Repo.insert()
   end
 
+  @doc """
+  Redact, map, and persist one orchestrator canonical event as an `agent_logs` row
+  keyed by `orchestrator_id` (issue-d). Mirrors `persist_event/2` exactly — same
+  redaction, same float→Decimal usage embed — but scopes the row to an orchestrator
+  (no `agent_id`), giving observability parity with workers for both harnesses.
+
+  `attrs` must carry `:orchestrator_id` and `:session_id`.
+  """
+  @spec persist_orchestrator_event(Event.t(), %{
+          required(:orchestrator_id) => Ecto.UUID.t(),
+          required(:session_id) => String.t()
+        }) :: {:ok, AgentLog.t()} | {:error, Ecto.Changeset.t()}
+  def persist_orchestrator_event(event, attrs) do
+    scrubbed = Redact.scrub(event)
+
+    params = %{
+      orchestrator_id: attrs[:orchestrator_id],
+      session_id: attrs[:session_id],
+      event_type: event_type(event),
+      harness: to_string(event.harness),
+      payload: scrubbed.raw,
+      usage: usage_params(event)
+    }
+
+    %AgentLog{}
+    |> AgentLog.changeset(params)
+    |> Repo.insert()
+  end
+
   @doc "The most recent `limit` agent_logs rows for an agent, in chronological order (reconnect backfill)."
   @spec list_recent(Ecto.UUID.t(), pos_integer()) :: [AgentLog.t()]
   def list_recent(agent_id, limit \\ 500) do
@@ -66,6 +95,18 @@ defmodule RepoBuilder.Logs do
   def cost_rollup!(agent_id) do
     AgentLog
     |> where([l], l.agent_id == ^agent_id)
+    |> Repo.all()
+    |> Enum.reduce(Decimal.new(0), fn log, acc -> add_cost(acc, log.usage) end)
+  end
+
+  @doc """
+  Sum of all priced `cost_usd` across an orchestrator's logs (issue-d). Unpriced
+  rows (NULL cost) contribute nothing, preserving the nil-vs-0.0 distinction.
+  """
+  @spec orchestrator_cost_rollup!(Ecto.UUID.t()) :: Decimal.t()
+  def orchestrator_cost_rollup!(orchestrator_id) do
+    AgentLog
+    |> where([l], l.orchestrator_id == ^orchestrator_id)
     |> Repo.all()
     |> Enum.reduce(Decimal.new(0), fn log, acc -> add_cost(acc, log.usage) end)
   end

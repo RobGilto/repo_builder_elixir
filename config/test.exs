@@ -50,14 +50,22 @@ config :repo_builder, :harnesses, %{
     exe: "claude",
     default_model: nil,
     price_table: %{},
-    orchestrating: true
+    orchestrating: true,
+    autonomous: true,
+    orchestrator: %{default_provider: "anthropic", default_model: "opus"}
   },
   "pi" => %{
     module: RepoBuilder.Harness.Pi,
     exe: "pi",
     default_model: "glm-4.6",
     price_table: %{"glm-4.6" => 0.6},
-    orchestrating: true
+    orchestrating: true,
+    autonomous: true,
+    orchestrator: %{
+      default_provider: nil,
+      default_model: nil,
+      providers: ["anthropic", "openai", "google", "zai", "groq", "openrouter"]
+    }
   },
   "cursor" => %{
     module: RepoBuilder.Harness.Cursor,

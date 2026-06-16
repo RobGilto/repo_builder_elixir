@@ -21,6 +21,7 @@ defmodule RepoBuilder.Orchestrator.Orchestrator do
           id: Ecto.UUID.t() | nil,
           name: String.t() | nil,
           harness: String.t() | nil,
+          provider: String.t() | nil,
           model: String.t() | nil,
           session_id: String.t() | nil,
           system_prompt: String.t() | nil,
@@ -36,6 +37,9 @@ defmodule RepoBuilder.Orchestrator.Orchestrator do
   schema "orchestrators" do
     field :name, :string
     field :harness, :string
+    # Open provider identity (§10/§3-rule-5) — pi supports 30+ providers, so this is
+    # a loosely-validated :string, NOT a closed Ecto.Enum.
+    field :provider, :string
     field :model, :string
     field :session_id, :string
     field :system_prompt, :string
@@ -53,6 +57,7 @@ defmodule RepoBuilder.Orchestrator.Orchestrator do
     |> cast(params, [
       :name,
       :harness,
+      :provider,
       :model,
       :session_id,
       :system_prompt,
@@ -65,6 +70,9 @@ defmodule RepoBuilder.Orchestrator.Orchestrator do
     |> validate_required([:name, :harness])
     |> validate_length(:name, min: 1, max: 200)
     |> validate_inclusion(:harness, Registry.known(), message: "is not a registered harness")
+    # Open identity: a present provider must be non-empty, but membership is NOT
+    # constrained (pi providers are open) — mirrors the harness looseness (§3 rule 5).
+    |> validate_length(:provider, min: 1)
     |> unique_constraint(:name)
   end
 end

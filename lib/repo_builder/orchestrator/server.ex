@@ -111,9 +111,15 @@ defmodule RepoBuilder.Orchestrator.Server do
       harness: state.harness,
       prompt: state.prompt,
       session_id: orchestrator.session_id,
-      model: orchestrator.model,
+      # A Claude orchestrator with no explicit model still runs Opus (per-harness
+      # orchestrator default); pi leaves it nil (operator-chosen).
+      model:
+        orchestrator.model ||
+          HarnessRegistry.orchestrator_defaults(orchestrator.harness)[:default_model],
+      provider: orchestrator.provider,
       config: %{orchestrator: true},
-      orchestrator_ctx: tool_ctx(orchestrator, token)
+      orchestrator_ctx: tool_ctx(orchestrator, token),
+      orchestrator_db_id: orchestrator.id
     ]
 
     case Session.Supervisor.start_session(opts) do

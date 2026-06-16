@@ -78,7 +78,14 @@ harnesses = %{
     # Claude reports total_cost_usd in its stream — no price table needed.
     price_table: %{},
     # Orchestrator-capable (§10): binds tools via native MCP over .mcp.json.
-    orchestrating: true
+    orchestrating: true,
+    # Programmatic autonomy (issue-d): an autonomous Claude session appends
+    # `--dangerously-skip-permissions` (== `--permission-mode bypassPermissions`) so
+    # unattended turns never block on a tool-permission prompt. DELIBERATE and gated:
+    # it only applies on this sandboxed orchestration server and can be turned off here.
+    autonomous: true,
+    # Per-harness orchestrator defaults — switching to Claude sets Opus automatically.
+    orchestrator: %{default_provider: "anthropic", default_model: "opus"}
   },
   "pi" => %{
     module: RepoBuilder.Harness.Pi,
@@ -87,7 +94,17 @@ harnesses = %{
     # pi reports no USD — cost is derived (USD per million tokens). Unpriced ⇒ nil.
     price_table: %{"glm-4.6" => 0.6, "glm-4.5-air" => 0.2},
     # Orchestrator-capable (§10): binds tools via a TypeScript extension (-e).
-    orchestrating: true
+    orchestrating: true,
+    # pi has NO permission popups by design — its "autonomy" is `--approve` (trust
+    # project-local resources non-interactively), NOT a skip-permissions flag.
+    autonomous: true,
+    # pi's provider/model are operator-chosen (no forced defaults); the providers
+    # list drives the console dropdown without constraining the open `provider` column.
+    orchestrator: %{
+      default_provider: nil,
+      default_model: nil,
+      providers: ["anthropic", "openai", "google", "zai", "groq", "openrouter"]
+    }
   },
   # Extensibility proof (§10): a third harness = this one module + this one entry,
   # with ZERO edits to Event/Agent/runtime.

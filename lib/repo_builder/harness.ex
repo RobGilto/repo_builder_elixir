@@ -22,6 +22,7 @@ defmodule RepoBuilder.Harness do
           required(:model) => String.t() | nil,
           required(:cwd) => Path.t(),
           required(:sink) => pid(),
+          optional(:provider) => String.t() | nil,
           optional(:config) => map(),
           optional(:secrets) => map(),
           optional(:price_table) => map()

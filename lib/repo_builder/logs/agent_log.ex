@@ -25,6 +25,7 @@ defmodule RepoBuilder.Logs.AgentLog do
   @type t :: %__MODULE__{
           id: Ecto.UUID.t() | nil,
           agent_id: Ecto.UUID.t() | nil,
+          orchestrator_id: Ecto.UUID.t() | nil,
           session_id: String.t() | nil,
           event_type: event_type() | nil,
           harness: String.t() | nil,
@@ -38,6 +39,9 @@ defmodule RepoBuilder.Logs.AgentLog do
 
   schema "agent_logs" do
     field :agent_id, :binary_id
+    # Orchestrator-scoped persistence (issue-d): set instead of agent_id for an
+    # orchestrator turn's events. Exactly one of the two is present (app-enforced).
+    field :orchestrator_id, :binary_id
     field :session_id, :string
     field :event_type, Ecto.Enum, values: @event_types
     field :harness, :string
@@ -49,9 +53,30 @@ defmodule RepoBuilder.Logs.AgentLog do
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(log, params) do
     log
-    |> cast(params, [:agent_id, :session_id, :event_type, :harness, :payload])
+    |> cast(params, [:agent_id, :orchestrator_id, :session_id, :event_type, :harness, :payload])
     |> cast_embed(:usage)
-    |> validate_required([:agent_id, :event_type])
+    |> validate_required([:event_type])
+    |> validate_owner()
     |> foreign_key_constraint(:agent_id)
+    |> foreign_key_constraint(:orchestrator_id)
+  end
+
+  # A log row belongs to EXACTLY ONE owner: a worker (agent_id) or an orchestrator
+  # (orchestrator_id), never both/neither. Worker rows keep their existing shape.
+  @spec validate_owner(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  defp validate_owner(changeset) do
+    agent_id = get_field(changeset, :agent_id)
+    orchestrator_id = get_field(changeset, :orchestrator_id)
+
+    case {agent_id, orchestrator_id} do
+      {nil, nil} ->
+        add_error(changeset, :agent_id, "agent_id or orchestrator_id is required")
+
+      {a, o} when not is_nil(a) and not is_nil(o) ->
+        add_error(changeset, :orchestrator_id, "cannot set both agent_id and orchestrator_id")
+
+      _ ->
+        changeset
+    end
   end
 end

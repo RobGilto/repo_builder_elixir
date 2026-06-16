@@ -24,8 +24,13 @@ defmodule RepoBuilder.Harness.Claude do
     File.mkdir_p!(ctx.cwd)
     File.write!(path, mcp_config_json(ctx))
 
+    # `--strict-mcp-config` ⇒ ONLY this generated server loads (no ambient ~/.mcp).
+    # The permission skip is emitted by `command/1` (the orchestrator session always
+    # carries `config: %{orchestrator: true}`), so orchestrator MCP tool calls never
+    # block on an interactive prompt (the headless deadlock, §6) — no duplicate here.
     args =
-      ["--mcp-config", path, "--append-system-prompt", ctx.system_prompt] ++
+      ["--mcp-config", path, "--strict-mcp-config"] ++
+        ["--append-system-prompt", ctx.system_prompt] ++
         resume_args(ctx.resume_session_id)
 
     {args, []}
@@ -59,9 +64,37 @@ defmodule RepoBuilder.Harness.Claude do
       "--include-partial-messages"
     ]
 
-    args = if opts[:model], do: base ++ ["--model", opts[:model]], else: base
+    # Programmatic permission skip ONLY for autonomous sessions (orchestrator or an
+    # explicit `autonomous` config flag) — NEVER a global bypass. A plain worker
+    # (no flag) gets no skip, so it still honors interactive permissions (safety).
+    # The `opus` alias / full Opus id passes through verbatim; Claude resolves it.
+    args =
+      base
+      |> append_arg(opts[:model], fn model -> ["--model", model] end)
+      |> append_flags(permission_args(opts))
+
     {"claude", args, env(opts), @ctx}
   end
+
+  @spec append_arg([String.t()], term(), (term() -> [String.t()])) :: [String.t()]
+  defp append_arg(args, nil, _build), do: args
+  defp append_arg(args, value, build), do: args ++ build.(value)
+
+  @spec append_flags([String.t()], [String.t()]) :: [String.t()]
+  defp append_flags(args, flags), do: args ++ flags
+
+  @spec permission_args(RepoBuilder.Harness.start_opts()) :: [String.t()]
+  defp permission_args(opts) do
+    if autonomous?(Map.get(opts, :config, %{})),
+      do: ["--dangerously-skip-permissions"],
+      else: []
+  end
+
+  @spec autonomous?(map()) :: boolean()
+  defp autonomous?(config) when is_map(config),
+    do: Map.get(config, :orchestrator) == true or Map.get(config, :autonomous) == true
+
+  defp autonomous?(_config), do: false
 
   @impl true
   def normalize(%{"type" => "system", "subtype" => "init"} = raw, _ctx) do

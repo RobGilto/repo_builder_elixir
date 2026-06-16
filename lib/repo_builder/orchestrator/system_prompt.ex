@@ -30,8 +30,22 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     #{tools_block()}
 
     Available worker harnesses: #{harnesses_block()}.
-    Your own harness is "#{orchestrator.harness}".
+    Your own harness is #{own_harness_block(orchestrator)}.
     """
+  end
+
+  # Make the brain self-aware of its execution context (harness + provider + model).
+  @spec own_harness_block(Orchestrator.t()) :: String.t()
+  defp own_harness_block(%Orchestrator{harness: harness, provider: provider, model: model}) do
+    details =
+      [provider && "provider \"#{provider}\"", model && "model \"#{model}\""]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(", ")
+
+    case details do
+      "" -> "\"#{harness}\""
+      detail -> "\"#{harness}\" (#{detail})"
+    end
   end
 
   @spec tools_block() :: String.t()

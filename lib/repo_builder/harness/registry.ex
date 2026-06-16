@@ -59,4 +59,30 @@ defmodule RepoBuilder.Harness.Registry do
     |> Enum.map(fn {key, _config} -> key end)
     |> Enum.sort()
   end
+
+  @doc """
+  Per-harness orchestrator defaults (issue-d) — the `:orchestrator` sub-map
+  (`:default_provider`/`:default_model`/`:providers`). The SINGLE reader of that
+  config key. An unknown harness or one without the sub-map yields `%{}`.
+  """
+  @spec orchestrator_defaults(harness()) :: %{optional(atom()) => term()}
+  def orchestrator_defaults(harness) do
+    case all()[to_string(harness)] do
+      %{orchestrator: %{} = defaults} -> defaults
+      _ -> %{}
+    end
+  end
+
+  @doc """
+  Whether a harness runs unattended (issue-d). Drives the programmatic autonomy
+  flag in each adapter (Claude `--dangerously-skip-permissions`, pi `--approve`).
+  An unknown harness is `false`.
+  """
+  @spec autonomous?(harness()) :: boolean()
+  def autonomous?(harness) do
+    case all()[to_string(harness)] do
+      %{autonomous: true} -> true
+      _ -> false
+    end
+  end
 end

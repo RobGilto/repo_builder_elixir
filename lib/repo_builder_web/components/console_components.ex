@@ -33,10 +33,19 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   attr :view_mode, :atom, default: :logs, values: [:logs, :adws]
   attr :orchestrator_harness, :string, default: nil
   attr :orchestrating_harnesses, :list, default: [], doc: "harness keys that can orchestrate"
+  attr :orchestrator_provider, :string, default: nil
+  attr :orchestrator_model, :string, default: nil
+
+  attr :provider_options, :list,
+    default: [],
+    doc: "provider names available for the active harness"
+
+  attr :model_options, :list, default: [], doc: "suggested model ids for the active harness"
 
   @doc """
   Full-bleed header: a live connection dot, the Active/Running/Logs/WS Events/Cost
-  stat pills, the glowing LOGS⇄ADWS view-mode toggle, and the Prompt (⌘K) toggle.
+  stat pills, the orchestrator harness/provider/model selectors, the glowing
+  LOGS⇄ADWS view-mode toggle, and the Prompt (⌘K) toggle.
   """
   @spec header_bar(map()) :: Phoenix.LiveView.Rendered.t()
   def header_bar(assigns) do
@@ -69,7 +78,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
       <div class="flex items-center gap-3">
         <div
           :if={@orchestrating_harnesses != []}
-          id="harness-toggle"
+          id="orchestrator-harness"
           class="cns-toggle"
           title="Orchestrator harness"
         >
@@ -84,6 +93,45 @@ defmodule RepoBuilderWeb.ConsoleComponents do
             {String.upcase(h)}
           </button>
         </div>
+
+        <form
+          :if={@provider_options != []}
+          id="orchestrator-provider-form"
+          phx-change="set_provider"
+          title="Orchestrator provider"
+        >
+          <select id="orchestrator-provider" name="provider" class="cns-chip">
+            <option value="" selected={@orchestrator_provider in [nil, ""]}>provider…</option>
+            <option
+              :for={p <- @provider_options}
+              value={p}
+              selected={@orchestrator_provider == p}
+            >
+              {p}
+            </option>
+          </select>
+        </form>
+
+        <form
+          id="orchestrator-model-form"
+          phx-change="set_model"
+          title="Orchestrator model"
+        >
+          <input
+            id="orchestrator-model"
+            type="text"
+            name="model"
+            list="orchestrator-model-options"
+            value={@orchestrator_model}
+            placeholder="model…"
+            class="cns-chip"
+            style="width: 9rem"
+          />
+          <datalist id="orchestrator-model-options">
+            <option :for={m <- @model_options} value={m} />
+          </datalist>
+        </form>
+
         <div id="view-toggle" class="cns-toggle" phx-click="toggle_view" title="Toggle view (⌘J)">
           <span class={["cns-toggle__seg", @view_mode == :logs && "cns-toggle__seg--active"]}>
             LOGS

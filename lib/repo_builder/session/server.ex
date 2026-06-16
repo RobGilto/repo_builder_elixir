@@ -45,6 +45,7 @@ defmodule RepoBuilder.Session.Server do
       field :adapter, module()
       field :prompt, String.t()
       field :model, String.t(), enforce: false
+      field :provider, String.t(), enforce: false
       field :config, map(), default: %{}
       field :secrets, map(), default: %{}
       field :price_table, map(), default: %{}
@@ -63,6 +64,10 @@ defmodule RepoBuilder.Session.Server do
       # `orchestrator_spawn/2` merges extra argv/env onto the base command. nil for
       # every worker session (the worker spawn path is untouched).
       field :orchestrator_ctx, map(), enforce: false
+      # When set (issue-d), canonical events also persist to `agent_logs` keyed by
+      # this orchestrator id (parallel to the worker `agent_db_id` gate). nil for
+      # every worker session.
+      field :orchestrator_db_id, Ecto.UUID.t(), enforce: false
     end
   end
 
@@ -110,6 +115,7 @@ defmodule RepoBuilder.Session.Server do
       adapter: Map.fetch!(config, :module),
       prompt: opts[:prompt] || "",
       model: opts[:model] || Map.get(config, :default_model),
+      provider: opts[:provider],
       config: opts[:config] || %{},
       secrets: resolve_secrets(opts, harness),
       price_table: Map.get(config, :price_table, %{}),
@@ -117,7 +123,8 @@ defmodule RepoBuilder.Session.Server do
       marker: generate_token(),
       idle_ms: cfg_value(opts, cfg, :idle_ms, 300_000),
       max_line_bytes: cfg_value(opts, cfg, :max_line_bytes, 1_048_576),
-      orchestrator_ctx: opts[:orchestrator_ctx]
+      orchestrator_ctx: opts[:orchestrator_ctx],
+      orchestrator_db_id: opts[:orchestrator_db_id]
     }
   end
 
@@ -144,6 +151,7 @@ defmodule RepoBuilder.Session.Server do
     start_opts = %{
       prompt: state.prompt,
       model: state.model,
+      provider: state.provider,
       cwd: state.cwd,
       sink: self(),
       config: state.config,
@@ -361,6 +369,14 @@ defmodule RepoBuilder.Session.Server do
       update_status_quietly(event, state)
     end
 
+    # Independent orchestrator persistence gate (issue-d): an orchestrator session
+    # carries `orchestrator_db_id` (never `agent_db_id`), so its events persist to
+    # `agent_logs` keyed by `orchestrator_id` — observability parity with workers,
+    # with the worker path above untouched.
+    if state.orchestrator_db_id do
+      persist_orchestrator_quietly(event, state)
+    end
+
     _ = Phoenix.PubSub.broadcast(@pubsub, "agent:#{agent_id}:events", {:harness_event, event})
     # Additive global feed for the multi-layered console (§9): one unified stream
     # across all agents. Per-agent topic above is unchanged.
@@ -400,6 +416,21 @@ defmodule RepoBuilder.Session.Server do
     :ok
   rescue
     error -> Logger.warning("persist_event failed: #{inspect(error)}")
+  catch
+    _kind, _reason -> :ok
+  end
+
+  @spec persist_orchestrator_quietly(Event.t(), State.t()) :: :ok
+  defp persist_orchestrator_quietly(event, %State{} = state) do
+    _ =
+      Logs.persist_orchestrator_event(event, %{
+        orchestrator_id: state.orchestrator_db_id,
+        session_id: state.session_id
+      })
+
+    :ok
+  rescue
+    error -> Logger.warning("persist_orchestrator_event failed: #{inspect(error)}")
   catch
     _kind, _reason -> :ok
   end
