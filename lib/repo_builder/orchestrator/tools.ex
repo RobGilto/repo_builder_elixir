@@ -58,12 +58,16 @@ defmodule RepoBuilder.Orchestrator.Tools do
   @spec create_agent(Ecto.UUID.t(), map()) :: result()
   defp create_agent(orchestrator_id, args) do
     with {:ok, name} <- fetch_string(args, "name"),
-         {:ok, harness} <- resolve_harness(orchestrator_id, args) do
+         {:ok, spec} <- resolve_agent_spec(orchestrator_id, args) do
       params = %{
         "name" => name,
-        "harness" => harness,
-        "model" => blank_to_nil(args["model"]),
-        "system_prompt" => blank_to_nil(args["system_prompt"])
+        "harness" => spec.harness,
+        "model" => spec.model,
+        "system_prompt" => blank_to_nil(args["system_prompt"]),
+        # The worker's `provider` column is a closed enum that can't hold pi's open
+        # provider set, so the real provider rides in `config` and is threaded into
+        # the session at command time.
+        "config" => provider_config(spec.provider)
       }
 
       case Agents.create_worker(orchestrator_id, params) do
@@ -75,6 +79,8 @@ defmodule RepoBuilder.Orchestrator.Tools do
              "id" => agent.id,
              "name" => agent.name,
              "harness" => agent.harness,
+             "provider" => spec.provider,
+             "model" => agent.model,
              "status" => to_string(agent.status)
            }}
 
@@ -84,11 +90,61 @@ defmodule RepoBuilder.Orchestrator.Tools do
     end
   end
 
+  # Resolve the worker's {harness, provider, model} from a `category` (the operator's
+  # roster) when given, else from explicit args. A category with no assigned model is
+  # rejected so the orchestrator can't silently spawn an un-runnable worker.
+  @spec resolve_agent_spec(Ecto.UUID.t(), map()) ::
+          {:ok, %{harness: String.t(), provider: String.t() | nil, model: String.t() | nil}}
+          | {:error, reason()}
+  defp resolve_agent_spec(orchestrator_id, args) do
+    case blank_to_nil(args["category"]) do
+      nil ->
+        with {:ok, harness} <- resolve_harness(orchestrator_id, args) do
+          {:ok,
+           %{
+             harness: harness,
+             provider: blank_to_nil(args["provider"]),
+             model: blank_to_nil(args["model"])
+           }}
+        end
+
+      category ->
+        resolve_category(orchestrator_id, category)
+    end
+  end
+
+  @spec resolve_category(Ecto.UUID.t(), String.t()) ::
+          {:ok, %{harness: String.t(), provider: String.t() | nil, model: String.t() | nil}}
+          | {:error, reason()}
+  defp resolve_category(orchestrator_id, category) do
+    with {:ok, orchestrator} <- Orchestrators.fetch(orchestrator_id) do
+      entry = Map.get(Orchestrators.agent_models(orchestrator), category, %{})
+
+      case blank_to_nil(entry["model"]) do
+        nil ->
+          {:error, "no model selected for category #{category}"}
+
+        model ->
+          {:ok,
+           %{
+             harness: blank_to_nil(entry["harness"]) || orchestrator.harness,
+             provider: blank_to_nil(entry["provider"]),
+             model: model
+           }}
+      end
+    end
+  end
+
+  @spec provider_config(String.t() | nil) :: map()
+  defp provider_config(nil), do: %{}
+  defp provider_config(provider), do: %{"provider" => provider}
+
   @spec command_agent(Ecto.UUID.t(), map()) :: result()
   defp command_agent(orchestrator_id, args) do
     with {:ok, name} <- fetch_string(args, "name"),
          {:ok, prompt} <- fetch_string(args, "prompt"),
-         {:ok, worker} <- Agents.get_by_name_for_orchestrator(orchestrator_id, name) do
+         {:ok, worker} <- Agents.get_by_name_for_orchestrator(orchestrator_id, name),
+         :ok <- ensure_worker_model(worker) do
       session_id = worker.session_id || generate_session_id()
       _ = Agents.set_session(worker.id, session_id)
 
@@ -98,7 +154,8 @@ defmodule RepoBuilder.Orchestrator.Tools do
         session_id: session_id,
         harness: worker.harness,
         prompt: prompt,
-        model: worker.model
+        model: worker.model,
+        provider: worker_provider(worker)
       ]
 
       case Session.Supervisor.start_session(opts) do
@@ -179,6 +236,17 @@ defmodule RepoBuilder.Orchestrator.Tools do
   end
 
   # --- helpers ---
+
+  @spec ensure_worker_model(Agents.Agent.t()) :: :ok | {:error, reason()}
+  defp ensure_worker_model(%{model: model, name: name}) do
+    if blank_to_nil(model), do: :ok, else: {:error, "no model selected for #{name}"}
+  end
+
+  @spec worker_provider(Agents.Agent.t()) :: String.t() | nil
+  defp worker_provider(%{config: config}) when is_map(config),
+    do: blank_to_nil(config["provider"])
+
+  defp worker_provider(_worker), do: nil
 
   @spec resolve_harness(Ecto.UUID.t(), map()) :: {:ok, String.t()} | {:error, reason()}
   defp resolve_harness(orchestrator_id, args) do

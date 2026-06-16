@@ -16,6 +16,15 @@ defmodule RepoBuilder.Orchestrators do
 
   @default_name "default"
 
+  # The worker "model roster" categories the orchestrator picks from when spawning
+  # agents (issue-d follow-up). Each maps to a {harness, provider, model} the
+  # operator assigns via the console; an unassigned model means "no model selected".
+  @agent_categories ~w(fast main heavy leader)
+
+  @doc "The fixed worker-model categories the orchestrator can spawn into."
+  @spec agent_categories() :: [String.t()]
+  def agent_categories, do: @agent_categories
+
   @doc "The configured default orchestrator settings (harness/model)."
   @spec config() :: keyword()
   def config, do: Application.get_env(:repo_builder, :orchestrator, [])
@@ -77,7 +86,13 @@ defmodule RepoBuilder.Orchestrators do
     |> Map.merge(%{
       harness: harness,
       provider: Map.get(defaults, :default_provider),
-      model: Map.get(defaults, :default_model) || config()[:default_model]
+      # No model is auto-assigned: the operator must pick one explicitly, and
+      # running inference with none surfaces a clear "no model selected" error.
+      model: nil,
+      # A resumable CLI session id is harness-specific (a Fake/pi session can't be
+      # resumed by Claude). Clear it on switch so the next turn starts fresh — not
+      # `--resume <stale-id>`, which the new harness rejects.
+      session_id: nil
     })
   end
 
@@ -122,15 +137,74 @@ defmodule RepoBuilder.Orchestrators do
   @spec set_harness(Ecto.UUID.t(), String.t()) :: {:ok, Orchestrator.t()} | {:error, :not_found}
   def set_harness(id, harness), do: update_fields(id, apply_harness_defaults(%{}, harness))
 
-  @doc "Set the orchestrator's provider (open identity; nil clears it)."
+  @doc """
+  Set the orchestrator's provider (open identity; nil clears it). Clears the model
+  (no auto-default — the operator picks one, and inference with none errors) and the
+  resumable session (a CLI session is provider-specific).
+  """
   @spec set_provider(Ecto.UUID.t(), String.t() | nil) ::
           {:ok, Orchestrator.t()} | {:error, :not_found}
-  def set_provider(id, provider), do: update_fields(id, %{provider: provider})
+  def set_provider(id, provider),
+    do: update_fields(id, %{provider: provider, model: nil, session_id: nil})
 
-  @doc "Set the orchestrator's model (nil clears it)."
+  @doc "The worker model roster: `%{category => entry}` where each entry has harness/provider/model."
+  @spec agent_models(Orchestrator.t()) :: %{optional(String.t()) => map()}
+  def agent_models(%Orchestrator{metadata: metadata}), do: Map.get(metadata, "agent_models", %{})
+
+  @doc """
+  Assign the {harness, provider, model} a worker `category` (`fast`/`main`/`heavy`/
+  `leader`) uses. A blank model means "unassigned" — the orchestrator can't spawn
+  into that category until a model is chosen.
+  """
+  @spec set_agent_model(Ecto.UUID.t(), String.t(), map()) ::
+          {:ok, Orchestrator.t()} | {:error, :not_found | :invalid_category}
+  def set_agent_model(id, category, attrs) when category in @agent_categories do
+    case fetch(id) do
+      {:ok, %Orchestrator{metadata: metadata}} ->
+        entry = %{
+          "harness" => attr(attrs, "harness"),
+          "provider" => attr(attrs, "provider"),
+          "model" => attr(attrs, "model")
+        }
+
+        roster = Map.put(Map.get(metadata, "agent_models", %{}), category, entry)
+        update_fields(id, %{metadata: Map.put(metadata, "agent_models", roster)})
+
+      error ->
+        error
+    end
+  end
+
+  def set_agent_model(_id, _category, _attrs), do: {:error, :invalid_category}
+
+  @doc """
+  Set the orchestrator's model (nil clears it) and remember it in the per-provider
+  "recently selected" list (orchestrator `metadata`, most-recent first).
+  """
   @spec set_model(Ecto.UUID.t(), String.t() | nil) ::
           {:ok, Orchestrator.t()} | {:error, :not_found}
-  def set_model(id, model), do: update_fields(id, %{model: model})
+  def set_model(id, model) do
+    case fetch(id) do
+      {:ok, orchestrator} ->
+        update_fields(id, %{
+          model: model,
+          metadata: record_recent_model(orchestrator.metadata, orchestrator.provider, model)
+        })
+
+      error ->
+        error
+    end
+  end
+
+  @doc "The recently-selected models for `provider` (most-recent first), from `metadata`."
+  @spec recent_models(Orchestrator.t(), String.t() | nil) :: [String.t()]
+  def recent_models(%Orchestrator{metadata: metadata}, provider) do
+    metadata
+    |> Map.get("recent_models", %{})
+    |> Map.get(recent_key(provider), [])
+    |> List.wrap()
+    |> Enum.filter(&is_binary/1)
+  end
 
   @doc """
   Add `amount` USD to the running total (float→Decimal boundary, §8 rule 10). A
@@ -212,6 +286,31 @@ defmodule RepoBuilder.Orchestrators do
       {:error, _changeset} -> {:error, :not_found}
     end
   end
+
+  # Read a roster attribute from a string-keyed map, treating blank as nil.
+  @spec attr(map(), String.t()) :: String.t() | nil
+  defp attr(attrs, key) do
+    case Map.get(attrs, key) do
+      value when is_binary(value) -> if String.trim(value) == "", do: nil, else: value
+      _ -> nil
+    end
+  end
+
+  @recent_limit 6
+
+  @spec record_recent_model(map(), String.t() | nil, String.t() | nil) :: map()
+  defp record_recent_model(metadata, _provider, model) when model in [nil, ""], do: metadata
+
+  defp record_recent_model(metadata, provider, model) do
+    key = recent_key(provider)
+    all = Map.get(metadata, "recent_models", %{})
+    list = [model | Map.get(all, key, [])] |> Enum.uniq() |> Enum.take(@recent_limit)
+    Map.put(metadata, "recent_models", Map.put(all, key, list))
+  end
+
+  @spec recent_key(String.t() | nil) :: String.t()
+  defp recent_key(nil), do: "_"
+  defp recent_key(provider), do: to_string(provider)
 
   @spec to_decimal(float() | Decimal.t()) :: Decimal.t()
   defp to_decimal(%Decimal{} = d), do: d

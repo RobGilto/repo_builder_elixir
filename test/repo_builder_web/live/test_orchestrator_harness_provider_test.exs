@@ -17,42 +17,46 @@ defmodule RepoBuilderWeb.TestOrchestratorHarnessProviderTest do
     :ok
   end
 
-  test "switching the harness to claude reflects anthropic/opus in the header and the row", %{
-    conn: conn
-  } do
+  test "switching the harness to claude applies anthropic but selects NO model", %{conn: conn} do
     {:ok, view, _html} = live(conn, "/")
     {:ok, orch} = Orchestrators.get_or_create_default()
 
     render_click(view, "set_harness", %{"harness" => "claude"})
 
-    # The orchestrator row is the source of truth.
+    # The orchestrator row is the source of truth: provider defaults, model is unset.
     {:ok, reloaded} = Orchestrators.fetch(orch.id)
     assert reloaded.harness == "claude"
     assert reloaded.provider == "anthropic"
-    assert reloaded.model == "opus"
+    assert reloaded.model == nil
 
-    # The header selectors reflect the applied defaults.
+    # Provider reflects the default; the model select sits on its blank placeholder.
     assert has_element?(view, "#orchestrator-provider option[value=anthropic][selected]")
-    assert has_element?(view, "input#orchestrator-model[value=opus]")
+    assert has_element?(view, ~s(#orchestrator-model option[value=""][selected]))
   end
 
-  test "set_provider/set_model update the orchestrator row", %{conn: conn} do
+  test "set_provider clears the model (no auto-default); set_model updates the row", %{conn: conn} do
     {:ok, view, _html} = live(conn, "/")
     {:ok, orch} = Orchestrators.get_or_create_default()
 
     render_click(view, "set_harness", %{"harness" => "pi"})
 
+    # Picking a provider does NOT auto-assign a model.
     view
     |> form("#orchestrator-provider-form", %{"provider" => "openai"})
     |> render_change()
 
+    {:ok, after_provider} = Orchestrators.fetch(orch.id)
+    assert after_provider.provider == "openai"
+    assert after_provider.model == nil
+
+    # The operator then explicitly chooses a model.
     view
-    |> form("#orchestrator-model-form", %{"model" => "glm-4.6"})
+    |> form("#orchestrator-model-form", %{"model" => "gpt-5-mini"})
     |> render_change()
 
     {:ok, reloaded} = Orchestrators.fetch(orch.id)
     assert reloaded.provider == "openai"
-    assert reloaded.model == "glm-4.6"
+    assert reloaded.model == "gpt-5-mini"
   end
 
   test "a keyless Fake orchestrator turn broadcasts AND persists under orchestrator_id", %{

@@ -74,6 +74,24 @@ defmodule RepoBuilder.Harness.Registry do
   end
 
   @doc """
+  The registry-declared orchestrator model options for `harness`+`provider`
+  (latest first), from the `:orchestrator` sub-map's `:models` map (`provider =>
+  [model]`). Falls back to the harness's `:default_model` when no per-provider list
+  is declared, and `[]` when there is nothing to offer.
+  """
+  @spec orchestrator_models(harness(), String.t() | nil) :: [String.t()]
+  def orchestrator_models(harness, provider) do
+    defaults = orchestrator_defaults(harness)
+
+    with %{} = models <- Map.get(defaults, :models),
+         [_ | _] = list <- Map.get(models, to_string(provider)) do
+      list
+    else
+      _ -> defaults |> Map.get(:default_model) |> List.wrap()
+    end
+  end
+
+  @doc """
   Whether a harness runs unattended (issue-d). Drives the programmatic autonomy
   flag in each adapter (Claude `--dangerously-skip-permissions`, pi `--approve`).
   An unknown harness is `false`.

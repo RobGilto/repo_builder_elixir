@@ -44,6 +44,10 @@ config :phoenix,
 # harness under test (e.g. point "claude" at RepoBuilder.Harness.Mock) — the
 # registry is the single injection seam (BUILD_PROMPT.md §13). "fake" lets
 # session/workflow tests resolve a real canned-event adapter without a CLI.
+# Never shell out to `pi --list-models` during tests — the model dropdown uses the
+# static registry lists (RepoBuilder.Harness.Pi.Models is disabled here).
+config :repo_builder, :pi_models_discovery, false
+
 config :repo_builder, :harnesses, %{
   "claude" => %{
     module: RepoBuilder.Harness.Claude,
@@ -52,7 +56,11 @@ config :repo_builder, :harnesses, %{
     price_table: %{},
     orchestrating: true,
     autonomous: true,
-    orchestrator: %{default_provider: "anthropic", default_model: "opus"}
+    orchestrator: %{
+      default_provider: "anthropic",
+      default_model: "opus",
+      models: %{"anthropic" => ["opus", "sonnet", "haiku"]}
+    }
   },
   "pi" => %{
     module: RepoBuilder.Harness.Pi,
@@ -64,7 +72,11 @@ config :repo_builder, :harnesses, %{
     orchestrator: %{
       default_provider: nil,
       default_model: nil,
-      providers: ["anthropic", "openai", "google", "zai", "groq", "openrouter"]
+      providers: ["anthropic", "openai", "google", "zai", "groq", "openrouter"],
+      models: %{
+        "openai" => ["gpt-5", "gpt-5-mini"],
+        "zai" => ["glm-4.6", "glm-4.5-air"]
+      }
     }
   },
   "cursor" => %{

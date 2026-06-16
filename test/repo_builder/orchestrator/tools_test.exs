@@ -61,6 +61,45 @@ defmodule RepoBuilder.Orchestrator.ToolsTest do
       assert {:error, _reason} = Tools.call("create_agent", orch.id, %{"harness" => "fake"})
     end
 
+    test "category resolves the worker's harness/provider/model from the roster" do
+      orch = orchestrator("fake")
+
+      {:ok, _} =
+        Orchestrators.set_agent_model(orch.id, "heavy", %{
+          "harness" => "fake",
+          "provider" => "minimax",
+          "model" => "MiniMax-M3"
+        })
+
+      name = "heavy-#{uniq()}"
+
+      assert {:ok, result} =
+               Tools.call("create_agent", orch.id, %{"name" => name, "category" => "heavy"})
+
+      assert result["model"] == "MiniMax-M3"
+      assert result["provider"] == "minimax"
+
+      assert {:ok, worker} = Agents.get_by_name_for_orchestrator(orch.id, name)
+      assert worker.model == "MiniMax-M3"
+      # The open provider rides in config (the enum column can't hold it).
+      assert worker.config["provider"] == "minimax"
+    end
+
+    test "a category with no assigned model is rejected" do
+      orch = orchestrator("fake")
+
+      {:ok, _} =
+        Orchestrators.set_agent_model(orch.id, "fast", %{"harness" => "fake", "model" => ""})
+
+      assert {:error, reason} =
+               Tools.call("create_agent", orch.id, %{
+                 "name" => "x-#{uniq()}",
+                 "category" => "fast"
+               })
+
+      assert reason =~ "no model selected for category fast"
+    end
+
     test "duplicate name within one orchestrator is rejected" do
       orch = orchestrator()
       name = "dup-#{uniq()}"
@@ -107,7 +146,13 @@ defmodule RepoBuilder.Orchestrator.ToolsTest do
     test "dispatches to a known worker and persists its resume session id" do
       orch = orchestrator()
       name = "cmd-#{uniq()}"
-      {:ok, _} = Tools.call("create_agent", orch.id, %{"name" => name, "harness" => "fake"})
+
+      {:ok, _} =
+        Tools.call("create_agent", orch.id, %{
+          "name" => name,
+          "harness" => "fake",
+          "model" => "fake-model-1"
+        })
 
       assert {:ok, %{"status" => "dispatched", "name" => ^name}} =
                Tools.call("command_agent", orch.id, %{"name" => name, "prompt" => "do it"})

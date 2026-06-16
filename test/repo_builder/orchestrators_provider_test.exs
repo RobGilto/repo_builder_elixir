@@ -38,26 +38,91 @@ defmodule RepoBuilder.OrchestratorsProviderTest do
     end
   end
 
-  describe "per-harness orchestrator defaults" do
-    test "get_or_create_default(\"claude\") seeds provider anthropic + model opus" do
+  describe "per-harness orchestrator defaults (no auto model)" do
+    test "get_or_create_default(\"claude\") seeds provider anthropic but NO model" do
       assert {:ok, orch} = Orchestrators.get_or_create_default("claude")
       assert orch.provider == "anthropic"
-      assert orch.model == "opus"
+      # No model is auto-assigned — the operator must pick one explicitly.
+      assert orch.model == nil
     end
 
-    test "switching to claude restores Opus; switching to pi clears the Claude-only model" do
+    test "switching harness applies the provider default and clears the model" do
       orch = orchestrator_fixture(%{harness: "pi", provider: "openai", model: "gpt-4o"})
 
       assert {:ok, claude} = Orchestrators.set_harness(orch.id, "claude")
       assert claude.harness == "claude"
       assert claude.provider == "anthropic"
-      assert claude.model == "opus"
+      assert claude.model == nil
 
       assert {:ok, pi} = Orchestrators.set_harness(orch.id, "pi")
       assert pi.harness == "pi"
       # pi has no forced provider/model — both cleared to operator-chosen (nil).
       assert pi.provider == nil
       assert pi.model == nil
+    end
+  end
+
+  describe "model reset, recents, and session hygiene" do
+    test "set_provider clears the model (no auto-default) and the session" do
+      orch =
+        orchestrator_fixture(%{
+          harness: "claude",
+          provider: "anthropic",
+          model: "sonnet",
+          session_id: "sess-x"
+        })
+
+      assert {:ok, updated} = Orchestrators.set_provider(orch.id, "anthropic")
+      # No model is auto-picked; the operator must choose one.
+      assert updated.model == nil
+      assert updated.session_id == nil
+    end
+
+    test "set_model records per-provider recents (most-recent first, deduped)" do
+      orch = orchestrator_fixture(%{harness: "claude", provider: "anthropic"})
+
+      {:ok, _} = Orchestrators.set_model(orch.id, "sonnet")
+      {:ok, _} = Orchestrators.set_model(orch.id, "haiku")
+      {:ok, again} = Orchestrators.set_model(orch.id, "sonnet")
+
+      assert Orchestrators.recent_models(again, "anthropic") == ["sonnet", "haiku"]
+      # Recents are scoped to the provider.
+      assert Orchestrators.recent_models(again, "openai") == []
+    end
+
+    test "switching harness clears the stale resumable session id" do
+      orch = orchestrator_fixture(%{harness: "fake", session_id: "fake-orchestrator"})
+
+      assert {:ok, switched} = Orchestrators.set_harness(orch.id, "claude")
+      assert switched.session_id == nil
+    end
+  end
+
+  describe "agent model roster" do
+    test "agent_categories are fast/main/heavy/leader" do
+      assert Orchestrators.agent_categories() == ["fast", "main", "heavy", "leader"]
+    end
+
+    test "set_agent_model assigns a category and agent_models reads it back" do
+      orch = orchestrator_fixture()
+
+      attrs = %{"harness" => "pi", "provider" => "minimax", "model" => "MiniMax-M3"}
+      assert {:ok, updated} = Orchestrators.set_agent_model(orch.id, "heavy", attrs)
+      assert Orchestrators.agent_models(updated)["heavy"] == attrs
+    end
+
+    test "a blank model is stored as nil (category unassigned)" do
+      orch = orchestrator_fixture()
+
+      assert {:ok, updated} =
+               Orchestrators.set_agent_model(orch.id, "fast", %{"harness" => "pi", "model" => ""})
+
+      assert Orchestrators.agent_models(updated)["fast"]["model"] == nil
+    end
+
+    test "an unknown category is rejected" do
+      orch = orchestrator_fixture()
+      assert {:error, :invalid_category} = Orchestrators.set_agent_model(orch.id, "turbo", %{})
     end
   end
 

@@ -40,7 +40,13 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     default: [],
     doc: "provider names available for the active harness"
 
-  attr :model_options, :list, default: [], doc: "suggested model ids for the active harness"
+  attr :model_options, :list,
+    default: [],
+    doc: "available model ids for the active harness+provider (latest first)"
+
+  attr :recent_models, :list,
+    default: [],
+    doc: "recently-selected models for the active provider (shown first)"
 
   @doc """
   Full-bleed header: a live connection dot, the Active/Running/Logs/WS Events/Cost
@@ -49,6 +55,20 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   """
   @spec header_bar(map()) :: Phoenix.LiveView.Rendered.t()
   def header_bar(assigns) do
+    # Dedup the model dropdown so each option appears once and exactly one is
+    # `selected`: recents first, then the remaining available models, plus the
+    # current value if it is a custom string not present in either list.
+    available = Enum.reject(assigns.model_options, &(&1 in assigns.recent_models))
+    current = assigns.orchestrator_model
+
+    extra =
+      if current not in [nil, ""] and current not in assigns.recent_models and
+           current not in available,
+         do: [current],
+         else: []
+
+    assigns = assign(assigns, model_available: available, model_extra: extra)
+
     ~H"""
     <header
       id="console-header"
@@ -112,25 +132,34 @@ defmodule RepoBuilderWeb.ConsoleComponents do
           </select>
         </form>
 
-        <form
-          id="orchestrator-model-form"
-          phx-change="set_model"
-          title="Orchestrator model"
-        >
-          <input
-            id="orchestrator-model"
-            type="text"
-            name="model"
-            list="orchestrator-model-options"
-            value={@orchestrator_model}
-            placeholder="model…"
-            class="cns-chip"
-            style="width: 9rem"
-          />
-          <datalist id="orchestrator-model-options">
-            <option :for={m <- @model_options} value={m} />
-          </datalist>
+        <form id="orchestrator-model-form" phx-change="set_model" title="Orchestrator model">
+          <select id="orchestrator-model" name="model" class="cns-chip" style="width: 11rem">
+            <option value="" selected={@orchestrator_model in [nil, ""]}>model…</option>
+            <optgroup :if={@model_extra != []} label="Current">
+              <option :for={m <- @model_extra} value={m} selected>{m}</option>
+            </optgroup>
+            <optgroup :if={@recent_models != []} label="Recently selected">
+              <option :for={m <- @recent_models} value={m} selected={@orchestrator_model == m}>
+                {m}
+              </option>
+            </optgroup>
+            <optgroup :if={@model_available != []} label="Models">
+              <option :for={m <- @model_available} value={m} selected={@orchestrator_model == m}>
+                {m}
+              </option>
+            </optgroup>
+          </select>
         </form>
+
+        <button
+          id="agent-models-toggle"
+          type="button"
+          phx-click={show_agent_models()}
+          class="cns-chip"
+          title="Configure the harness/provider/model the orchestrator spawns workers into"
+        >
+          Agents…
+        </button>
 
         <div id="view-toggle" class="cns-toggle" phx-click="toggle_view" title="Toggle view (⌘J)">
           <span class={["cns-toggle__seg", @view_mode == :logs && "cns-toggle__seg--active"]}>
@@ -541,6 +570,95 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   @doc "Close the ⌘K command modal (client-side)."
   @spec hide_command(JS.t()) :: JS.t()
   def hide_command(js \\ %JS{}), do: JS.hide(js, to: "#command-input")
+
+  # --- agent-models modal ---------------------------------------------------
+
+  @doc "Open the agent-models modal (client-side; always in the DOM, just hidden)."
+  @spec show_agent_models(JS.t()) :: JS.t()
+  def show_agent_models(js \\ %JS{}), do: JS.show(js, to: "#agent-models-modal", display: "flex")
+
+  @doc "Close the agent-models modal (client-side)."
+  @spec hide_agent_models(JS.t()) :: JS.t()
+  def hide_agent_models(js \\ %JS{}), do: JS.hide(js, to: "#agent-models-modal")
+
+  attr :rows, :list,
+    default: [],
+    doc: "per-category roster rows: %{category, harness, provider, model, *_options}"
+
+  @doc """
+  Modal to assign, per worker category (fast/main/heavy/leader), the
+  harness/provider/model the orchestrator spawns into. Always rendered (shown/hidden
+  client-side). A blank model = unassigned ⇒ the orchestrator can't spawn there.
+  """
+  @spec agent_models_modal(map()) :: Phoenix.LiveView.Rendered.t()
+  def agent_models_modal(assigns) do
+    ~H"""
+    <div
+      id="agent-models-modal"
+      class="cns-cmd-overlay"
+      style="display:none"
+      phx-window-keydown={hide_agent_models()}
+      phx-key="Escape"
+    >
+      <div class="cns-cmd-panel" style="max-width: 56rem">
+        <div class="mb-3 flex items-center justify-between">
+          <span class="text-xs font-semibold" style="color: var(--cns-cyan)">
+            AGENT MODELS — what the orchestrator spawns workers into
+          </span>
+          <button type="button" phx-click={hide_agent_models()} class="cns-chip">Done</button>
+        </div>
+
+        <div class="flex flex-col gap-2">
+          <form
+            :for={row <- @rows}
+            id={"agent-model-#{row.category}"}
+            phx-change="set_agent_model"
+            class="flex items-center gap-2"
+          >
+            <input type="hidden" name="category" value={row.category} />
+            <span class="w-16 text-xs font-semibold uppercase" style="color: var(--cns-text-1)">
+              {row.category}
+            </span>
+
+            <select name="harness" class="cns-chip" style="width: 8rem">
+              <option value="" selected={row.harness in [nil, ""]}>harness…</option>
+              <option :for={h <- row.harness_options} value={h} selected={row.harness == h}>
+                {h}
+              </option>
+            </select>
+
+            <select
+              name="provider"
+              class="cns-chip"
+              style="width: 9rem"
+              disabled={row.harness in [nil, ""]}
+            >
+              <option value="" selected={row.provider in [nil, ""]}>provider…</option>
+              <option :for={p <- row.provider_options} value={p} selected={row.provider == p}>
+                {p}
+              </option>
+            </select>
+
+            <select
+              name="model"
+              class="cns-chip"
+              style="width: 13rem"
+              disabled={row.harness in [nil, ""]}
+            >
+              <option value="" selected={row.model in [nil, ""]}>no model (won't spawn)…</option>
+              <option :for={m <- row.model_options} value={m} selected={row.model == m}>{m}</option>
+            </select>
+          </form>
+        </div>
+
+        <p class="mt-3 text-[0.625rem]" style="color: var(--cns-text-2)">
+          Leave a model blank to keep that category unassigned — the orchestrator will
+          error with "no model selected" if it tries to spawn into it.
+        </p>
+      </div>
+    </div>
+    """
+  end
 
   attr :harnesses, :list, default: []
   attr :agents, :list, default: [], doc: "list of agent names"

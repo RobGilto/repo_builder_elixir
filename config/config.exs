@@ -85,7 +85,13 @@ harnesses = %{
     # it only applies on this sandboxed orchestration server and can be turned off here.
     autonomous: true,
     # Per-harness orchestrator defaults — switching to Claude sets Opus automatically.
-    orchestrator: %{default_provider: "anthropic", default_model: "opus"}
+    # `models` drives the header model dropdown (latest first). The `claude` CLI
+    # resolves the aliases `opus`/`sonnet`/`haiku` to the latest of each family.
+    orchestrator: %{
+      default_provider: "anthropic",
+      default_model: "opus",
+      models: %{"anthropic" => ["opus", "sonnet", "haiku"]}
+    }
   },
   "pi" => %{
     module: RepoBuilder.Harness.Pi,
@@ -100,10 +106,79 @@ harnesses = %{
     autonomous: true,
     # pi's provider/model are operator-chosen (no forced defaults); the providers
     # list drives the console dropdown without constraining the open `provider` column.
+    # `models` is a per-provider curated list (latest first) that drives the model
+    # dropdown; pi still accepts any model string, so this is guidance, not a
+    # constraint. Edit here to track new releases (one config edit, §10).
+    # `providers` are pi's `--provider` keys (its auth.json keys, per pi's
+    # providers.md). `models` is a per-provider curated list (latest first) that
+    # drives the model dropdown; pi accepts any model string, so this is guidance,
+    # not a constraint — edit here to track new releases (one config edit, §10).
     orchestrator: %{
       default_provider: nil,
       default_model: nil,
-      providers: ["anthropic", "openai", "google", "zai", "groq", "openrouter"]
+      providers: [
+        "anthropic",
+        "openai",
+        "google",
+        "xai",
+        "deepseek",
+        "mistral",
+        "groq",
+        "cerebras",
+        "fireworks",
+        "together",
+        "openrouter",
+        "zai",
+        "minimax",
+        "kimi-coding",
+        "nvidia",
+        "huggingface"
+      ],
+      models: %{
+        "anthropic" => ["claude-opus-4-1", "claude-sonnet-4-5", "claude-3-5-haiku-latest"],
+        "openai" => ["gpt-5", "gpt-5-mini", "o4-mini", "gpt-4.1"],
+        "google" => ["gemini-2.5-pro", "gemini-2.5-flash"],
+        "xai" => ["grok-4", "grok-4-fast", "grok-code-fast-1"],
+        "deepseek" => ["deepseek-chat", "deepseek-reasoner"],
+        "mistral" => [
+          "mistral-large-latest",
+          "magistral-medium-latest",
+          "codestral-latest",
+          "devstral-medium-latest"
+        ],
+        "groq" => ["moonshotai/kimi-k2-instruct", "llama-3.3-70b-versatile", "qwen/qwen3-32b"],
+        "cerebras" => ["qwen-3-coder-480b", "llama-3.3-70b", "gpt-oss-120b"],
+        "fireworks" => [
+          "accounts/fireworks/models/kimi-k2-instruct",
+          "accounts/fireworks/models/deepseek-v3p1",
+          "accounts/fireworks/models/qwen3-coder-480b-a35b-instruct"
+        ],
+        "together" => [
+          "moonshotai/Kimi-K2-Instruct",
+          "deepseek-ai/DeepSeek-V3.1",
+          "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8"
+        ],
+        "openrouter" => [
+          "anthropic/claude-sonnet-4.5",
+          "openai/gpt-5",
+          "google/gemini-2.5-pro",
+          "x-ai/grok-4",
+          "deepseek/deepseek-chat-v3.1"
+        ],
+        "zai" => ["glm-4.6", "glm-4.5-air"],
+        "minimax" => ["MiniMax-M2", "MiniMax-M1", "MiniMax-Text-01"],
+        "kimi-coding" => ["kimi-k2-0905-preview", "kimi-k2-turbo-preview"],
+        "nvidia" => [
+          "moonshotai/kimi-k2-instruct",
+          "deepseek-ai/deepseek-r1",
+          "qwen/qwen3-coder-480b-a35b-instruct"
+        ],
+        "huggingface" => [
+          "deepseek-ai/DeepSeek-V3.1",
+          "moonshotai/Kimi-K2-Instruct",
+          "Qwen/Qwen3-Coder-480B-A35B-Instruct"
+        ]
+      }
     }
   },
   # Extensibility proof (§10): a third harness = this one module + this one entry,

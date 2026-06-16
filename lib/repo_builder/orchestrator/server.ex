@@ -23,10 +23,10 @@ defmodule RepoBuilder.Orchestrator.Server do
 
   require Logger
 
+  alias RepoBuilder.{Dashboard, Logs, Orchestrators, Session}
   alias RepoBuilder.Harness.Event
   alias RepoBuilder.Harness.Registry, as: HarnessRegistry
   alias RepoBuilder.Orchestrator.{SystemPrompt, Tools}
-  alias RepoBuilder.{Orchestrators, Session}
 
   @sup RepoBuilder.OrchestratorSupervisor
   @pubsub RepoBuilder.PubSub
@@ -52,18 +52,61 @@ defmodule RepoBuilder.Orchestrator.Server do
   """
   @spec run_turn(Ecto.UUID.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
   def run_turn(orchestrator_id, prompt) do
-    case Orchestrators.fetch(orchestrator_id) do
-      {:ok, orchestrator} ->
-        if HarnessRegistry.orchestrating?(orchestrator.harness) do
-          start_turn(orchestrator, prompt)
-        else
-          {:error, :not_orchestrator_capable}
-        end
-
-      {:error, :not_found} ->
-        {:error, :not_found}
+    with {:ok, orchestrator} <- Orchestrators.fetch(orchestrator_id),
+         :ok <- ensure_orchestrating(orchestrator),
+         :ok <- ensure_model(orchestrator) do
+      start_turn(orchestrator, prompt)
     end
   end
+
+  @spec ensure_orchestrating(RepoBuilder.Orchestrator.Orchestrator.t()) ::
+          :ok | {:error, :not_orchestrator_capable}
+  defp ensure_orchestrating(orchestrator) do
+    if HarnessRegistry.orchestrating?(orchestrator.harness),
+      do: :ok,
+      else: {:error, :not_orchestrator_capable}
+  end
+
+  # Refuse to run with no model selected, and surface it in the observability
+  # system (a persisted Error event on the console feed) — not just a flash.
+  @spec ensure_model(RepoBuilder.Orchestrator.Orchestrator.t()) ::
+          :ok | {:error, :no_model_selected}
+  defp ensure_model(orchestrator) do
+    if blank?(orchestrator.model) do
+      emit_no_model_error(orchestrator)
+    else
+      :ok
+    end
+  end
+
+  @spec emit_no_model_error(RepoBuilder.Orchestrator.Orchestrator.t()) ::
+          {:error, :no_model_selected}
+  defp emit_no_model_error(orchestrator) do
+    agent_id = "orch-#{orchestrator.id}-#{System.unique_integer([:positive])}"
+
+    event = %Event.Error{
+      harness: String.to_atom(orchestrator.harness),
+      message: "no model selected — pick a model in the console header before running",
+      reason: :no_model_selected,
+      retryable: false
+    }
+
+    _ = Dashboard.broadcast_event(agent_id, event)
+
+    _ =
+      Logs.persist_orchestrator_event(event, %{
+        orchestrator_id: orchestrator.id,
+        session_id: agent_id
+      })
+
+    _ = Orchestrators.set_status(orchestrator.id, :error)
+    {:error, :no_model_selected}
+  end
+
+  @spec blank?(term()) :: boolean()
+  defp blank?(nil), do: true
+  defp blank?(value) when is_binary(value), do: String.trim(value) == ""
+  defp blank?(_value), do: false
 
   @spec start_turn(RepoBuilder.Orchestrator.Orchestrator.t(), String.t()) ::
           {:ok, String.t()} | {:error, term()}

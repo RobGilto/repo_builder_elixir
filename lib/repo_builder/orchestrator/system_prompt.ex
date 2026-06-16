@@ -8,6 +8,7 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
   """
   alias RepoBuilder.Harness.Registry
   alias RepoBuilder.Orchestrator.{Orchestrator, ToolCatalog}
+  alias RepoBuilder.Orchestrators
 
   @doc "Build the system prompt for `orchestrator`."
   @spec build(Orchestrator.t()) :: String.t()
@@ -21,10 +22,17 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     Operating rules:
     - When the operator gives you work, break it into tasks and use `create_agent`
       to spin up a worker (reuse an existing one via `list_agents` when sensible).
+    - Prefer the `category` argument to `create_agent` to pick a worker tier; it
+      resolves to the operator-assigned harness/provider/model below. Choose `fast`
+      for cheap/simple steps, `main` for normal work, `heavy` for hard reasoning,
+      `leader` for coordination. A category with no model assigned cannot be spawned.
     - Dispatch work with `command_agent`; check progress with `check_agent_status`;
       stop a runaway worker with `interrupt_agent`.
     - For a full plan→build→review→fix cycle, use `start_adw`.
     - Always name workers descriptively and keep the operator informed in plain text.
+
+    Worker model tiers:
+    #{categories_block(orchestrator)}
 
     Available tools:
     #{tools_block()}
@@ -32,6 +40,23 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     Available worker harnesses: #{harnesses_block()}.
     Your own harness is #{own_harness_block(orchestrator)}.
     """
+  end
+
+  @spec categories_block(Orchestrator.t()) :: String.t()
+  defp categories_block(orchestrator) do
+    roster = Orchestrators.agent_models(orchestrator)
+
+    Enum.map_join(Orchestrators.agent_categories(), "\n", fn category ->
+      entry = Map.get(roster, category, %{})
+
+      case entry["model"] do
+        model when is_binary(model) and model != "" ->
+          "- #{category}: #{entry["harness"]}/#{entry["provider"] || "default"} #{model}"
+
+        _ ->
+          "- #{category}: (unassigned — cannot spawn here)"
+      end
+    end)
   end
 
   # Make the brain self-aware of its execution context (harness + provider + model).

@@ -20,14 +20,21 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       %{
         name: "create_agent",
         description:
-          "Create a new worker agent owned by this orchestrator. Returns the worker's id and name. Names are unique within this orchestrator.",
+          "Create a new worker agent owned by this orchestrator. Prefer `category` (fast/main/heavy/leader) to spawn into the operator-configured harness/provider/model for that tier; that fails if no model is assigned to the category. Returns the worker's id and name. Names are unique within this orchestrator.",
         input_schema: %{
           "type" => "object",
           "properties" => %{
             "name" => %{"type" => "string", "description" => "Unique worker name."},
+            "category" => %{
+              "type" => "string",
+              "enum" => ["fast", "main", "heavy", "leader"],
+              "description" =>
+                "Worker model tier to spawn into (resolves to the operator-assigned harness/provider/model). Preferred over an explicit harness/model."
+            },
             "harness" => %{
               "type" => "string",
-              "description" => "Registered harness the worker runs on (e.g. claude, pi)."
+              "description" =>
+                "Registered harness the worker runs on (e.g. claude, pi). Ignored when `category` is given."
             },
             "model" => %{"type" => "string", "description" => "Optional model override."},
             "system_prompt" => %{

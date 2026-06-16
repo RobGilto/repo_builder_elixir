@@ -32,6 +32,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
   alias RepoBuilder.{Agents, Dashboard, Logs, Orchestrators, Session, Workflows}
   alias RepoBuilder.Agents.Agent
   alias RepoBuilder.Harness.Event
+  alias RepoBuilder.Harness.Pi.Models, as: PiModels
   alias RepoBuilder.Harness.Registry, as: HarnessRegistry
   alias RepoBuilder.Orchestrator.Server, as: OrchestratorServer
   alias RepoBuilderWeb.AgentColors
@@ -62,6 +63,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
         orchestrator_model: nil,
         provider_options: [],
         model_options: [],
+        recent_models: [],
+        agent_model_rows: [],
         view_mode: :logs,
         show_new_agent?: false,
         rail_collapsed?: false,
@@ -100,6 +103,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
         |> backfill_events()
         |> assign_orchestrator()
         |> subscribe_feeds()
+        |> tap(fn _ -> PiModels.refresh_async() end)
       else
         socket
       end
@@ -130,8 +134,34 @@ defmodule RepoBuilderWeb.ConsoleLive do
       orchestrator_provider: orchestrator.provider,
       orchestrator_model: orchestrator.model,
       provider_options: provider_options_for(orchestrator.harness),
-      model_options: model_options_for(orchestrator.harness)
+      model_options: model_options_for(orchestrator.harness, orchestrator.provider),
+      recent_models: Orchestrators.recent_models(orchestrator, orchestrator.provider),
+      agent_model_rows: agent_model_rows(orchestrator)
     )
+  end
+
+  # Build the per-category roster rows for the agent-models modal: each category's
+  # current {harness, provider, model} plus the option lists derived from them.
+  @spec agent_model_rows(RepoBuilder.Orchestrator.Orchestrator.t()) :: [map()]
+  defp agent_model_rows(orchestrator) do
+    roster = Orchestrators.agent_models(orchestrator)
+    harnesses = orchestrator_harness_options()
+
+    Enum.map(Orchestrators.agent_categories(), fn category ->
+      entry = Map.get(roster, category, %{})
+      harness = entry["harness"]
+      provider = entry["provider"]
+
+      %{
+        category: category,
+        harness: harness,
+        provider: provider,
+        model: entry["model"],
+        harness_options: harnesses,
+        provider_options: if(harness, do: provider_options_for(harness), else: []),
+        model_options: if(harness, do: model_options_for(harness, provider), else: [])
+      }
+    end)
   end
 
   @spec provider_options_for(String.t()) :: [String.t()]
@@ -144,10 +174,19 @@ defmodule RepoBuilderWeb.ConsoleLive do
     end
   end
 
-  @spec model_options_for(String.t()) :: [String.t()]
-  defp model_options_for(harness) do
-    HarnessRegistry.orchestrator_defaults(harness)[:default_model]
-    |> List.wrap()
+  # Prefer pi's LIVE model catalog (`pi --list-models`, cached) so the dropdown
+  # tracks new releases (e.g. MiniMax-M3); fall back to the static registry list
+  # when pi is unavailable or hasn't a live entry for this provider.
+  @spec model_options_for(String.t(), String.t() | nil) :: [String.t()]
+  defp model_options_for("pi", provider) do
+    case PiModels.list(provider) do
+      [] -> HarnessRegistry.orchestrator_models("pi", provider)
+      live -> live
+    end
+  end
+
+  defp model_options_for(harness, provider) do
+    HarnessRegistry.orchestrator_models(harness, provider)
   end
 
   @spec subscribe_feeds(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
@@ -277,6 +316,18 @@ defmodule RepoBuilderWeb.ConsoleLive do
   def handle_event("set_model", %{"model" => model}, socket) do
     model = nilify_blank(model)
     update_orchestrator(socket, &Orchestrators.set_model(&1, model), "Could not set model")
+  end
+
+  # Assign a worker category's harness/provider/model (agent-models modal). Cascade:
+  # changing the harness clears provider+model; changing the provider clears model.
+  def handle_event("set_agent_model", %{"category" => category} = params, socket) do
+    attrs = agent_model_attrs(params)
+
+    update_orchestrator(
+      socket,
+      &Orchestrators.set_agent_model(&1, category, attrs),
+      "Could not set agent model"
+    )
   end
 
   def handle_event("view:toggle", _params, socket), do: {:noreply, toggle_view(socket)}
@@ -440,6 +491,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
           {:error, :not_orchestrator_capable} ->
             put_flash(socket, :error, "Orchestrator harness can't orchestrate")
 
+          {:error, :no_model_selected} ->
+            put_flash(socket, :error, "No model selected — pick a model in the header")
+
           {:error, _reason} ->
             put_flash(socket, :error, "Could not start the orchestrator")
         end
@@ -476,6 +530,29 @@ defmodule RepoBuilderWeb.ConsoleLive do
       "" -> nil
       trimmed -> trimmed
     end
+  end
+
+  # Cascade an agent-models row change: changing harness clears provider+model;
+  # changing provider clears model; changing model keeps the row as posted.
+  @spec agent_model_attrs(map()) :: %{optional(String.t()) => String.t() | nil}
+  defp agent_model_attrs(%{"_target" => ["harness" | _]} = params) do
+    %{"harness" => nilify_blank(params["harness"]), "provider" => nil, "model" => nil}
+  end
+
+  defp agent_model_attrs(%{"_target" => ["provider" | _]} = params) do
+    %{
+      "harness" => nilify_blank(params["harness"]),
+      "provider" => nilify_blank(params["provider"]),
+      "model" => nil
+    }
+  end
+
+  defp agent_model_attrs(params) do
+    %{
+      "harness" => nilify_blank(params["harness"]),
+      "provider" => nilify_blank(params["provider"]),
+      "model" => nilify_blank(params["model"])
+    }
   end
 
   @spec push_user_message(Phoenix.LiveView.Socket.t(), String.t()) :: Phoenix.LiveView.Socket.t()
@@ -840,6 +917,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
         orchestrator_model={@orchestrator_model}
         provider_options={@provider_options}
         model_options={@model_options}
+        recent_models={@recent_models}
       />
 
       <div
@@ -1044,6 +1122,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
         harnesses={@harness_options}
         agents={Enum.map(@agents, & &1.name)}
       />
+
+      <.agent_models_modal rows={@agent_model_rows} />
 
       <div class="fixed bottom-3 right-3 z-50">
         <Layouts.theme_toggle />
