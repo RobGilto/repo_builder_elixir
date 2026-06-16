@@ -19,8 +19,33 @@ defmodule RepoBuilder.Harness.Pi do
   the idle-timeout `Error` are SYNTHESIZED by the §6 runtime, NOT here.
   """
   @behaviour RepoBuilder.Harness
+  @behaviour RepoBuilder.Harness.Orchestrating
 
   alias RepoBuilder.Harness.{Event, Pricing}
+
+  # The pi extension that registers the orchestrator tools (pi ships no MCP, §10).
+  @pi_extension Path.join(:code.priv_dir(:repo_builder), "orchestrator/pi_extension")
+
+  @impl RepoBuilder.Harness.Orchestrating
+  def orchestrator_spawn(_opts, ctx) do
+    # pi has no MCP: tools come from a TypeScript extension loaded with `-e`, whose
+    # handlers `fetch` the same MCP/JSON endpoint using the env below (token in env,
+    # never argv). Session resume uses `--session <id>`.
+    args =
+      ["-e", @pi_extension, "--append-system-prompt", ctx.system_prompt] ++
+        resume_args(ctx.resume_session_id)
+
+    env = [
+      {"PI_ORCH_BASE_URL", "#{ctx.mcp_base_url}/orchestrator/#{ctx.orchestrator_id}/mcp"},
+      {"PI_ORCH_TOKEN", ctx.token}
+    ]
+
+    {args, env}
+  end
+
+  @spec resume_args(String.t() | nil) :: [String.t()]
+  defp resume_args(nil), do: []
+  defp resume_args(session_id), do: ["--session", session_id]
 
   @impl true
   def command(opts) do

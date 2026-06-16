@@ -19,10 +19,29 @@ defmodule RepoBuilder.Harness.Fake do
   @ctx %{harness: :fake}
 
   @impl true
-  def command(_opts) do
-    lines = Enum.map(canned_frames(), &Jason.encode!/1)
+  def command(opts) do
+    config = Map.get(opts, :config, %{})
+
+    frames =
+      if orchestrator?(config),
+        do: canned_orchestrator_frames(worker_name(config)),
+        else: canned_frames()
+
+    lines = Enum.map(frames, &Jason.encode!/1)
     {"printf", ["%s\n" | lines], [], @ctx}
   end
+
+  # The orchestrator session passes `config: %{orchestrator: true}` so the keyless
+  # Fake can play a scripted orchestrator (tool_use create_agent → command_agent)
+  # for the §13 end-to-end CI loop; worker sessions get the default sequence.
+  @spec orchestrator?(map()) :: boolean()
+  defp orchestrator?(%{orchestrator: true}), do: true
+  defp orchestrator?(%{"orchestrator" => true}), do: true
+  defp orchestrator?(_config), do: false
+
+  @spec worker_name(map()) :: String.t()
+  defp worker_name(config),
+    do: Map.get(config, :worker_name) || Map.get(config, "worker_name") || "worker-1"
 
   @impl true
   def normalize(%{"type" => "session_started"} = raw, _ctx) do
@@ -113,6 +132,39 @@ defmodule RepoBuilder.Harness.Fake do
         _ -> []
       end
     end)
+  end
+
+  # Scripted orchestrator turn: greet → create a worker → dispatch a task to it →
+  # confirm → done. The tool_call inputs are valid `Orchestrator.Tools` arguments,
+  # so Orchestrator.Server's in-process dispatch genuinely creates + commands a
+  # worker (the harness-blind CI loop, §13).
+  # Inference-only spec — the concrete frame maps narrow below a hand-written
+  # `[map()]` (dialyzer contract_supertype); matches `canned_frames/0` having none.
+  defp canned_orchestrator_frames(worker_name) do
+    [
+      %{
+        "type" => "session_started",
+        "session_id" => "fake-orchestrator",
+        "model" => "fake-model",
+        "tools" => ["create_agent", "command_agent"]
+      },
+      %{"type" => "text_delta", "text" => "I'll spin up a worker for that."},
+      %{
+        "type" => "tool_call",
+        "id" => "orch_call_1",
+        "name" => "create_agent",
+        "input" => %{"name" => worker_name, "harness" => "fake"}
+      },
+      %{
+        "type" => "tool_call",
+        "id" => "orch_call_2",
+        "name" => "command_agent",
+        "input" => %{"name" => worker_name, "prompt" => "Do the assigned task."}
+      },
+      %{"type" => "text_delta", "text" => "Dispatched to #{worker_name}."},
+      %{"type" => "usage", "input_tokens" => 20, "output_tokens" => 8, "cost_usd" => 0.0},
+      %{"type" => "done", "ok" => true, "reason" => "success", "final_text" => "Done."}
+    ]
   end
 
   defp canned_frames do

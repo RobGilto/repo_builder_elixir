@@ -40,6 +40,13 @@ config :repo_builder, :harness_secrets, %{
   }
 }
 
+# Orchestrator MCP base URL (issue-c) — the localhost-bound base the generated
+# `.mcp.json` / pi extension point at. Overridable per host; defaults to the local
+# endpoint. The orchestrator reuses the same per-harness `:harness_secrets` above.
+if base = System.get_env("ORCHESTRATOR_MCP_BASE_URL") do
+  config :repo_builder, :orchestrator, mcp_base_url: base
+end
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

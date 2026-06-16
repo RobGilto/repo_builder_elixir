@@ -37,4 +37,26 @@ defmodule RepoBuilder.Harness.Registry do
       _ -> {:error, :unknown_harness}
     end
   end
+
+  @doc """
+  Whether a harness is orchestrator-capable (issue-c). Driven purely by an
+  `orchestrating: true` map entry — adding the capability is one config flag (§10),
+  no new registry key. An unknown harness is `false`.
+  """
+  @spec orchestrating?(harness()) :: boolean()
+  def orchestrating?(harness) do
+    case all()[to_string(harness)] do
+      %{orchestrating: true} -> true
+      _ -> false
+    end
+  end
+
+  @doc "All orchestrator-capable harness keys."
+  @spec orchestrating_harnesses() :: [String.t()]
+  def orchestrating_harnesses do
+    all()
+    |> Enum.filter(fn {_key, config} -> config[:orchestrating] == true end)
+    |> Enum.map(fn {key, _config} -> key end)
+    |> Enum.sort()
+  end
 end

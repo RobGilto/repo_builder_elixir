@@ -101,8 +101,11 @@ defmodule RepoBuilder.MixProject do
       {:typedstruct, "~> 0.5", runtime: false},
       # Runtime conformance of untrusted harness JSON at the boundary (§4).
       {:type_check, "~> 0.13.7"},
-
       # --- Tooling / quality ---
+      # Phoenix runtime-intelligence MCP (project_eval/get_logs/get_source_location),
+      # served at /tidewave/mcp via `plug Tidewave` in dev only (§2). Not in the prod
+      # release; does not affect the runtime contract.
+      {:tidewave, "~> 0.6", only: [:dev]},
       {:mox, "~> 1.2", only: :test},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false}

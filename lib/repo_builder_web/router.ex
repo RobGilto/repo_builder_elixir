@@ -31,6 +31,20 @@ defmodule RepoBuilderWeb.Router do
     post "/trigger", WebhookController, :trigger
   end
 
+  # Internal, per-orchestrator-token-scoped MCP-over-HTTP tool surface (issue-c).
+  # Both harness bindings (Claude's native MCP via .mcp.json, the pi extension)
+  # reach this one endpoint. Bind to localhost in dev (config/runtime).
+  pipeline :orchestrator_mcp do
+    plug :accepts, ["json"]
+    plug RepoBuilderWeb.Plugs.OrchestratorToken
+  end
+
+  scope "/orchestrator", RepoBuilderWeb do
+    pipe_through :orchestrator_mcp
+
+    post "/:orchestrator_id/mcp", OrchestratorMCPController, :rpc
+  end
+
   # Enable LiveDashboard and Swoosh mailbox preview in development
   if Application.compile_env(:repo_builder, :dev_routes) do
     # If you want to use the LiveDashboard in production, you should put

@@ -76,14 +76,18 @@ harnesses = %{
     exe: "claude",
     default_model: "claude-sonnet-4-6",
     # Claude reports total_cost_usd in its stream — no price table needed.
-    price_table: %{}
+    price_table: %{},
+    # Orchestrator-capable (§10): binds tools via native MCP over .mcp.json.
+    orchestrating: true
   },
   "pi" => %{
     module: RepoBuilder.Harness.Pi,
     exe: "pi",
     default_model: nil,
     # pi reports no USD — cost is derived (USD per million tokens). Unpriced ⇒ nil.
-    price_table: %{"glm-4.6" => 0.6, "glm-4.5-air" => 0.2}
+    price_table: %{"glm-4.6" => 0.6, "glm-4.5-air" => 0.2},
+    # Orchestrator-capable (§10): binds tools via a TypeScript extension (-e).
+    orchestrating: true
   },
   # Extensibility proof (§10): a third harness = this one module + this one entry,
   # with ZERO edits to Event/Agent/runtime.
@@ -105,7 +109,11 @@ harnesses =
       module: RepoBuilder.Harness.Fake,
       exe: "printf",
       default_model: "fake-model-1",
-      price_table: %{}
+      price_table: %{},
+      # Fake is orchestrator-capable WITHOUT an external binding: it has no
+      # `orchestrator_spawn/2`, so Orchestrator.Server dispatches its tool calls
+      # in-process (the keyless CI loop), §13.
+      orchestrating: true
     })
   else
     harnesses
@@ -130,6 +138,14 @@ config :repo_builder, :webhooks, replay_window_seconds: 300
 
 # Cost/error alerting thresholds (BUILD_PROMPT.md §13).
 config :repo_builder, :alerting, cost_threshold_usd: 10.0
+
+# Orchestrator brain defaults (issue-c). `default_harness` is the harness the
+# default orchestrator runs on; `mcp_base_url` is the localhost-bound base the
+# generated `.mcp.json` / pi extension point at. Overridden per env + runtime.
+config :repo_builder, :orchestrator,
+  default_harness: "claude",
+  default_model: nil,
+  mcp_base_url: "http://127.0.0.1:4000"
 
 # Live-session runtime defaults (BUILD_PROMPT.md §5/§6). Overridable per env.
 config :repo_builder, :session,

@@ -10,6 +10,10 @@ config :repo_builder, RepoBuilder.Repo,
   show_sensitive_data_on_connection_error: true,
   pool_size: 10
 
+# In dev the default orchestrator runs on the keyless Fake harness so the console
+# brain works end-to-end without a CLI or API key (§13).
+config :repo_builder, :orchestrator, default_harness: "fake"
+
 # For development, we disable any cache and enable
 # debugging and code reloading.
 #

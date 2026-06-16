@@ -49,13 +49,15 @@ config :repo_builder, :harnesses, %{
     module: RepoBuilder.Harness.Claude,
     exe: "claude",
     default_model: nil,
-    price_table: %{}
+    price_table: %{},
+    orchestrating: true
   },
   "pi" => %{
     module: RepoBuilder.Harness.Pi,
     exe: "pi",
     default_model: "glm-4.6",
-    price_table: %{"glm-4.6" => 0.6}
+    price_table: %{"glm-4.6" => 0.6},
+    orchestrating: true
   },
   "cursor" => %{
     module: RepoBuilder.Harness.Cursor,
@@ -67,9 +69,17 @@ config :repo_builder, :harnesses, %{
     module: RepoBuilder.Harness.Fake,
     exe: "printf",
     default_model: nil,
-    price_table: %{}
+    price_table: %{},
+    orchestrating: true
   }
 }
+
+# The default orchestrator runs on the keyless Fake harness in tests; the MCP base
+# url points at the (server: false) test endpoint for controller/contract tests.
+config :repo_builder, :orchestrator,
+  default_harness: "fake",
+  default_model: nil,
+  mcp_base_url: "http://127.0.0.1:4002"
 
 # Don't reap on boot in tests — the suite drives OrphanReaper.reap_node/1 explicitly
 # so it doesn't race the Ecto sandbox.

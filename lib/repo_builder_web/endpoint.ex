@@ -15,6 +15,14 @@ defmodule RepoBuilderWeb.Endpoint do
     websocket: [connect_info: [session: @session_options]],
     longpoll: [connect_info: [session: @session_options]]
 
+  # Runtime-intelligence MCP at /tidewave/mcp (dev only, §2). MUST run before the
+  # `if code_reloading?` block / `Plug.Parsers` — Tidewave raises if it sees an
+  # already-parsed request body. `Code.ensure_loaded?/1` guards the `only: :dev`
+  # dependency so this compiles and no-ops in test/prod.
+  if Code.ensure_loaded?(Tidewave) do
+    plug Tidewave
+  end
+
   # Serve at "/" the static files from "priv/static" directory.
   #
   # When code reloading is disabled (e.g., in production),

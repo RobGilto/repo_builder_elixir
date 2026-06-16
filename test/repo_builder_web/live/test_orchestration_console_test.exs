@@ -1,8 +1,9 @@
 defmodule RepoBuilderWeb.TestOrchestrationConsoleTest do
   @moduledoc """
   Integration test for the multi-layered orchestration console
-  (BUILD_PROMPT.md §9): mount → create agent → select → launch a `fake` session
-  → assert streamed canonical events + stat updates → toggle view → launch ADW.
+  (BUILD_PROMPT.md §9): mount → create agent → select → run a `fake` session via
+  the ⌘K command modal → assert streamed canonical events + stat updates → toggle
+  view → route a prompt to the orchestrator.
 
   `async: false` so the shared Ecto sandbox reaches the spawned `Session.Server`
   and workflow `Runner`. The `fake` harness is resolved through the registry seam
@@ -28,6 +29,16 @@ defmodule RepoBuilderWeb.TestOrchestrationConsoleTest do
     |> render_submit()
 
     Enum.find(Agents.list_agents(), &(&1.name == name))
+  end
+
+  # The ⌘K command modal is the sole prompt input. Open it, then submit `text`
+  # (routes to the orchestrator, or the selected agent if one is selected).
+  # The command modal is always in the DOM (shown/hidden client-side), so we just
+  # submit its form. Submitting routes to the orchestrator (or the selected agent).
+  defp run_via_command(view, text) do
+    view
+    |> form("#command-form", command: text)
+    |> render_submit()
   end
 
   test "mounts and renders the header, agent rail, and event stream regions", %{conn: conn} do
@@ -60,13 +71,15 @@ defmodule RepoBuilderWeb.TestOrchestrationConsoleTest do
 
     view |> element("#agent-#{agent.id}") |> render_click()
 
-    view
-    |> form("#launch-form", launch: %{prompt: "ship it", harness: "fake", model: ""})
-    |> render_submit()
+    run_via_command(view, "ship it")
 
     assert_receive {:agent_event, _id, %Event.SessionStarted{}}, 2_000
     assert_receive {:agent_event, _id, %Event.Done{ok: true}}, 2_000
 
+    # The test process can observe the broadcasts a beat before the LiveView process
+    # has handled them; wait until all 7 canned events are reflected (stat-logs pill)
+    # before asserting the rendered stream — avoids racing the view's mailbox.
+    assert wait_until(fn -> has_element?(view, "#stat-logs", "7") end)
     html = render(view)
 
     # The fake sequence: session_started → text_delta* → tool_call → tool_result → usage → done.
@@ -89,9 +102,7 @@ defmodule RepoBuilderWeb.TestOrchestrationConsoleTest do
 
     view |> element("#agent-#{agent.id}") |> render_click()
 
-    view
-    |> form("#launch-form", launch: %{prompt: "ship it", harness: "fake", model: ""})
-    |> render_submit()
+    run_via_command(view, "ship it")
 
     assert_receive {:agent_event, _id, %Event.Done{ok: true}}, 2_000
     # The session also broadcasts a lane transition; wait for the terminal one so the
@@ -104,7 +115,26 @@ defmodule RepoBuilderWeb.TestOrchestrationConsoleTest do
 
     assert html =~ ~s(id="swimlanes")
     assert html =~ "lane-agent:#{agent.id}"
-    assert html =~ "succeeded"
+    # The terminal lane broadcast may reach the LiveView process just after the test
+    # process; poll the render so we observe the processed `succeeded` transition
+    # rather than racing it.
+    assert wait_render(view, "succeeded")
+  end
+
+  defp wait_render(view, substring, attempts \\ 100) do
+    cond do
+      render(view) =~ substring -> true
+      attempts > 0 -> Process.sleep(20) && wait_render(view, substring, attempts - 1)
+      true -> false
+    end
+  end
+
+  defp wait_until(fun, attempts \\ 100) do
+    cond do
+      fun.() -> true
+      attempts > 0 -> Process.sleep(20) && wait_until(fun, attempts - 1)
+      true -> false
+    end
   end
 
   test "the LOGS/ADWS toggle switches the center column", %{conn: conn} do
@@ -121,36 +151,19 @@ defmodule RepoBuilderWeb.TestOrchestrationConsoleTest do
     assert has_element?(view, "#view-toggle", "ADWS")
   end
 
-  test "launching an ADW starts the example workflow and a workflow lane appears", %{conn: conn} do
-    :ok = Dashboard.subscribe()
-
+  test "a prompt with no agent selected routes to the orchestrator (no select-an-agent gate)", %{
+    conn: conn
+  } do
+    # issue-c: the human is no longer the orchestrator. A prompt with no agent
+    # selected starts the default orchestrator brain instead of flashing an error.
+    # (ADW launches now happen via the orchestrator's start_adw tool, not a form.)
     {:ok, view, _html} = live(conn, ~p"/")
 
-    view
-    |> form("#launch-adw-form", adw: %{harness: "fake"})
-    |> render_submit()
+    html = run_via_command(view, "hi")
 
-    assert_receive {:lane, %{kind: :workflow} = lane}, 5_000
-
-    # launch_adw switches to ADWS view; the workflow lane is in the swimlanes stream.
-    html = render(view)
-    assert html =~ ~s(id="swimlanes")
-    assert html =~ "lane-#{lane.id}"
-
-    # Let the example ADW (plan→build→review) run to completion BEFORE the test ends,
-    # so its fake step-sessions don't touch the DB after the sandbox owner is gone.
-    assert_receive {:lane, %{kind: :workflow, status: :succeeded}}, 8_000
-  end
-
-  test "Run with no agent selected shows a flash error and starts nothing", %{conn: conn} do
-    {:ok, view, _html} = live(conn, ~p"/")
-
-    html =
-      view
-      |> form("#launch-form", launch: %{prompt: "hi", harness: "fake", model: ""})
-      |> render_submit()
-
-    assert html =~ "Select an agent before running"
+    refute html =~ "Select an agent before running"
+    # The prompt is echoed into the chat as the operator's message.
+    assert html =~ "YOU"
   end
 
   test "creating an agent with a harness not in the registry surfaces a changeset error", %{

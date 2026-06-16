@@ -64,6 +64,17 @@ defmodule RepoBuilder.Dashboard do
     :ok
   end
 
+  @doc """
+  Announce a newly orchestrator-created worker on the console feed so the roster
+  picks it up live. Subscribers receive `{:agent_created, agent}`. Additive seam
+  (§9) — NOT a canonical `Event` variant, so the core event sum type is untouched.
+  """
+  @spec broadcast_agent_created(RepoBuilder.Agents.Agent.t()) :: :ok
+  def broadcast_agent_created(agent) do
+    _ = Phoenix.PubSub.broadcast(RepoBuilder.PubSub, @events_topic, {:agent_created, agent})
+    :ok
+  end
+
   @doc "Topic for one workflow run's transition stream (per-workflow view)."
   @spec workflow_topic(Ecto.UUID.t()) :: String.t()
   def workflow_topic(run_id), do: "workflow:#{run_id}:events"

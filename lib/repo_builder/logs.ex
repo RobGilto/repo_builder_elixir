@@ -47,6 +47,20 @@ defmodule RepoBuilder.Logs do
     |> Enum.reverse()
   end
 
+  @doc """
+  The most recent `limit` agent_logs rows across ALL agents, in chronological
+  order. Seeds the console's center stream + chat buffer on connect so a
+  reconnect backfills instead of starting empty (§9 reconnect rule).
+  """
+  @spec list_recent_global(pos_integer()) :: [AgentLog.t()]
+  def list_recent_global(limit \\ 500) do
+    AgentLog
+    |> order_by([l], desc: l.inserted_at, desc: l.id)
+    |> limit(^limit)
+    |> Repo.all()
+    |> Enum.reverse()
+  end
+
   @doc "Sum of all priced `cost_usd` across an agent's logs (unpriced rows contribute nothing)."
   @spec cost_rollup!(Ecto.UUID.t()) :: Decimal.t()
   def cost_rollup!(agent_id) do

@@ -1,0 +1,11 @@
+{
+  "name": "repo-builder-orchestrator-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "pi extension binding the repo_builder orchestrator's agent-management tools (pi ships no MCP, so tools come from a TypeScript extension loaded with -e). Handlers fetch the same MCP-over-HTTP endpoint Claude reaches natively.",
+  "type": "module",
+  "main": "orchestrator-tools.ts",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

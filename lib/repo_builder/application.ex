@@ -33,6 +33,11 @@ defmodule RepoBuilder.Application do
       # One supervised state machine per running ADW; a failed step is isolated to
       # its workflow.
       {DynamicSupervisor, name: RepoBuilder.WorkflowSupervisor, strategy: :one_for_one},
+      # One :temporary monitor per orchestrator turn (issue-c): subscribes to the
+      # orchestrator session's events, captures session_id/cost, and dispatches
+      # in-process tool calls for harnesses without an external (MCP/extension)
+      # binding. A crashed turn is isolated, never restarted.
+      {DynamicSupervisor, name: RepoBuilder.OrchestratorSupervisor, strategy: :one_for_one},
       # Boot-time reconciliation of orphaned OS children via the durable ledger.
       # Runs AFTER Repo (it reads os_pid_ledger). Disabled on boot in tests.
       RepoBuilder.OrphanReaper,

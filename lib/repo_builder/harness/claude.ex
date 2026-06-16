@@ -9,10 +9,44 @@ defmodule RepoBuilder.Harness.Claude do
   used on untrusted keys; the reason enum is mapped through a closed lookup.
   """
   @behaviour RepoBuilder.Harness
+  @behaviour RepoBuilder.Harness.Orchestrating
 
   alias RepoBuilder.Harness.Event
 
   @ctx %{harness: :claude}
+
+  @impl RepoBuilder.Harness.Orchestrating
+  def orchestrator_spawn(_opts, ctx) do
+    # Claude natively speaks MCP over HTTP via a declared server file. The bearer
+    # token lives in that per-session file under the ephemeral cwd (cleaned up by
+    # the runtime) — never in argv (visible in `ps`).
+    path = Path.join(ctx.cwd, ".mcp.json")
+    File.mkdir_p!(ctx.cwd)
+    File.write!(path, mcp_config_json(ctx))
+
+    args =
+      ["--mcp-config", path, "--append-system-prompt", ctx.system_prompt] ++
+        resume_args(ctx.resume_session_id)
+
+    {args, []}
+  end
+
+  @spec mcp_config_json(RepoBuilder.Harness.Orchestrating.tool_ctx()) :: String.t()
+  defp mcp_config_json(ctx) do
+    Jason.encode!(%{
+      "mcpServers" => %{
+        "repo_builder" => %{
+          "type" => "http",
+          "url" => "#{ctx.mcp_base_url}/orchestrator/#{ctx.orchestrator_id}/mcp",
+          "headers" => %{"Authorization" => "Bearer #{ctx.token}"}
+        }
+      }
+    })
+  end
+
+  @spec resume_args(String.t() | nil) :: [String.t()]
+  defp resume_args(nil), do: []
+  defp resume_args(session_id), do: ["--resume", session_id]
 
   @impl true
   def command(opts) do

@@ -59,6 +59,10 @@ defmodule RepoBuilder.Session.Server do
       field :max_line_bytes, pos_integer()
       field :saw_output?, boolean(), default: false
       field :saw_terminal?, boolean(), default: false
+      # When set (issue-c), this session is an ORCHESTRATOR: the adapter's optional
+      # `orchestrator_spawn/2` merges extra argv/env onto the base command. nil for
+      # every worker session (the worker spawn path is untouched).
+      field :orchestrator_ctx, map(), enforce: false
     end
   end
 
@@ -112,7 +116,8 @@ defmodule RepoBuilder.Session.Server do
       cwd: workspace_path(cfg, session_id),
       marker: generate_token(),
       idle_ms: cfg_value(opts, cfg, :idle_ms, 300_000),
-      max_line_bytes: cfg_value(opts, cfg, :max_line_bytes, 1_048_576)
+      max_line_bytes: cfg_value(opts, cfg, :max_line_bytes, 1_048_576),
+      orchestrator_ctx: opts[:orchestrator_ctx]
     }
   end
 
@@ -147,6 +152,7 @@ defmodule RepoBuilder.Session.Server do
     }
 
     {exe, args, env, ctx} = state.adapter.command(start_opts)
+    {args, env} = maybe_orchestrator_spawn(state, start_opts, args, env)
 
     case resolve_exe(exe) do
       nil ->
@@ -155,6 +161,32 @@ defmodule RepoBuilder.Session.Server do
 
       abs_exe ->
         spawn_child(abs_exe, args, env, ctx, state)
+    end
+  end
+
+  # When this is an orchestrator session AND the adapter implements the optional
+  # `Orchestrating` behaviour, merge its extra argv/env onto the base command. The
+  # worker path (orchestrator_ctx == nil) returns the base args/env unchanged.
+  @spec maybe_orchestrator_spawn(State.t(), map(), [String.t()], [{String.t(), String.t()}]) ::
+          {[String.t()], [{String.t(), String.t()}]}
+  defp maybe_orchestrator_spawn(%State{orchestrator_ctx: nil}, _start_opts, args, env),
+    do: {args, env}
+
+  defp maybe_orchestrator_spawn(
+         %State{orchestrator_ctx: ctx, adapter: adapter} = state,
+         opts,
+         args,
+         env
+       ) do
+    if function_exported?(adapter, :orchestrator_spawn, 2) do
+      # The runtime owns the real session cwd (where per-session config files like
+      # `.mcp.json` are written); fill it in before the adapter binds tools.
+      {extra_args, extra_env} = adapter.orchestrator_spawn(opts, %{ctx | cwd: state.cwd})
+      {args ++ extra_args, env ++ extra_env}
+    else
+      # Orchestrator on a harness with no external binding (e.g. Fake): tool calls
+      # are dispatched in-process by Orchestrator.Server. No argv/env changes.
+      {args, env}
     end
   end
 

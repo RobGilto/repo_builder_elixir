@@ -1,32 +1,44 @@
 defmodule RepoBuilderWeb.ConsoleLive do
   @moduledoc """
   The multi-layered orchestration console (BUILD_PROMPT.md §9) — a single
-  full-bleed LiveView reproducing the reference 3-column command console:
+  full-bleed LiveView reproducing the reference 3-pane command console:
 
-    * a header bar (connection dot + Active/Running/Logs/Cost pills + LOGS/ADWS
-      toggle + Prompt toggle);
-    * a left agent rail (status dot + harness, selectable, with an inline
-      "New agent" form);
-    * a center column that switches between a live append-only EVENT STREAM and
-      ADW SWIMLANES;
-    * a right command panel that starts a live session on the selected agent,
-      interrupts it, and launches the example ADW.
+    * a header bar (connection dot + Active/Running/Logs/WS Events/Cost pills +
+      glowing LOGS⇄ADWS toggle + Prompt ⌘K toggle);
+    * a left agent rail of rich agent cards (status badge, context-window bar,
+      per-category counters, model+cost footer), collapsible to a 44px icon rail,
+      pulsing on activity;
+    * a center column that switches between a filterable live EVENT STREAM and ADW
+      SWIMLANES with per-event squares + a click-to-open detail panel;
+    * a right chat/command panel rendering canonical events as chat bubbles
+      (text→message, thinking→thinking bubble, tool_call→tool-use card) above the
+      launch / Interrupt / Launch-ADW controls;
+    * a bottom ⌘K global command-input modal with a harness/agent system-info panel.
 
   The console is harness-blind: it drives the exact `Session.Supervisor` and
   `WorkflowEngine` paths the runtime already uses, so it works identically with
   `fake` (dev), `claude`, and `pi`. It NEVER touches `Repo` directly — every read
-  and write flows through an `@spec`'d context. Both feeds use LiveView STREAMS
-  with stable dom_ids and negative `limit:` pruning, so server memory stays flat.
+  and write flows through an `@spec`'d context. The center feed uses a LiveView
+  STREAM backed by a bounded in-assign `event_buffer` so filtering can re-stream
+  with `reset: true` (streams are not enumerable); server memory stays flat.
   """
   use RepoBuilderWeb, :live_view
 
   import RepoBuilderWeb.ConsoleComponents
-  import RepoBuilderWeb.DashboardComponents, only: [swimlane_row: 1]
 
-  alias RepoBuilder.{Agents, Dashboard, Logs, Session, WorkflowEngine, Workflows}
+  import RepoBuilderWeb.DashboardComponents,
+    only: [swimlane_row: 1, swimlane: 1, event_square: 1, event_detail_panel: 1]
+
+  alias RepoBuilder.{Agents, Dashboard, Logs, Orchestrators, Session, Workflows}
   alias RepoBuilder.Agents.Agent
   alias RepoBuilder.Harness.Event
   alias RepoBuilder.Harness.Registry, as: HarnessRegistry
+  alias RepoBuilder.Orchestrator.Server, as: OrchestratorServer
+  alias RepoBuilderWeb.AgentColors
+
+  @categories [:response, :tool, :thinking, :hook]
+  @buffer_limit 500
+  @messages_limit 100
 
   # --- mount / streams / subscriptions ---
 
@@ -42,10 +54,26 @@ defmodule RepoBuilderWeb.ConsoleLive do
         agents: [],
         agent_names: %{},
         statuses: %{},
+        agent_costs: %{},
         selected_agent_id: nil,
+        orchestrator_id: nil,
         view_mode: :logs,
         show_new_agent?: false,
-        prompt_open?: true,
+        rail_collapsed?: false,
+        chat_width: :sm,
+        auto_follow?: true,
+        regex?: false,
+        search: "",
+        active_categories: MapSet.new(@categories),
+        active_agents: [],
+        expanded_ids: MapSet.new(),
+        counters: %{},
+        context_tokens: %{},
+        messages: [],
+        event_buffer: [],
+        selected_event: nil,
+        pulsed_id: nil,
+        typing?: false,
         seq: 0,
         log_count: 0,
         ws_count: 0,
@@ -54,23 +82,34 @@ defmodule RepoBuilderWeb.ConsoleLive do
         cost: nil,
         connected?: connected?(socket),
         harness_options: HarnessRegistry.known(),
-        agent_form: new_agent_form(),
-        launch_form: to_form(blank_launch_params(default_harness()), as: :launch),
-        adw_form: to_form(%{"harness" => default_harness()}, as: :adw)
+        agent_form: new_agent_form()
       )
 
     socket =
       if connected?(socket) do
         socket
         |> load_agents()
+        |> seed_agent_costs()
         |> seed_lanes()
         |> seed_cost()
+        |> backfill_events()
+        |> assign_orchestrator()
         |> subscribe_feeds()
       else
         socket
       end
 
     {:ok, socket}
+  end
+
+  # Resolve the default orchestrator so a prompt with no agent selected has a brain
+  # to route to. A failure leaves orchestrator_id nil (the manual path still works).
+  @spec assign_orchestrator(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp assign_orchestrator(socket) do
+    case Orchestrators.get_or_create_default() do
+      {:ok, orchestrator} -> assign(socket, :orchestrator_id, orchestrator.id)
+      {:error, _reason} -> socket
+    end
   end
 
   @spec subscribe_feeds(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
@@ -91,6 +130,17 @@ defmodule RepoBuilderWeb.ConsoleLive do
     )
   end
 
+  @spec seed_agent_costs(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp seed_agent_costs(socket) do
+    costs = Map.new(socket.assigns.agents, &{&1.id, nilify_zero(Logs.cost_rollup!(&1.id))})
+    assign(socket, :agent_costs, costs)
+  end
+
+  # cost_rollup! returns Decimal-0 for agents with no priced logs; keep the rail
+  # footer at "—" (unpriced) in that case rather than showing "$0".
+  @spec nilify_zero(Decimal.t()) :: Decimal.t() | nil
+  defp nilify_zero(%Decimal{} = d), do: if(Decimal.equal?(d, 0), do: nil, else: d)
+
   @spec seed_lanes(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp seed_lanes(socket) do
     lanes = agent_lanes(socket.assigns.agents) ++ workflow_lanes()
@@ -104,7 +154,32 @@ defmodule RepoBuilderWeb.ConsoleLive do
         accumulate_cost(acc, Logs.cost_rollup!(agent.id))
       end)
 
-    assign(socket, :cost, cost)
+    assign(socket, :cost, nilify_acc(cost))
+  end
+
+  @spec nilify_acc(Decimal.t() | nil) :: Decimal.t() | nil
+  defp nilify_acc(nil), do: nil
+  defp nilify_acc(%Decimal{} = d), do: if(Decimal.equal?(d, 0), do: nil, else: d)
+
+  # Re-seed the center stream + chat buffer from the most-recent global logs so a
+  # reconnect backfills instead of starting empty (§9 reconnect rule).
+  @spec backfill_events(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp backfill_events(socket) do
+    logs = Logs.list_recent_global(200)
+
+    {rows, messages, seq} =
+      Enum.reduce(logs, {[], [], 0}, fn log, {rows, msgs, seq} ->
+        seq = seq + 1
+        row = log_to_row(log, seq, socket.assigns.agent_names)
+        msgs = append_chat(msgs, chat_for_row(row), seq)
+        {rows ++ [row], msgs, seq}
+      end)
+
+    rows = Enum.take(rows, -@buffer_limit)
+
+    socket
+    |> assign(event_buffer: rows, messages: Enum.take(messages, -@messages_limit), seq: seq)
+    |> stream(:events, rows, reset: true)
   end
 
   @spec agent_lanes([Agent.t()]) :: [Dashboard.lane()]
@@ -136,33 +211,23 @@ defmodule RepoBuilderWeb.ConsoleLive do
   # --- control handlers ---
 
   @impl true
-  def handle_event("toggle_view", _params, socket) do
-    next = if socket.assigns.view_mode == :logs, do: :adws, else: :logs
-    {:noreply, assign(socket, :view_mode, next)}
-  end
+  def handle_event("toggle_view", _params, socket), do: {:noreply, toggle_view(socket)}
+  def handle_event("view:toggle", _params, socket), do: {:noreply, toggle_view(socket)}
 
-  def handle_event("toggle_prompt", _params, socket) do
-    {:noreply, assign(socket, :prompt_open?, not socket.assigns.prompt_open?)}
-  end
+  def handle_event("toggle_rail", _params, socket),
+    do: {:noreply, assign(socket, :rail_collapsed?, not socket.assigns.rail_collapsed?)}
 
-  def handle_event("show_new_agent", _params, socket) do
-    {:noreply, assign(socket, :show_new_agent?, true)}
-  end
+  def handle_event("set_chat_width", %{"width" => width}, socket),
+    do: {:noreply, assign(socket, :chat_width, to_chat_width(width))}
 
-  def handle_event("cancel_new_agent", _params, socket) do
-    {:noreply, assign(socket, show_new_agent?: false, agent_form: new_agent_form())}
-  end
+  def handle_event("show_new_agent", _params, socket),
+    do: {:noreply, assign(socket, :show_new_agent?, true)}
+
+  def handle_event("cancel_new_agent", _params, socket),
+    do: {:noreply, assign(socket, show_new_agent?: false, agent_form: new_agent_form())}
 
   def handle_event("select_agent", %{"id" => id}, socket) do
-    harness =
-      harness_for_agent(socket.assigns.agents, id) || socket.assigns.launch_form.params["harness"]
-
-    params = Map.put(socket.assigns.launch_form.params, "harness", harness)
-
-    {:noreply,
-     socket
-     |> assign(:selected_agent_id, id)
-     |> assign(:launch_form, to_form(params, as: :launch))}
+    {:noreply, assign(socket, :selected_agent_id, id)}
   end
 
   def handle_event("validate_agent", %{"agent" => params}, socket) do
@@ -180,9 +245,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
         {:noreply,
          socket
          |> load_agents()
+         |> seed_agent_costs()
          |> reseed_agent_lanes()
          |> assign(:selected_agent_id, agent.id)
-         |> assign(:launch_form, to_form(blank_launch_params(agent.harness), as: :launch))
          |> assign(:agent_form, new_agent_form())
          |> assign(:show_new_agent?, false)
          |> put_flash(:info, "Created agent #{agent.name}")}
@@ -192,49 +257,138 @@ defmodule RepoBuilderWeb.ConsoleLive do
     end
   end
 
-  def handle_event("validate_launch", %{"launch" => params}, socket) do
-    {:noreply, assign(socket, :launch_form, to_form(params, as: :launch))}
+  # The ⌘K command modal is the sole prompt input: it routes to the orchestrator
+  # (or the manually selected agent, if any) via run_prompt/4. The modal hides
+  # itself client-side (hide_command/0) on submit.
+  def handle_event("run_command", %{"command" => command}, socket) do
+    run_prompt(socket, command, default_harness(), nil)
   end
 
-  def handle_event("run", %{"launch" => params}, socket) do
+  # --- filter handlers (re-stream from the bounded buffer; streams aren't filterable) ---
+
+  def handle_event("toggle_category", %{"cat" => cat}, socket) do
+    case to_category(cat) do
+      nil ->
+        {:noreply, socket}
+
+      category ->
+        active = toggle_member(socket.assigns.active_categories, category)
+        {:noreply, socket |> assign(:active_categories, active) |> restream()}
+    end
+  end
+
+  def handle_event("toggle_agent_filter", %{"name" => name}, socket) do
+    active =
+      if name in socket.assigns.active_agents,
+        do: List.delete(socket.assigns.active_agents, name),
+        else: [name | socket.assigns.active_agents]
+
+    {:noreply, socket |> assign(:active_agents, active) |> restream()}
+  end
+
+  def handle_event("set_search", %{"q" => q}, socket),
+    do: {:noreply, socket |> assign(:search, q) |> restream()}
+
+  def handle_event("toggle_regex", _params, socket),
+    do: {:noreply, socket |> assign(:regex?, not socket.assigns.regex?) |> restream()}
+
+  def handle_event("toggle_auto_follow", _params, socket),
+    do: {:noreply, assign(socket, :auto_follow?, not socket.assigns.auto_follow?)}
+
+  def handle_event("clear_filters", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(
+       active_categories: MapSet.new(@categories),
+       active_agents: [],
+       search: "",
+       regex?: false
+     )
+     |> restream()}
+  end
+
+  def handle_event("toggle_event", %{"id" => id}, socket) do
+    id = String.to_integer(id)
+    expanded = toggle_member(socket.assigns.expanded_ids, id)
+    socket = assign(socket, :expanded_ids, expanded)
+
+    case Enum.find(socket.assigns.event_buffer, &(&1.id == id)) do
+      nil -> {:noreply, socket}
+      row -> {:noreply, stream_insert(socket, :events, row)}
+    end
+  end
+
+  def handle_event("open_event", %{"id" => id}, socket) do
+    id = String.to_integer(id)
+
+    {:noreply,
+     assign(socket, :selected_event, Enum.find(socket.assigns.event_buffer, &(&1.id == id)))}
+  end
+
+  def handle_event("close_event", _params, socket),
+    do: {:noreply, assign(socket, :selected_event, nil)}
+
+  # No selected agent ⇒ route the prompt to the ORCHESTRATOR brain (issue-c): it
+  # chooses/creates/dispatches workers. A selected agent keeps the manual
+  # single-agent run as an explicit fallback. The hard "select an agent" gate is gone.
+  @spec run_prompt(Phoenix.LiveView.Socket.t(), String.t(), String.t() | nil, String.t() | nil) ::
+          {:noreply, Phoenix.LiveView.Socket.t()}
+  defp run_prompt(socket, prompt, harness, model) do
     case socket.assigns.selected_agent_id do
       nil ->
-        {:noreply, put_flash(socket, :error, "Select an agent before running")}
+        {:noreply, run_orchestrator(socket, prompt)}
 
       agent_id ->
         opts = [
           agent_id: agent_id,
           agent_db_id: agent_id,
           session_id: "console-#{System.unique_integer([:positive])}",
-          harness: params["harness"],
-          prompt: params["prompt"] || "",
-          model: blank_to_nil(params["model"])
+          harness: harness,
+          prompt: prompt,
+          model: model
         ]
 
-        {:noreply, start_session(socket, opts)}
+        socket =
+          socket
+          |> push_user_message(prompt)
+          |> start_session(opts)
+
+        {:noreply, socket}
     end
   end
 
-  def handle_event("interrupt", _params, socket) do
-    case socket.assigns.selected_agent_id do
-      nil -> {:noreply, put_flash(socket, :error, "Select an agent to interrupt")}
-      id -> {:noreply, interrupt_session(socket, id)}
+  @spec run_orchestrator(Phoenix.LiveView.Socket.t(), String.t()) :: Phoenix.LiveView.Socket.t()
+  defp run_orchestrator(socket, prompt) do
+    socket = push_user_message(socket, prompt)
+
+    case socket.assigns.orchestrator_id do
+      nil ->
+        put_flash(socket, :error, "No orchestrator available")
+
+      orchestrator_id ->
+        case OrchestratorServer.run_turn(orchestrator_id, prompt) do
+          {:ok, _agent_id} ->
+            socket
+
+          {:error, :not_orchestrator_capable} ->
+            put_flash(socket, :error, "Orchestrator harness can't orchestrate")
+
+          {:error, _reason} ->
+            put_flash(socket, :error, "Could not start the orchestrator")
+        end
     end
   end
 
-  def handle_event("launch_adw", %{"adw" => %{"harness" => harness}}, socket) do
-    name = "console-adw-#{System.unique_integer([:positive])}"
+  @spec push_user_message(Phoenix.LiveView.Socket.t(), String.t()) :: Phoenix.LiveView.Socket.t()
+  defp push_user_message(socket, ""), do: socket
 
-    with {:ok, workflow} <- WorkflowEngine.create_example_workflow(name, harness),
-         {:ok, run_id, _pid} <-
-           WorkflowEngine.start_workflow(workflow, inputs: %{"input" => "console launch"}) do
-      {:noreply,
-       socket
-       |> assign(:view_mode, :adws)
-       |> put_flash(:info, "Launched ADW #{run_id}")}
-    else
-      _error -> {:noreply, put_flash(socket, :error, "Could not launch ADW")}
-    end
+  defp push_user_message(socket, prompt) do
+    seq = socket.assigns.seq + 1
+    msg = %{role: :user, label: "YOU", content: prompt, tool_name: nil, params_json: nil}
+
+    socket
+    |> assign(:seq, seq)
+    |> assign(:messages, append_chat(socket.assigns.messages, msg, seq))
   end
 
   @spec start_session(Phoenix.LiveView.Socket.t(), keyword()) :: Phoenix.LiveView.Socket.t()
@@ -246,15 +400,14 @@ defmodule RepoBuilderWeb.ConsoleLive do
     end
   end
 
-  @spec interrupt_session(Phoenix.LiveView.Socket.t(), String.t()) :: Phoenix.LiveView.Socket.t()
-  defp interrupt_session(socket, agent_id) do
-    :ok = Session.Supervisor.interrupt(agent_id)
-    socket
-  end
-
   @spec reseed_agent_lanes(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp reseed_agent_lanes(socket) do
     Enum.reduce(agent_lanes(socket.assigns.agents), socket, &stream_insert(&2, :lanes, &1))
+  end
+
+  @spec toggle_view(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp toggle_view(socket) do
+    assign(socket, :view_mode, if(socket.assigns.view_mode == :logs, do: :adws, else: :logs))
   end
 
   # --- event / lane handlers (one clause per canonical variant) ---
@@ -264,38 +417,93 @@ defmodule RepoBuilderWeb.ConsoleLive do
     {:noreply,
      socket
      |> set_status(agent_id, :running)
-     |> push_event(agent_id, "session", event.session_id, false)}
+     |> record_event(agent_id, %{
+       category: :system,
+       kind: "session",
+       body: "session #{event.session_id}",
+       payload: event.raw
+     })}
+  end
+
+  def handle_info({:agent_event, agent_id, %Event.TextDelta{thinking?: true} = event}, socket) do
+    {:noreply,
+     record_event(socket, agent_id, %{
+       category: :thinking,
+       kind: "thinking",
+       body: event.text,
+       thinking?: true,
+       payload: event.raw,
+       chat: %{role: :thinking, label: nil, content: event.text, tool_name: nil, params_json: nil}
+     })}
   end
 
   def handle_info({:agent_event, agent_id, %Event.TextDelta{} = event}, socket) do
-    label = if event.thinking?, do: "thinking", else: "text"
-    {:noreply, push_event(socket, agent_id, label, event.text, event.thinking?)}
+    {:noreply,
+     record_event(socket, agent_id, %{
+       category: :response,
+       kind: "text",
+       body: event.text,
+       payload: event.raw,
+       chat: %{
+         role: :orchestrator,
+         label: "ORCHESTRATOR",
+         content: event.text,
+         tool_name: nil,
+         params_json: nil
+       }
+     })}
   end
 
   def handle_info({:agent_event, agent_id, %Event.ToolCall{} = event}, socket) do
     {:noreply,
-     push_event(socket, agent_id, "tool_call", "#{event.name} #{inspect(event.input)}", false)}
+     record_event(socket, agent_id, %{
+       category: :tool,
+       kind: "tool_call",
+       body: "#{event.name} #{inspect(event.input)}",
+       payload: event.raw,
+       chat: %{
+         role: :tool,
+         label: event.name,
+         content: nil,
+         tool_name: event.name,
+         params_json: pretty_json(event.input)
+       }
+     })}
   end
 
   def handle_info({:agent_event, agent_id, %Event.ToolResult{} = event}, socket) do
-    {:noreply, push_event(socket, agent_id, "tool_result", inspect(event.content), false)}
+    {:noreply,
+     record_event(socket, agent_id, %{
+       category: :tool,
+       kind: "tool_result",
+       body: inspect(event.content),
+       payload: event.raw
+     })}
   end
 
   def handle_info({:agent_event, agent_id, %Event.Usage{} = event}, socket) do
     {:noreply,
      socket
      |> add_cost(event.cost_usd)
-     |> push_event(
-       agent_id,
-       "usage",
-       "in=#{event.input_tokens} out=#{event.output_tokens}",
-       false
-     )}
+     |> add_agent_cost(agent_id, event.cost_usd)
+     |> put_context(agent_id, event.input_tokens + event.output_tokens)
+     |> record_event(agent_id, %{
+       category: :system,
+       kind: "usage",
+       body: "in=#{event.input_tokens} out=#{event.output_tokens}",
+       tokens: "#{event.input_tokens + event.output_tokens}t",
+       payload: event.raw
+     })}
   end
 
   def handle_info({:agent_event, agent_id, %Event.Status{} = event}, socket) do
     {:noreply,
-     push_event(socket, agent_id, "status", "#{event.kind} #{inspect(event.detail)}", false)}
+     record_event(socket, agent_id, %{
+       category: :hook,
+       kind: "status",
+       body: "#{event.kind} #{inspect(event.detail)}",
+       payload: event.raw
+     })}
   end
 
   def handle_info({:agent_event, agent_id, %Event.Done{} = event}, socket) do
@@ -305,14 +513,48 @@ defmodule RepoBuilderWeb.ConsoleLive do
      socket
      |> set_status(agent_id, status)
      |> add_cost(event.cost_usd)
-     |> push_event(agent_id, "done", "reason=#{event.reason}", false)}
+     |> add_agent_cost(agent_id, event.cost_usd)
+     |> record_event(agent_id, %{
+       category: :system,
+       kind: "done",
+       body: "reason=#{event.reason}",
+       payload: event.raw
+     })}
   end
 
   def handle_info({:agent_event, agent_id, %Event.Error{} = event}, socket) do
     {:noreply,
      socket
      |> set_status(agent_id, :error)
-     |> push_event(agent_id, "error", "#{event.reason}: #{event.message}", false)}
+     |> record_event(agent_id, %{
+       category: :system,
+       kind: "error",
+       body: "#{event.reason}: #{event.message}",
+       payload: event.raw
+     })}
+  end
+
+  # A worker the orchestrator just created (issue-c): add it to the rail roster +
+  # the swimlane stream live. Additive seam — not a canonical Event variant.
+  def handle_info({:agent_created, %Agent{} = agent}, socket) do
+    if Enum.any?(socket.assigns.agents, &(&1.id == agent.id)) do
+      {:noreply, socket}
+    else
+      lane = %{
+        id: "agent:#{agent.id}",
+        kind: :agent,
+        label: agent.name,
+        status: agent.status,
+        harness: agent.harness
+      }
+
+      {:noreply,
+       socket
+       |> assign(:agents, socket.assigns.agents ++ [agent])
+       |> assign(:agent_names, Map.put(socket.assigns.agent_names, agent.id, agent.name))
+       |> assign(:statuses, Map.put(socket.assigns.statuses, agent.id, agent.status))
+       |> stream_insert(:lanes, lane)}
+    end
   end
 
   def handle_info({:lane, lane}, socket) do
@@ -320,25 +562,129 @@ defmodule RepoBuilderWeb.ConsoleLive do
     {:noreply, stream_insert(socket, :lanes, lane)}
   end
 
-  @spec push_event(Phoenix.LiveView.Socket.t(), String.t(), String.t(), String.t(), boolean()) ::
-          Phoenix.LiveView.Socket.t()
-  defp push_event(socket, agent_id, kind, body, thinking?) do
+  # The single hot path: append to the bounded buffer, bump pills + counters, push
+  # into the stream only if the row passes the active filters, and append a chat
+  # entry where one applies.
+  # Inference-only spec — dialyzer narrows `attrs` to the specific per-variant map
+  # shapes, which a hand-written map() spec would supertype under :underspecs.
+  defp record_event(socket, agent_id, attrs) do
     seq = socket.assigns.seq + 1
 
     row = %{
       id: seq,
+      line: seq,
       agent: agent_label(socket, agent_id),
-      kind: kind,
-      body: to_string(body),
-      thinking?: thinking?
+      agent_key: agent_id,
+      color: AgentColors.hex(to_string(agent_id)),
+      category: attrs.category,
+      kind: attrs.kind,
+      body: to_string(attrs.body),
+      thinking?: Map.get(attrs, :thinking?, false),
+      tokens: Map.get(attrs, :tokens),
+      time: now_hms(),
+      payload_json: pretty_json(Map.get(attrs, :payload, %{}))
     }
 
+    buffer = Enum.take(socket.assigns.event_buffer ++ [row], -@buffer_limit)
+
+    socket =
+      socket
+      |> assign(:seq, seq)
+      |> assign(:event_buffer, buffer)
+      |> assign(:log_count, socket.assigns.log_count + 1)
+      |> assign(:ws_count, socket.assigns.ws_count + 1)
+      |> assign(:pulsed_id, agent_id)
+      |> bump_counter(agent_id, attrs.category)
+      |> maybe_stream_insert(row)
+      |> maybe_chat(Map.get(attrs, :chat), seq)
+
     socket
-    |> assign(:seq, seq)
-    |> assign(:log_count, socket.assigns.log_count + 1)
-    |> assign(:ws_count, socket.assigns.ws_count + 1)
-    |> stream_insert(:events, row, at: -1, limit: -500)
   end
+
+  # Inference-only spec — the row map is narrowed to its concrete shape (:underspecs).
+  defp maybe_stream_insert(socket, row) do
+    if passes?(row, socket.assigns) do
+      stream_insert(socket, :events, row, at: -1, limit: -@buffer_limit)
+    else
+      socket
+    end
+  end
+
+  @spec maybe_chat(Phoenix.LiveView.Socket.t(), map() | nil, pos_integer()) ::
+          Phoenix.LiveView.Socket.t()
+  defp maybe_chat(socket, nil, _seq), do: socket
+
+  defp maybe_chat(socket, chat, seq),
+    do: assign(socket, :messages, append_chat(socket.assigns.messages, chat, seq))
+
+  @spec append_chat([map()], map() | nil, pos_integer()) :: [map()]
+  defp append_chat(messages, nil, _seq), do: messages
+
+  defp append_chat(messages, chat, seq) do
+    entry = Map.merge(chat, %{id: seq, time: now_hm()})
+    Enum.take(messages ++ [entry], -@messages_limit)
+  end
+
+  @spec restream(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp restream(socket) do
+    filtered = Enum.filter(socket.assigns.event_buffer, &passes?(&1, socket.assigns))
+    stream(socket, :events, filtered, reset: true)
+  end
+
+  @spec passes?(map(), map()) :: boolean()
+  defp passes?(row, assigns) do
+    category_pass?(row, assigns.active_categories) and
+      agent_pass?(row, assigns.active_agents) and
+      search_pass?(row.body, assigns.search, assigns.regex?)
+  end
+
+  @spec category_pass?(map(), MapSet.t()) :: boolean()
+  defp category_pass?(%{category: :system}, _active), do: true
+  defp category_pass?(%{category: category}, active), do: MapSet.member?(active, category)
+
+  @spec agent_pass?(map(), [String.t()]) :: boolean()
+  defp agent_pass?(_row, []), do: true
+  defp agent_pass?(row, active), do: row.agent in active
+
+  @spec search_pass?(String.t(), String.t(), boolean()) :: boolean()
+  defp search_pass?(_body, "", _regex?), do: true
+
+  defp search_pass?(body, query, true) do
+    case Regex.compile(query, "i") do
+      {:ok, re} -> Regex.match?(re, body)
+      {:error, _reason} -> substring?(body, query)
+    end
+  end
+
+  defp search_pass?(body, query, false), do: substring?(body, query)
+
+  @spec substring?(String.t(), String.t()) :: boolean()
+  defp substring?(body, query),
+    do: String.contains?(String.downcase(body), String.downcase(query))
+
+  @spec bump_counter(Phoenix.LiveView.Socket.t(), String.t(), atom()) ::
+          Phoenix.LiveView.Socket.t()
+  defp bump_counter(socket, agent_id, category) when category in @categories do
+    counters = socket.assigns.counters
+    current = Map.get(counters, agent_id, %{responses: 0, tools: 0, thinking: 0, hooks: 0})
+    key = counter_key(category)
+    updated = Map.update!(current, key, &(&1 + 1))
+    assign(socket, :counters, Map.put(counters, agent_id, updated))
+  end
+
+  defp bump_counter(socket, _agent_id, _category), do: socket
+
+  @spec counter_key(:response | :tool | :thinking | :hook) ::
+          :responses | :tools | :thinking | :hooks
+  defp counter_key(:response), do: :responses
+  defp counter_key(:tool), do: :tools
+  defp counter_key(:thinking), do: :thinking
+  defp counter_key(:hook), do: :hooks
+
+  @spec put_context(Phoenix.LiveView.Socket.t(), String.t(), non_neg_integer()) ::
+          Phoenix.LiveView.Socket.t()
+  defp put_context(socket, agent_id, tokens),
+    do: assign(socket, :context_tokens, Map.put(socket.assigns.context_tokens, agent_id, tokens))
 
   @spec set_status(Phoenix.LiveView.Socket.t(), String.t(), atom()) :: Phoenix.LiveView.Socket.t()
   defp set_status(socket, agent_id, status) do
@@ -348,6 +694,16 @@ defmodule RepoBuilderWeb.ConsoleLive do
   @spec add_cost(Phoenix.LiveView.Socket.t(), float() | nil) :: Phoenix.LiveView.Socket.t()
   defp add_cost(socket, cost_usd) do
     assign(socket, :cost, accumulate_cost(socket.assigns.cost, cost_usd))
+  end
+
+  @spec add_agent_cost(Phoenix.LiveView.Socket.t(), String.t(), float() | nil) ::
+          Phoenix.LiveView.Socket.t()
+  defp add_agent_cost(socket, _agent_id, nil), do: socket
+
+  defp add_agent_cost(socket, agent_id, cost_usd) do
+    costs = socket.assigns.agent_costs
+    updated = accumulate_cost(Map.get(costs, agent_id), cost_usd)
+    assign(socket, :agent_costs, Map.put(costs, agent_id, updated))
   end
 
   # nil never coerced to 0 (preserves the unpriced distinction); a float crosses the
@@ -365,8 +721,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   @impl true
   def render(assigns) do
+    assigns = assign(assigns, :swimlanes, agent_swimlanes(assigns))
+
     ~H"""
-    <div class="flex h-screen flex-col bg-base-100 text-base-content">
+    <div class="console flex h-screen flex-col" data-theme="dark">
       <Layouts.flash_group flash={@flash} />
 
       <.header_bar
@@ -374,41 +732,74 @@ defmodule RepoBuilderWeb.ConsoleLive do
         agent_count={length(@agents)}
         running_count={running_count(@statuses)}
         log_count={@log_count}
+        ws_count={@ws_count}
         cost={@cost}
         view_mode={@view_mode}
-        prompt_open?={@prompt_open?}
       />
 
-      <div class={[
-        "grid min-h-0 flex-1",
-        (@prompt_open? && "grid-cols-[16rem_1fr_22rem]") || "grid-cols-[16rem_1fr]"
-      ]}>
-        <aside class="flex min-h-0 flex-col gap-2 overflow-y-auto border-r border-base-300 p-3">
+      <div
+        class="grid min-h-0 flex-1"
+        style={"grid-template-columns: #{rail_width(@rail_collapsed?)} 1fr #{chat_col(@chat_width)}"}
+      >
+        <aside
+          class="flex min-h-0 flex-col gap-2 overflow-y-auto border-r p-2"
+          style="border-color: var(--cns-border)"
+        >
           <div class="flex items-center justify-between">
-            <span class="text-xs font-semibold uppercase text-base-content/60">Agents</span>
-            <button
-              id="show-new-agent"
-              type="button"
-              phx-click="show_new_agent"
-              class="btn btn-xs btn-ghost"
-            >
-              + New
-            </button>
+            <span class="text-[0.625rem] font-semibold uppercase" style="color: var(--cns-text-2)">
+              Agents · {length(@agents)}
+            </span>
+            <div class="flex items-center gap-1">
+              <button id="show-new-agent" type="button" phx-click="show_new_agent" class="cns-chip">
+                + New
+              </button>
+              <button
+                id="toggle-rail"
+                type="button"
+                phx-click="toggle_rail"
+                class="cns-chip"
+                title="Collapse"
+              >
+                {if @rail_collapsed?, do: "»", else: "«"}
+              </button>
+            </div>
           </div>
 
-          <div id="agent-rail" class="flex flex-col gap-1">
-            <.agent_rail_item
-              :for={agent <- @agents}
-              id={agent.id}
-              name={agent.name}
-              status={Map.get(@statuses, agent.id, agent.status)}
-              harness={agent.harness}
-              selected?={@selected_agent_id == agent.id}
-            />
-            <p :if={@agents == []} class="px-2 py-1 text-xs text-base-content/50">No agents yet.</p>
+          <div id="agent-rail" class="flex flex-col gap-2">
+            <%= for agent <- @agents do %>
+              <%= if @rail_collapsed? do %>
+                <.agent_rail_compact
+                  id={agent.id}
+                  name={agent.name}
+                  status={Map.get(@statuses, agent.id, agent.status)}
+                  color={AgentColors.hex(agent.id)}
+                  selected?={@selected_agent_id == agent.id}
+                  pulse?={@pulsed_id == agent.id}
+                />
+              <% else %>
+                <.agent_card
+                  id={agent.id}
+                  name={agent.name}
+                  status={Map.get(@statuses, agent.id, agent.status)}
+                  harness={agent.harness}
+                  cost={Map.get(@agent_costs, agent.id)}
+                  color={AgentColors.hex(agent.id)}
+                  selected?={@selected_agent_id == agent.id}
+                  pulse?={@pulsed_id == agent.id}
+                  context_tokens={Map.get(@context_tokens, agent.id, 0)}
+                  responses={counter(@counters, agent.id, :responses)}
+                  tools={counter(@counters, agent.id, :tools)}
+                  hooks={counter(@counters, agent.id, :hooks)}
+                  thinking={counter(@counters, agent.id, :thinking)}
+                />
+              <% end %>
+            <% end %>
+            <p :if={@agents == []} class="px-1 py-1 text-xs" style="color: var(--cns-text-3)">
+              No agents yet.
+            </p>
           </div>
 
-          <div :if={@show_new_agent?} class="mt-2 rounded border border-base-300 p-2">
+          <div :if={@show_new_agent?} class="mt-2 cns-panel rounded p-2">
             <.form
               for={@agent_form}
               id="new-agent-form"
@@ -431,9 +822,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
               />
               <div class="flex gap-2">
                 <button type="submit" class="btn btn-primary btn-xs flex-1">Create</button>
-                <button type="button" phx-click="cancel_new_agent" class="btn btn-ghost btn-xs">
-                  Cancel
-                </button>
+                <button type="button" phx-click="cancel_new_agent" class="btn btn-ghost btn-xs">Cancel</button>
               </div>
             </.form>
           </div>
@@ -443,45 +832,113 @@ defmodule RepoBuilderWeb.ConsoleLive do
           <%!-- Both stream containers stay mounted (toggled via `hidden`): a
           `phx-update="stream"` container must exist when items are inserted, else
           rows pushed while it was absent are dropped on the next render cycle. --%>
-          <div
-            id="event-stream"
-            phx-update="stream"
-            class={["flex-1 space-y-1 overflow-y-auto p-3", @view_mode != :logs && "hidden"]}
-          >
-            <div :for={{dom_id, row} <- @streams.events} id={dom_id}>
-              <.event_row agent={row.agent} kind={row.kind} body={row.body} thinking?={row.thinking?} />
+          <div class={["flex min-h-0 flex-1 flex-col", @view_mode != :logs && "hidden"]}>
+            <.filter_bar
+              active_categories={@active_categories}
+              active_agents={@active_agents}
+              search={@search}
+              regex?={@regex?}
+              auto_follow?={@auto_follow?}
+            />
+            <div
+              id="event-stream"
+              phx-update="stream"
+              phx-hook="AutoScroll"
+              data-auto-follow={to_string(@auto_follow?)}
+              class="min-h-0 flex-1 overflow-y-auto"
+            >
+              <div :for={{dom_id, row} <- @streams.events} id={dom_id}>
+                <.event_row
+                  id={row.id}
+                  line={row.line}
+                  agent={row.agent}
+                  color={row.color}
+                  category={row.category}
+                  kind={row.kind}
+                  body={row.body}
+                  thinking?={row.thinking?}
+                  tokens={row.tokens}
+                  time={row.time}
+                  expanded?={MapSet.member?(@expanded_ids, row.id)}
+                />
+              </div>
             </div>
           </div>
 
-          <div
-            id="swimlanes"
-            phx-update="stream"
-            class={["flex-1 space-y-2 overflow-y-auto p-3", @view_mode != :adws && "hidden"]}
-          >
-            <div :for={{dom_id, lane} <- @streams.lanes} id={dom_id}>
-              <.swimlane_row
-                id={lane.id}
-                label={lane.label}
+          <div id="swimlanes" class={["flex min-h-0 flex-1", @view_mode != :adws && "hidden"]}>
+            <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
+              <div id="workflow-lanes" phx-update="stream" class="flex flex-col gap-2">
+                <div :for={{dom_id, lane} <- @streams.lanes} id={dom_id}>
+                  <.swimlane_row
+                    id={lane.id}
+                    label={lane.label}
+                    status={lane.status}
+                    kind={lane.kind}
+                    harness={lane.harness}
+                  />
+                </div>
+              </div>
+
+              <.swimlane
+                :for={lane <- @swimlanes}
+                id={"swimlane-#{lane.key}"}
+                label={lane.name}
                 status={lane.status}
-                kind={lane.kind}
-                harness={lane.harness}
-              />
+                kind={:agent}
+              >
+                <div :for={col <- lane.columns} class="flex flex-col items-center gap-1">
+                  <span class="text-[0.5rem] uppercase" style="color: var(--cns-text-3)">{col.kind}</span>
+                  <div class="flex flex-wrap gap-1" style="max-width: 6rem">
+                    <.event_square
+                      :for={row <- col.rows}
+                      event_id={row.id}
+                      category={row.category}
+                      summary={"#{row.kind}: #{row.body}"}
+                    />
+                  </div>
+                </div>
+              </.swimlane>
             </div>
+
+            <.event_detail_panel event={@selected_event} />
           </div>
         </main>
 
-        <aside
-          :if={@prompt_open?}
-          class="min-h-0 overflow-y-auto border-l border-base-300 p-3"
-        >
+        <aside class="min-h-0 overflow-hidden border-l p-2" style="border-color: var(--cns-border)">
           <.command_panel
-            form={@launch_form}
-            adw_form={@adw_form}
-            harness_options={@harness_options}
-            selected_agent={selected_agent_name(@agents, @selected_agent_id)}
-          />
+            chat_width={@chat_width}
+            cost={@cost}
+            typing?={@typing?}
+          >
+            <:messages>
+              <%= for msg <- @messages do %>
+                <%= case msg.role do %>
+                  <% :thinking -> %>
+                    <.thinking_bubble content={msg.content} time={msg.time} />
+                  <% :tool -> %>
+                    <.tool_use_card
+                      tool_name={msg.tool_name}
+                      params_json={msg.params_json}
+                      time={msg.time}
+                    />
+                  <% role -> %>
+                    <.chat_message
+                      role={role}
+                      label={msg.label}
+                      content={msg.content}
+                      time={msg.time}
+                    />
+                <% end %>
+              <% end %>
+            </:messages>
+          </.command_panel>
         </aside>
       </div>
+
+      <.global_command_input
+        harnesses={@harness_options}
+        agents={Enum.map(@agents, & &1.name)}
+      />
 
       <div class="fixed bottom-3 right-3 z-50">
         <Layouts.theme_toggle />
@@ -491,6 +948,38 @@ defmodule RepoBuilderWeb.ConsoleLive do
   end
 
   # --- view helpers ---
+
+  @spec agent_swimlanes(map()) :: [map()]
+  defp agent_swimlanes(assigns) do
+    assigns.event_buffer
+    |> Enum.group_by(& &1.agent_key)
+    |> Enum.map(fn {key, rows} ->
+      %{
+        key: key,
+        name: Map.get(assigns.agent_names, key, short_id(key)),
+        status: Map.get(assigns.statuses, key, :idle),
+        columns:
+          rows
+          |> Enum.group_by(& &1.kind)
+          |> Enum.map(fn {kind, krows} -> %{kind: kind, rows: krows} end)
+      }
+    end)
+  end
+
+  @spec counter(map(), String.t(), atom()) :: non_neg_integer()
+  defp counter(counters, agent_id, key) do
+    counters |> Map.get(agent_id, %{}) |> Map.get(key, 0)
+  end
+
+  @spec rail_width(boolean()) :: String.t()
+  defp rail_width(true), do: "3.5rem"
+  defp rail_width(false), do: "15rem"
+
+  # Inference-only spec — the three equal-length returns narrow to a fixed-size
+  # binary, which String.t() would supertype under :underspecs.
+  defp chat_col(:sm), do: "20rem"
+  defp chat_col(:md), do: "26rem"
+  defp chat_col(:lg), do: "34rem"
 
   @spec running_count(%{optional(String.t()) => atom()}) :: non_neg_integer()
   defp running_count(statuses),
@@ -504,23 +993,61 @@ defmodule RepoBuilderWeb.ConsoleLive do
   @spec short_id(String.t()) :: String.t()
   defp short_id(id), do: id |> to_string() |> String.slice(0, 8)
 
-  @spec harness_for_agent([Agent.t()], String.t()) :: String.t() | nil
-  defp harness_for_agent(agents, id) do
-    Enum.find_value(agents, fn agent -> if agent.id == id, do: agent.harness end)
+  # Convert one persisted log row into an event-stream row for reconnect backfill.
+  @spec log_to_row(Logs.AgentLog.t(), pos_integer(), %{optional(String.t()) => String.t()}) ::
+          map()
+  defp log_to_row(log, seq, names) do
+    category = category_for_type(log.event_type)
+
+    %{
+      id: seq,
+      line: seq,
+      agent: Map.get(names, log.agent_id, short_id(log.agent_id)),
+      agent_key: log.agent_id,
+      color: AgentColors.hex(to_string(log.agent_id)),
+      category: category,
+      kind: to_string(log.event_type),
+      body: log_body(log),
+      # The thinking? flag lives only on the in-flight event; the persisted log
+      # row maps text_delta to :response for backfill.
+      thinking?: false,
+      tokens: nil,
+      time: log_time(log),
+      payload_json: pretty_json(log.payload)
+    }
   end
 
-  @spec selected_agent_name([Agent.t()], String.t() | nil) :: String.t() | nil
-  defp selected_agent_name(_agents, nil), do: nil
+  @spec category_for_type(Logs.AgentLog.event_type() | nil) :: atom()
+  defp category_for_type(:text_delta), do: :response
+  defp category_for_type(:tool_call), do: :tool
+  defp category_for_type(:tool_result), do: :tool
+  defp category_for_type(:status), do: :hook
+  defp category_for_type(_other), do: :system
 
-  defp selected_agent_name(agents, id) do
-    Enum.find_value(agents, fn agent -> if agent.id == id, do: agent.name end)
-  end
+  @spec log_body(Logs.AgentLog.t()) :: String.t()
+  defp log_body(%{payload: %{"text" => text}}) when is_binary(text), do: text
+  defp log_body(%{event_type: type, payload: payload}), do: "#{type} #{inspect(payload)}"
+
+  @spec log_time(Logs.AgentLog.t()) :: String.t()
+  defp log_time(%{inserted_at: %DateTime{} = at}), do: Calendar.strftime(at, "%H:%M:%S")
+  defp log_time(_log), do: ""
+
+  # Convert a backfilled row into the chat entry it maps to (text → orchestrator
+  # message). Backfilled rows never carry the in-flight thinking? distinction.
+  # (Inference-only spec — a hand-written one would be a supertype under :underspecs.)
+  defp chat_for_row(%{category: :response, body: body}),
+    do: %{
+      role: :orchestrator,
+      label: "ORCHESTRATOR",
+      content: body,
+      tool_name: nil,
+      params_json: nil
+    }
+
+  defp chat_for_row(_row), do: nil
 
   @spec new_agent_form() :: Phoenix.HTML.Form.t()
   defp new_agent_form, do: to_form(Agent.changeset(%Agent{}, %{}))
-
-  @spec blank_launch_params(String.t() | nil) :: %{optional(String.t()) => String.t() | nil}
-  defp blank_launch_params(harness), do: %{"prompt" => "", "harness" => harness, "model" => ""}
 
   @spec default_harness() :: String.t() | nil
   defp default_harness do
@@ -532,9 +1059,36 @@ defmodule RepoBuilderWeb.ConsoleLive do
   defp provider_options,
     do: [{"Anthropic", "anthropic"}, {"OpenAI", "openai"}, {"Local", "local"}]
 
-  @spec blank_to_nil(String.t() | nil) :: String.t() | nil
-  defp blank_to_nil(nil), do: nil
+  @spec to_category(String.t()) :: atom() | nil
+  defp to_category("response"), do: :response
+  defp to_category("tool"), do: :tool
+  defp to_category("thinking"), do: :thinking
+  defp to_category("hook"), do: :hook
+  defp to_category(_other), do: nil
 
-  defp blank_to_nil(value) when is_binary(value),
-    do: if(String.trim(value) == "", do: nil, else: value)
+  @spec to_chat_width(String.t()) :: :sm | :md | :lg
+  defp to_chat_width("md"), do: :md
+  defp to_chat_width("lg"), do: :lg
+  defp to_chat_width(_other), do: :sm
+
+  # Inference-only spec — a `term()` member would be a supertype under :underspecs.
+  defp toggle_member(set, member) do
+    if MapSet.member?(set, member),
+      do: MapSet.delete(set, member),
+      else: MapSet.put(set, member)
+  end
+
+  @spec pretty_json(term()) :: String.t()
+  defp pretty_json(value) do
+    case Jason.encode(value, pretty: true) do
+      {:ok, json} -> json
+      {:error, _reason} -> inspect(value, pretty: true)
+    end
+  end
+
+  @spec now_hms() :: String.t()
+  defp now_hms, do: Calendar.strftime(Time.utc_now(), "%H:%M:%S")
+
+  @spec now_hm() :: String.t()
+  defp now_hm, do: Calendar.strftime(Time.utc_now(), "%H:%M")
 end

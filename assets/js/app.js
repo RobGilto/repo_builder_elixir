@@ -25,11 +25,34 @@ import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/repo_builder"
 import topbar from "../vendor/topbar"
 
+// --- Orchestration console hooks (BUILD_PROMPT.md §9) ---
+
+// Keep a scroll container pinned to the bottom on update, unless auto-follow is off
+// (the element opts out via data-auto-follow="false").
+const AutoScroll = {
+  mounted() { this.scrollToBottom() },
+  updated() { this.scrollToBottom() },
+  scrollToBottom() {
+    if (this.el.dataset.autoFollow === "false") return
+    this.el.scrollTop = this.el.scrollHeight
+  },
+}
+
+// Copy a chip's data-copy text to the clipboard (command-input system info).
+const ClipboardCopy = {
+  mounted() {
+    this.el.addEventListener("click", () => {
+      const text = this.el.dataset.copy
+      if (text && navigator.clipboard) navigator.clipboard.writeText(text)
+    })
+  },
+}
+
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks},
+  hooks: {...colocatedHooks, AutoScroll, ClipboardCopy},
 })
 
 // Show progress bar on live navigation and form submits
@@ -39,6 +62,26 @@ window.addEventListener("phx:page-loading-stop", _info => topbar.hide())
 
 // connect if there are any LiveViews on the page
 liveSocket.connect()
+
+// --- console keyboard shortcuts --------------------------------------------
+// A single permanent document listener (NOT a LiveView hook, so it can never be
+// detached by a DOM patch). ⌘K / ⌘J just click the existing buttons, which carry
+// the LiveView JS commands (show_command opens the modal AND focuses its field in
+// one synchronous client-side step — the reliable focus-on-open pattern).
+document.addEventListener("keydown", e => {
+  const meta = e.metaKey || e.ctrlKey
+  if (meta && (e.key === "k" || e.key === "K")) {
+    e.preventDefault()
+    document.getElementById("prompt-toggle")?.click()
+  } else if (meta && (e.key === "j" || e.key === "J")) {
+    e.preventDefault()
+    document.getElementById("view-toggle")?.click()
+  } else if (e.key === "Enter" && !e.shiftKey && e.target?.id === "command-textarea") {
+    // Enter sends the command (Shift+Enter keeps the newline).
+    e.preventDefault()
+    e.target.form?.requestSubmit()
+  }
+})
 
 // expose liveSocket on window for web console debug logs and latency simulation:
 // >> liveSocket.enableDebug()

@@ -52,3 +52,9 @@ npm-debug.log
 /.playwright-mcp/
 /console-current-state.png
 
+# ADW (AI Developer Workflow) runtime artifacts — agent working dirs, isolated
+# git worktrees, and Python bytecode caches. Generated per run, never committed.
+/agents/
+/trees/
+__pycache__/
+
