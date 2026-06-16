@@ -57,6 +57,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
         agent_costs: %{},
         selected_agent_id: nil,
         orchestrator_id: nil,
+        orchestrator_harness: nil,
         view_mode: :logs,
         show_new_agent?: false,
         rail_collapsed?: false,
@@ -107,8 +108,14 @@ defmodule RepoBuilderWeb.ConsoleLive do
   @spec assign_orchestrator(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp assign_orchestrator(socket) do
     case Orchestrators.get_or_create_default() do
-      {:ok, orchestrator} -> assign(socket, :orchestrator_id, orchestrator.id)
-      {:error, _reason} -> socket
+      {:ok, orchestrator} ->
+        assign(socket,
+          orchestrator_id: orchestrator.id,
+          orchestrator_harness: orchestrator.harness
+        )
+
+      {:error, _reason} ->
+        socket
     end
   end
 
@@ -212,6 +219,24 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   @impl true
   def handle_event("toggle_view", _params, socket), do: {:noreply, toggle_view(socket)}
+
+  # Switch the orchestrator's harness (Claude ⇄ pi ⇄ …). The next run_turn picks it up.
+  def handle_event("set_harness", %{"harness" => harness}, socket) do
+    case socket.assigns.orchestrator_id do
+      nil ->
+        {:noreply, put_flash(socket, :error, "No orchestrator available")}
+
+      id ->
+        case Orchestrators.set_harness(id, harness) do
+          {:ok, orchestrator} ->
+            {:noreply, assign(socket, :orchestrator_harness, orchestrator.harness)}
+
+          {:error, _reason} ->
+            {:noreply, put_flash(socket, :error, "Could not switch harness")}
+        end
+    end
+  end
+
   def handle_event("view:toggle", _params, socket), do: {:noreply, toggle_view(socket)}
 
   def handle_event("toggle_rail", _params, socket),
@@ -735,6 +760,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
         ws_count={@ws_count}
         cost={@cost}
         view_mode={@view_mode}
+        orchestrator_harness={@orchestrator_harness}
+        orchestrating_harnesses={orchestrator_harness_options()}
       />
 
       <div
@@ -1054,6 +1081,12 @@ defmodule RepoBuilderWeb.ConsoleLive do
     known = HarnessRegistry.known()
     if "fake" in known, do: "fake", else: List.first(known)
   end
+
+  # Real harnesses for the orchestrator toggle — the keyless `fake` harness is a
+  # dev/test stand-in, not an operator choice.
+  @spec orchestrator_harness_options() :: [String.t()]
+  defp orchestrator_harness_options,
+    do: Enum.reject(HarnessRegistry.orchestrating_harnesses(), &(&1 == "fake"))
 
   @spec provider_options() :: [{String.t(), String.t()}]
   defp provider_options,

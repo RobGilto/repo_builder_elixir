@@ -92,6 +92,10 @@ defmodule RepoBuilder.Orchestrators do
           {:ok, Orchestrator.t()} | {:error, :not_found}
   def set_status(id, status), do: update_fields(id, %{status: status})
 
+  @doc "Switch the orchestrator's harness (validated against the registry by the changeset)."
+  @spec set_harness(Ecto.UUID.t(), String.t()) :: {:ok, Orchestrator.t()} | {:error, :not_found}
+  def set_harness(id, harness), do: update_fields(id, %{harness: harness})
+
   @doc """
   Add `amount` USD to the running total (float→Decimal boundary, §8 rule 10). A
   `nil` amount is a no-op (unpriced harnesses contribute nothing).

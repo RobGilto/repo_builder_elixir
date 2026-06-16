@@ -31,6 +31,8 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   attr :ws_count, :integer, default: 0
   attr :cost, :any, default: nil
   attr :view_mode, :atom, default: :logs, values: [:logs, :adws]
+  attr :orchestrator_harness, :string, default: nil
+  attr :orchestrating_harnesses, :list, default: [], doc: "harness keys that can orchestrate"
 
   @doc """
   Full-bleed header: a live connection dot, the Active/Running/Logs/WS Events/Cost
@@ -65,6 +67,23 @@ defmodule RepoBuilderWeb.ConsoleComponents do
       </div>
 
       <div class="flex items-center gap-3">
+        <div
+          :if={@orchestrating_harnesses != []}
+          id="harness-toggle"
+          class="cns-toggle"
+          title="Orchestrator harness"
+        >
+          <button
+            :for={h <- @orchestrating_harnesses}
+            type="button"
+            id={"harness-#{h}"}
+            phx-click="set_harness"
+            phx-value-harness={h}
+            class={["cns-toggle__seg", @orchestrator_harness == h && "cns-toggle__seg--active"]}
+          >
+            {String.upcase(h)}
+          </button>
+        </div>
         <div id="view-toggle" class="cns-toggle" phx-click="toggle_view" title="Toggle view (⌘J)">
           <span class={["cns-toggle__seg", @view_mode == :logs && "cns-toggle__seg--active"]}>
             LOGS
