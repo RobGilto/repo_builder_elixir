@@ -27,6 +27,11 @@ config :phoenix_live_view,
   # the attribute set on all root tags. Used for Phoenix.LiveView.ColocatedCSS.
   root_tag_attribute: "phx-r"
 
+# Register Elixir source extensions so allow_upload accepts them
+config :mime, :types, %{
+  "text/x-elixir" => ["ex", "exs"]
+}
+
 # Configure the mailer
 #
 # By default it uses the "Local" adapter which stores the emails

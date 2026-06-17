@@ -431,3 +431,46 @@
   cursor: pointer;
 }
 .cns-cmd-chip:hover { border-color: var(--cns-cyan); color: var(--cns-cyan); }
+.cns-cmd-drop-zone {
+  position: relative;
+}
+.cns-cmd-drop-zone.phx-drop-target {
+  outline: 2px dashed var(--cns-cyan);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.cns-attachment-entry {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--cns-surface-2, var(--cns-bg-2));
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 0.625rem;
+}
+.cns-attachment-thumb {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 3px;
+}
+.cns-attachment-name {
+  color: var(--cns-text-1);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cns-attachment-remove {
+  color: var(--cns-text-3);
+  cursor: pointer;
+  font-size: 0.6rem;
+  line-height: 1;
+}
+.cns-attachment-remove:hover {
+  color: var(--cns-text-1);
+}
+.cns-attachment-error {
+  color: var(--cns-red, #f87171);
+  font-size: 0.5rem;
+}

@@ -124,6 +124,13 @@ defmodule RepoBuilderWeb.ConsoleLive do
       )
 
     socket =
+      allow_upload(socket, :attachments,
+        accept: ~w(.jpg .jpeg .png .gif .webp .pdf .txt .md .csv .json .ex .exs),
+        max_entries: 5,
+        max_file_size: 10_000_000
+      )
+
+    socket =
       if connected?(socket) do
         socket
         |> load_agents()
@@ -562,7 +569,30 @@ defmodule RepoBuilderWeb.ConsoleLive do
   # (or the manually selected agent, if any) via run_prompt/4. The modal hides
   # itself client-side (hide_command/0) on submit.
   def handle_event("run_command", %{"command" => command}, socket) do
-    run_prompt(socket, command, default_harness(), nil)
+    upload_dir = Path.join("/tmp/repo_builder_uploads", Ecto.UUID.generate())
+    File.mkdir_p!(upload_dir)
+
+    attachment_lines =
+      consume_uploaded_entries(socket, :attachments, fn %{path: tmp_path}, entry ->
+        dest = Path.join(upload_dir, entry.client_name)
+        File.cp!(tmp_path, dest)
+        kind = if String.match?(entry.client_type, ~r/^image\//), do: "image", else: "file"
+        {:ok, "- #{kind}: #{dest}"}
+      end)
+
+    full_command =
+      if attachment_lines == [] do
+        command
+      else
+        lines = Enum.join(attachment_lines, "\n")
+        "#{command}\n\n[Attachments]\n#{lines}"
+      end
+
+    run_prompt(socket, full_command, default_harness(), nil)
+  end
+
+  def handle_event("cancel_upload", %{"ref" => ref}, socket) do
+    {:noreply, cancel_upload(socket, :attachments, ref)}
   end
 
   # --- filter handlers (re-stream from the bounded buffer; streams aren't filterable) ---
@@ -1505,6 +1535,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
       <.global_command_input
         harnesses={@harness_options}
         agents={Enum.map(@agents, & &1.name)}
+        uploads={@uploads}
       />
 
       <.agent_models_modal rows={@agent_model_rows} />

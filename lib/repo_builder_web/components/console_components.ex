@@ -1193,6 +1193,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   attr :harnesses, :list, default: []
   attr :agents, :list, default: [], doc: "list of agent names"
   attr :example_adw, :string, default: "plan → build → review"
+  attr :uploads, :map, required: true
 
   @doc "Bottom-anchored ⌘K command-input modal with a system-info panel (harnesses/agents/example ADW)."
   @spec global_command_input(map()) :: Phoenix.LiveView.Rendered.t()
@@ -1208,19 +1209,61 @@ defmodule RepoBuilderWeb.ConsoleComponents do
       <div class="cns-cmd-panel">
         <div class="mb-2 flex items-center justify-between">
           <span class="text-xs font-semibold" style="color: var(--cns-cyan)">COMMAND (⌘K)</span>
-          <button id="prompt-close" type="button" phx-click={hide_command()} class="cns-chip">
-            Esc
-          </button>
+          <div class="flex items-center gap-2">
+            <label for={@uploads.attachments.ref} class="cns-chip cursor-pointer" title="Attach files">
+              📎 <.live_file_input upload={@uploads.attachments} class="sr-only" />
+            </label>
+            <button id="prompt-close" type="button" phx-click={hide_command()} class="cns-chip">
+              Esc
+            </button>
+          </div>
         </div>
 
         <form id="command-form" phx-submit={JS.push("run_command") |> hide_command()}>
-          <textarea
-            id="command-textarea"
-            name="command"
-            rows="3"
-            placeholder="Type a command…  (Enter to send · Shift+Enter newline)"
-            class="cns-cmd-textarea"
-          ></textarea>
+          <div
+            id="cmd-drop-zone"
+            phx-drop-target={@uploads.attachments.ref}
+            class="cns-cmd-drop-zone"
+          >
+            <textarea
+              id="command-textarea"
+              name="command"
+              rows="3"
+              placeholder="Type a command… (Enter ↵ send · Shift+Enter newline · drag & drop files)"
+              class="cns-cmd-textarea"
+            ></textarea>
+          </div>
+
+          <div :if={@uploads.attachments.entries != []} class="mt-2 flex flex-wrap gap-2">
+            <div :for={entry <- @uploads.attachments.entries} class="cns-attachment-entry">
+              <.live_img_preview
+                :if={String.starts_with?(entry.client_type, "image/")}
+                entry={entry}
+                class="cns-attachment-thumb"
+              />
+              <span
+                :if={not String.starts_with?(entry.client_type, "image/")}
+                class="cns-attachment-name"
+              >
+                {entry.client_name}
+              </span>
+              <button
+                type="button"
+                phx-click="cancel_upload"
+                phx-value-ref={entry.ref}
+                class="cns-attachment-remove"
+                aria-label="Remove"
+              >
+                ✕
+              </button>
+              <p
+                :for={err <- upload_errors(@uploads.attachments, entry)}
+                class="cns-attachment-error"
+              >
+                {upload_error_to_string(err)}
+              </p>
+            </div>
+          </div>
         </form>
 
         <div class="mt-3 grid grid-cols-3 gap-3 text-[0.625rem]">
@@ -1257,6 +1300,12 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   end
 
   # --- private helpers ------------------------------------------------------
+
+  @spec upload_error_to_string(atom()) :: String.t()
+  defp upload_error_to_string(:too_large), do: "File too large (max 10 MB)"
+  defp upload_error_to_string(:too_many_files), do: "Too many files (max 5)"
+  defp upload_error_to_string(:not_accepted), do: "File type not accepted"
+  defp upload_error_to_string(_), do: "Upload error"
 
   @spec conn_dot_class(boolean()) :: String.t()
   defp conn_dot_class(true), do: "bg-emerald-500"
