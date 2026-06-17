@@ -7,20 +7,20 @@
  * its handlers `fetch` the one Phoenix-hosted MCP-over-HTTP endpoint (JSON-RPC 2.0
  * `tools/call`). The tool LOGIC lives once in Elixir — this is purely a binding.
  *
+ * Shape (pi ≥ 0.75): the host injects its API as the argument to the module's
+ * DEFAULT export, and tools register via `pi.registerTool({ name, label,
+ * description, parameters, execute })` returning `{ content: [{ type, text }] }`.
+ * Modeled on the installed, working `pi-mcp-adapter`, which bridges MCP tools into
+ * pi exactly like this extension. The earlier global-`pi` + `handler` shape crashed
+ * at load with `pi is not defined`.
+ *
  * Env (injected by RepoBuilder.Harness.Pi.orchestrator_spawn/2):
  *   PI_ORCH_BASE_URL — full URL of this orchestrator's MCP endpoint
  *   PI_ORCH_TOKEN    — per-orchestrator bearer token (never logged)
  */
 
-// `pi` is the host object pi injects into extensions at load time.
-declare const pi: {
-  registerTool: (def: {
-    name: string;
-    description: string;
-    parameters: Record<string, unknown>;
-    handler: (args: Record<string, unknown>) => Promise<string>;
-  }) => void;
-};
+// Type-only import (erased at runtime — does not affect extension loading).
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const BASE_URL = process.env.PI_ORCH_BASE_URL ?? "";
 const TOKEN = process.env.PI_ORCH_TOKEN ?? "";
@@ -133,11 +133,19 @@ const tools = [
   },
 ];
 
-for (const tool of tools) {
-  pi.registerTool({
-    name: tool.name,
-    description: tool.description,
-    parameters: tool.parameters,
-    handler: (args) => callTool(tool.name, args),
-  });
+// pi ≥ 0.75 injects the host API as the default export's argument; tools register
+// INSIDE this function with an `execute` callback returning canonical content.
+export default function (pi: ExtensionAPI) {
+  for (const tool of tools) {
+    pi.registerTool({
+      name: tool.name,
+      label: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+      async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+        const text = await callTool(tool.name, params as Record<string, unknown>);
+        return { content: [{ type: "text", text }] };
+      },
+    });
+  }
 }

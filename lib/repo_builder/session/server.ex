@@ -33,6 +33,11 @@ defmodule RepoBuilder.Session.Server do
 
   @pubsub RepoBuilder.PubSub
 
+  # Bounded tail of the child's stderr, kept so a non-zero exit can surface the
+  # provider's real diagnostic (e.g. pi's `Failed to load extension …`) instead of
+  # a bare `provider exited` — see issue-fix-pi-orchestrator-extension-load.
+  @stderr_tail_bytes 2_048
+
   defmodule State do
     @moduledoc false
     use TypedStruct
@@ -60,6 +65,9 @@ defmodule RepoBuilder.Session.Server do
       field :max_line_bytes, pos_integer()
       field :saw_output?, boolean(), default: false
       field :saw_terminal?, boolean(), default: false
+      # Bounded tail of child stderr (process diagnostics, not stdout output);
+      # folded into a synthesized terminal Error so the real cause is never lost.
+      field :stderr_tail, binary(), default: ""
       # When set (issue-c), this session is an ORCHESTRATOR: the adapter's optional
       # `orchestrator_spawn/2` merges extra argv/env onto the base command. nil for
       # every worker session (the worker spawn path is untouched).
@@ -119,7 +127,7 @@ defmodule RepoBuilder.Session.Server do
       config: opts[:config] || %{},
       secrets: resolve_secrets(opts, harness),
       price_table: Map.get(config, :price_table, %{}),
-      cwd: workspace_path(cfg, session_id),
+      cwd: workspace_path(cfg, opts[:orchestrator_db_id], session_id),
       marker: generate_token(),
       idle_ms: cfg_value(opts, cfg, :idle_ms, 300_000),
       max_line_bytes: cfg_value(opts, cfg, :max_line_bytes, 1_048_576),
@@ -231,6 +239,11 @@ defmodule RepoBuilder.Session.Server do
 
         case OsPidLedger.insert(ledger) do
           {:ok, _row} ->
+            # The prompt is delivered via argv (every harness), never over stdin, so
+            # close the child's stdin immediately. Without EOF, a CLI that drains a
+            # non-TTY stdin before finishing (e.g. pi `--mode json`) blocks forever on
+            # the open erlexec pipe and never emits a terminal event (§6 headless rule).
+            _ = :exec.send(os_pid, :eof)
             state = %{state | exec_pid: exec_pid, os_pid: os_pid, session_ctx: ctx}
             {:noreply, arm_idle(state)}
 
@@ -280,6 +293,12 @@ defmodule RepoBuilder.Session.Server do
       state = Enum.reduce(lines, state, &process_line/2)
       {:noreply, %{state | buf: rest}}
     end
+  end
+
+  def handle_info({:stderr, os_pid, chunk}, %State{os_pid: os_pid} = state) do
+    # stderr is process diagnostics, NOT stream output: keep it out of stdout line
+    # framing and the idle timer, but retain a bounded tail for the terminal error.
+    {:noreply, %{state | stderr_tail: append_stderr(state.stderr_tail, chunk)}}
   end
 
   def handle_info({:stderr, _os_pid, _chunk}, state), do: {:noreply, state}
@@ -465,11 +484,23 @@ defmodule RepoBuilder.Session.Server do
     state
   end
 
-  defp maybe_synthesize_terminal(reason, %State{} = state) do
+  defp maybe_synthesize_terminal(reason, %State{stderr_tail: tail} = state) do
     if clean_exit?(reason) do
       dispatch(%Event.Done{harness: state.harness, ok: true, reason: :clean_exit}, state)
     else
-      dispatch(error_event(state, "provider exited: #{inspect(reason)}", :provider_error), state)
+      # Fold the captured stderr tail into the message so the provider's real
+      # diagnostic (e.g. pi's `Failed to load extension …`) is visible in the UI
+      # and persisted payload instead of a bare `provider exited`.
+      # `replace_invalid/1` guards a multibyte char split by the byte-bounded tail.
+      base = "provider exited: #{inspect(reason)}"
+
+      message =
+        case tail |> String.replace_invalid() |> String.trim() do
+          "" -> base
+          trimmed -> base <> "\nstderr: " <> trimmed
+        end
+
+      dispatch(error_event(state, message, :provider_error), state)
     end
   end
 
@@ -515,6 +546,18 @@ defmodule RepoBuilder.Session.Server do
     %Event.Error{harness: harness, message: message, reason: reason}
   end
 
+  @spec append_stderr(binary(), binary()) :: binary()
+  defp append_stderr(tail, chunk) do
+    combined = tail <> chunk
+    size = byte_size(combined)
+
+    if size > @stderr_tail_bytes do
+      binary_part(combined, size - @stderr_tail_bytes, @stderr_tail_bytes)
+    else
+      combined
+    end
+  end
+
   @spec resolve_exe(String.t()) :: String.t() | nil
   defp resolve_exe(exe) do
     if String.contains?(exe, "/"), do: exe, else: System.find_executable(exe)
@@ -538,13 +581,28 @@ defmodule RepoBuilder.Session.Server do
     |> Base.encode16(case: :lower)
   end
 
-  @spec workspace_path(keyword(), String.t()) :: Path.t()
-  defp workspace_path(session_cfg, session_id) do
+  # Workers get a fresh per-session workspace (ephemeral, cleaned on exit). An
+  # ORCHESTRATOR is a long-lived conversation resumed across turns via the harness
+  # CLI's cwd-scoped session store (pi keys sessions by project cwd), so it MUST
+  # reuse ONE stable directory keyed by its id — otherwise every turn lands in a
+  # new cwd and `--session` resume sees a "different project" and stalls on the
+  # interactive fork prompt, emitting no inference.
+  @spec workspace_path(keyword(), Ecto.UUID.t() | nil, String.t()) :: Path.t()
+  defp workspace_path(session_cfg, nil, session_id) do
     base = session_cfg[:workspace_base] || "priv/workspaces"
     Path.join(base, session_id)
   end
 
+  defp workspace_path(session_cfg, orchestrator_id, _session_id) do
+    base = session_cfg[:workspace_base] || "priv/workspaces"
+    Path.join(base, "orchestrator-" <> to_string(orchestrator_id))
+  end
+
+  # Keep the orchestrator's persistent workspace between turns (its CLI session
+  # store is keyed to this cwd); only ephemeral worker workspaces are removed.
   @spec cleanup_workspace(State.t()) :: :ok
+  defp cleanup_workspace(%State{orchestrator_db_id: id}) when not is_nil(id), do: :ok
+
   defp cleanup_workspace(%State{cwd: cwd}) do
     _ = File.rm_rf(cwd)
     :ok

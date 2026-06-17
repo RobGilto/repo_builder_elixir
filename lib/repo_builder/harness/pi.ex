@@ -140,6 +140,10 @@ defmodule RepoBuilder.Harness.Pi do
 
   def normalize(%{"type" => "message_update"}, _ctx), do: :skip
 
+  # pi emits `message_end` for the user's OWN message too; never echo it back as
+  # assistant text (it would render the prompt as an orchestrator reply).
+  def normalize(%{"type" => "message_end", "message" => %{"role" => "user"}}, _ctx), do: :skip
+
   def normalize(%{"type" => "message_end"} = raw, ctx) do
     message = Map.get(raw, "message", %{})
 

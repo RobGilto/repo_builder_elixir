@@ -1193,9 +1193,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
       category: category,
       kind: to_string(log.event_type),
       body: log_body(log),
-      # The thinking? flag lives only on the in-flight event; the persisted log
-      # row maps text_delta to :response for backfill.
-      thinking?: false,
+      # Persisted text_delta rows carry the thinking flag (Logs.event_payload), so
+      # backfill can route reasoning to the thinking pane like the live path does.
+      thinking?: log.payload["thinking"] == true,
       tokens: nil,
       time: log_time(log),
       payload_json: pretty_json(log.payload)
@@ -1220,6 +1220,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
   # Convert a backfilled row into the chat entry it maps to (text → orchestrator
   # message). Backfilled rows never carry the in-flight thinking? distinction.
   # (Inference-only spec — a hand-written one would be a supertype under :underspecs.)
+  defp chat_for_row(%{category: :response, thinking?: true, body: body}),
+    do: %{role: :thinking, label: nil, content: body, tool_name: nil, params_json: nil}
+
   defp chat_for_row(%{category: :response, body: body}),
     do: %{
       role: :orchestrator,

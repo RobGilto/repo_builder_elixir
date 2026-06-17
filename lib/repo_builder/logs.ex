@@ -27,7 +27,7 @@ defmodule RepoBuilder.Logs do
       session_id: attrs[:session_id],
       event_type: event_type(event),
       harness: to_string(event.harness),
-      payload: scrubbed.raw,
+      payload: event_payload(event, scrubbed.raw),
       usage: usage_params(event)
     }
 
@@ -56,7 +56,7 @@ defmodule RepoBuilder.Logs do
       session_id: attrs[:session_id],
       event_type: event_type(event),
       harness: to_string(event.harness),
-      payload: scrubbed.raw,
+      payload: event_payload(event, scrubbed.raw),
       usage: usage_params(event)
     }
 
@@ -142,6 +142,28 @@ defmodule RepoBuilder.Logs do
   @spec add_cost(Decimal.t(), Usage.t() | nil) :: Decimal.t()
   defp add_cost(acc, %Usage{cost_usd: %Decimal{} = cost}), do: Decimal.add(acc, cost)
   defp add_cost(acc, _usage), do: acc
+
+  # A runtime-SYNTHESIZED `Event.Error` (idle timeout, non-zero provider exit) has
+  # no `raw` wire frame, so `scrubbed.raw` is nil/empty and the diagnostic would be
+  # silently dropped. For that case persist the error's own fields (redacted) so the
+  # cause survives in `agent_logs.payload`. All other events keep the scrubbed `raw`.
+  @spec event_payload(Event.t(), term()) :: map() | nil
+  defp event_payload(%Event.Error{} = event, raw) when raw == nil or raw == %{} do
+    Redact.scrub_term(%{
+      "message" => event.message,
+      "reason" => to_string(event.reason),
+      "retryable" => event.retryable
+    })
+  end
+
+  # Persist the canonical text (+ thinking flag) rather than the raw harness frame,
+  # so reconnect backfill renders clean chat text — pi's raw `message_end` frame has
+  # no top-level "text", which would otherwise dump as JSON in the chat bubble.
+  defp event_payload(%Event.TextDelta{} = event, _raw) do
+    Redact.scrub_term(%{"text" => event.text, "thinking" => event.thinking?})
+  end
+
+  defp event_payload(_event, raw), do: raw
 
   @spec event_type(Event.t()) :: AgentLog.event_type()
   defp event_type(%Event.SessionStarted{}), do: :session_started
