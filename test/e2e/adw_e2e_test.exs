@@ -54,19 +54,6 @@ defmodule RepoBuilder.E2E.AdwTest do
     end
   end
 
-  defp drain_sessions(attempts \\ 200) do
-    case DynamicSupervisor.count_children(RepoBuilder.SessionSupervisor) do
-      %{active: 0} -> :ok
-      _ when attempts > 0 -> Process.sleep(20) && drain_sessions(attempts - 1)
-      _ -> :ok
-    end
-  end
-
-  setup do
-    on_exit(&drain_sessions/0)
-    :ok
-  end
-
   # ---------------------------------------------------------------------------
   # 1. Full tool-API round-trips for all three catalog types
   # ---------------------------------------------------------------------------

@@ -26,10 +26,20 @@ defmodule RepoBuilder.SessionCase do
   setup tags do
     pid = Sandbox.start_owner!(RepoBuilder.Repo, shared: not tags[:async])
     on_exit(fn -> Sandbox.stop_owner(pid) end)
+    on_exit(&drain_sessions/0)
 
     unless tags[:async], do: Mox.set_mox_global()
 
     :ok
+  end
+
+  @spec drain_sessions(non_neg_integer()) :: :ok
+  defp drain_sessions(attempts \\ 200) do
+    case DynamicSupervisor.count_children(RepoBuilder.SessionSupervisor) do
+      %{active: 0} -> :ok
+      _ when attempts > 0 -> Process.sleep(20) && drain_sessions(attempts - 1)
+      _ -> :ok
+    end
   end
 
   @doc "Inject `module` as the adapter for harness `key`, restoring the registry afterwards."
