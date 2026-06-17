@@ -1229,8 +1229,9 @@ defmodule RepoBuilderWeb.ConsoleComponents do
               id="command-textarea"
               name="command"
               rows="3"
-              placeholder="Type a command… (Enter ↵ send · Shift+Enter newline · drag & drop files)"
+              placeholder="Type a command… (Enter ↵ send · Shift+Enter newline · drag & drop or paste images)"
               class="cns-cmd-textarea"
+              phx-hook="CommandPaste"
             ></textarea>
           </div>
 

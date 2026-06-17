@@ -62,11 +62,44 @@ const ClipboardCopy = {
   },
 }
 
+const CommandPaste = {
+  mounted() {
+    this._onPaste = (e) => {
+      const items = Array.from(e.clipboardData?.items ?? [])
+      const imageItems = items.filter(item => item.kind === "file" && item.type.startsWith("image/"))
+      if (imageItems.length === 0) return
+
+      const uploadInput = document.querySelector("input[data-phx-upload-ref][name='attachments[]']")
+      if (!uploadInput) return
+
+      e.preventDefault()
+
+      const dt = new DataTransfer()
+      Array.from(uploadInput.files ?? []).forEach(f => dt.items.add(f))
+      imageItems.forEach(item => {
+        const file = item.getAsFile()
+        if (file) {
+          const ext = file.type.split("/")[1] ?? "png"
+          const named = new File([file], `paste-${Date.now()}.${ext}`, { type: file.type })
+          dt.items.add(named)
+        }
+      })
+
+      uploadInput.files = dt.files
+      uploadInput.dispatchEvent(new Event("change", { bubbles: true }))
+    }
+    this.el.addEventListener("paste", this._onPaste)
+  },
+  destroyed() {
+    this.el.removeEventListener("paste", this._onPaste)
+  }
+}
+
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks, AutoScroll, ClipboardCopy},
+  hooks: {...colocatedHooks, AutoScroll, ClipboardCopy, CommandPaste},
 })
 
 // Show progress bar on live navigation and form submits
