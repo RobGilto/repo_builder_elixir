@@ -622,49 +622,18 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   def handle_event("run_adw_builder", _params, socket) do
     steps = socket.assigns.adw_steps
-    harness = socket.assigns.adw_harness || socket.assigns.orchestrator_harness || "fake"
-    name = if socket.assigns.adw_name == "", do: "custom-adw", else: socket.assigns.adw_name
-    name = String.replace(name, " ", "-")
 
     if steps == [] do
       {:noreply, put_flash(socket, :error, "Add at least one step before launching")}
     else
-      step_list =
-        steps
-        |> Enum.map(fn s ->
-          %{
-            "name" => s.name,
-            "harness" => harness,
-            "on_success" => "done",
-            "on_failure" => "abort"
-          }
-        end)
-        |> Enum.with_index()
-        |> Enum.map(fn {step, i} ->
-          next = Enum.at(steps, i + 1)
-          if next, do: Map.put(step, "on_success", next.name), else: step
-        end)
+      harness = socket.assigns.adw_harness || socket.assigns.orchestrator_harness || "fake"
 
-      case Workflows.create_workflow(%{
-             name: "#{name}-#{System.unique_integer([:positive])}",
-             type: "custom",
-             steps: step_list
-           }) do
-        {:ok, wf} ->
-          case WorkflowEngine.start_workflow(wf, inputs: %{"input" => name}) do
-            {:ok, _run_id, _pid} ->
-              {:noreply,
-               socket
-               |> assign(adw_builder?: false, adw_steps: [], adw_name: "")
-               |> put_flash(:info, "ADW launched — check the ADWS tab")}
+      name =
+        socket.assigns.adw_name
+        |> then(&if(&1 == "", do: "custom-adw", else: &1))
+        |> String.replace(" ", "-")
 
-            {:error, reason} ->
-              {:noreply, put_flash(socket, :error, "Could not start ADW: #{inspect(reason)}")}
-          end
-
-        {:error, reason} ->
-          {:noreply, put_flash(socket, :error, "Could not create workflow: #{inspect(reason)}")}
-      end
+      {:noreply, launch_adw_builder(steps, name, harness, socket)}
     end
   end
 
@@ -772,6 +741,33 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   def handle_event("close_event", _params, socket),
     do: {:noreply, assign(socket, :selected_event, nil)}
+
+  defp launch_adw_builder(steps, name, harness, socket) do
+    step_list =
+      steps
+      |> Enum.map(fn s ->
+        %{"name" => s.name, "harness" => harness, "on_success" => "done", "on_failure" => "abort"}
+      end)
+      |> Enum.with_index()
+      |> Enum.map(fn {step, i} ->
+        next = Enum.at(steps, i + 1)
+        if next, do: Map.put(step, "on_success", next.name), else: step
+      end)
+
+    with {:ok, wf} <-
+           Workflows.create_workflow(%{
+             name: "#{name}-#{System.unique_integer([:positive])}",
+             type: "custom",
+             steps: step_list
+           }),
+         {:ok, _run_id, _pid} <- WorkflowEngine.start_workflow(wf, inputs: %{"input" => name}) do
+      socket
+      |> assign(adw_builder?: false, adw_steps: [], adw_name: "")
+      |> put_flash(:info, "ADW launched — check the ADWS tab")
+    else
+      {:error, reason} -> put_flash(socket, :error, "Could not launch ADW: #{inspect(reason)}")
+    end
+  end
 
   # No selected agent ⇒ route the prompt to the ORCHESTRATOR brain (issue-c): it
   # chooses/creates/dispatches workers. A selected agent keeps the manual
@@ -958,8 +954,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
        kind: "thinking",
        body: event.text,
        thinking?: true,
-       payload: event.raw,
-       chat: %{role: :thinking, label: nil, content: event.text, tool_name: nil, params_json: nil}
+       payload: event.raw
      })}
   end
 
@@ -998,14 +993,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
        category: :tool,
        kind: "tool_call",
        body: "#{event.name} #{inspect(event.input)}",
-       payload: event.raw,
-       chat: %{
-         role: :tool,
-         label: event.name,
-         content: nil,
-         tool_name: event.name,
-         params_json: pretty_json(event.input)
-       }
+       payload: event.raw
      })}
   end
 
@@ -1765,10 +1753,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
   defp log_time(_log), do: ""
 
   # Convert a backfilled row into the chat entry it maps to (text → orchestrator
-  # message). Backfilled rows never carry the in-flight thinking? distinction.
+  # message). Only finalized orchestrator text reaches the chat; thinking and tool
+  # activity stay in the center event stream (mirrors the live path and the tac-14
+  # chat/events separation), so reasoning rows fall through to nil here.
   # (Inference-only spec — a hand-written one would be a supertype under :underspecs.)
-  defp chat_for_row(%{category: :response, thinking?: true, body: body}),
-    do: %{role: :thinking, label: nil, content: body, tool_name: nil, params_json: nil}
+  defp chat_for_row(%{category: :response, thinking?: true}), do: nil
 
   defp chat_for_row(%{category: :response, body: body}),
     do: %{

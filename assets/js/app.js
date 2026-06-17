@@ -69,7 +69,7 @@ const CommandPaste = {
       const imageItems = items.filter(item => item.kind === "file" && item.type.startsWith("image/"))
       if (imageItems.length === 0) return
 
-      const uploadInput = document.querySelector("input[data-phx-upload-ref][name='attachments[]']")
+      const uploadInput = document.querySelector("input[data-phx-upload-ref][name^='attachments']")
       if (!uploadInput) return
 
       e.preventDefault()

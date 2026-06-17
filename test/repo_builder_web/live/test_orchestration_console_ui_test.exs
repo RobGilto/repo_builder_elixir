@@ -82,7 +82,7 @@ defmodule RepoBuilderWeb.TestOrchestrationConsoleUiTest do
     refute has_element?(view, "#filter-tool.cns-chip--active")
   end
 
-  test "canonical events render rows, chat bubbles, and update the live pills", %{conn: conn} do
+  test "canonical events render rows and update the live pills", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/")
     agent = create_agent(view, uniq_name())
 
@@ -108,10 +108,6 @@ defmodule RepoBuilderWeb.TestOrchestrationConsoleUiTest do
     # Event rows: a RESPONSE-category and a TOOL-category badge.
     assert has_element?(view, ".cns-cat--response")
     assert has_element?(view, ".cns-cat--tool")
-
-    # Chat bubbles: a thinking bubble + a tool-use card.
-    assert has_element?(view, ".cns-bubble--thinking")
-    assert has_element?(view, ".cns-bubble--tool")
 
     # Stat pills: 5 events counted on both Logs and WS Events.
     assert has_element?(view, "#stat-logs", "5")
