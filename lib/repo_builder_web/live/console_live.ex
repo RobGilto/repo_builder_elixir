@@ -35,6 +35,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
   alias RepoBuilder.Harness.Pi.Models, as: PiModels
   alias RepoBuilder.Harness.Registry, as: HarnessRegistry
   alias RepoBuilder.Orchestrator.Server, as: OrchestratorServer
+  alias RepoBuilder.Orchestrator.Templates
   alias RepoBuilderWeb.AgentColors
 
   @categories [:response, :tool, :thinking, :hook]
@@ -68,12 +69,23 @@ defmodule RepoBuilderWeb.ConsoleLive do
         model_options: [],
         recent_models: [],
         agent_model_rows: [],
+        # System-prompt settings: safe defaults for the disconnected render (mount
+        # runs twice); the connected socket reflects the orchestrator's real values.
+        orchestrator_system_prompt: "",
+        orchestrator_system_prompt_mode: :append,
+        orchestrator_default_prompt: "",
+        orchestrator_reasoning_effort: :default,
         view_mode: :logs,
         rail_collapsed?: false,
         chat_width: :sm,
         auto_follow?: true,
         show_thinking?: true,
         settings_tab: :general,
+        # Agent-template settings tab. Defaults are safe for the disconnected render;
+        # the connected mount seeds the real rows from the Templates context.
+        template_rows: [],
+        selected_template: nil,
+        template_versions: [],
         regex?: false,
         search: "",
         active_categories: MapSet.new(@categories),
@@ -110,6 +122,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
         |> seed_cost()
         |> backfill_events()
         |> assign_orchestrator()
+        |> assign_template_rows()
         |> subscribe_feeds()
         |> tap(fn _ -> PiModels.refresh_async() end)
       else
@@ -144,7 +157,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
       provider_options: provider_options_for(orchestrator.harness),
       model_options: model_options_for(orchestrator.harness, orchestrator.provider),
       recent_models: Orchestrators.recent_models(orchestrator, orchestrator.provider),
-      agent_model_rows: agent_model_rows(orchestrator)
+      agent_model_rows: agent_model_rows(orchestrator),
+      orchestrator_system_prompt: orchestrator.system_prompt || "",
+      orchestrator_system_prompt_mode: orchestrator.system_prompt_mode,
+      orchestrator_default_prompt: Orchestrators.default_system_prompt(orchestrator),
+      orchestrator_reasoning_effort: orchestrator.reasoning_effort
     )
   end
 
@@ -341,6 +358,120 @@ defmodule RepoBuilderWeb.ConsoleLive do
     )
   end
 
+  # Save the custom system prompt + mode. Blank text persists as nil (spawn falls
+  # back to the generated default). The mode comes from the hidden field (current
+  # toggle state); never `String.to_atom/1` on operator input.
+  def handle_event("save_system_prompt", %{"system_prompt" => text} = params, socket) do
+    mode = system_prompt_mode(params["mode"])
+
+    update_orchestrator(
+      socket,
+      &Orchestrators.set_system_prompt(&1, nilify_blank(text), mode),
+      "Could not save system prompt"
+    )
+  end
+
+  # Persist the append/replace mode immediately (consistent with the other settings),
+  # keeping the current stored prompt text unchanged.
+  def handle_event("set_system_prompt_mode", %{"mode" => mode}, socket) do
+    mode = system_prompt_mode(mode)
+    text = nilify_blank(socket.assigns.orchestrator_system_prompt)
+
+    update_orchestrator(
+      socket,
+      &Orchestrators.set_system_prompt(&1, text, mode),
+      "Could not set prompt mode"
+    )
+  end
+
+  # Reset to the generated default (clears the override, restores :append).
+  def handle_event("reset_system_prompt", _params, socket) do
+    update_orchestrator(
+      socket,
+      &Orchestrators.reset_system_prompt(&1),
+      "Could not reset system prompt"
+    )
+  end
+
+  # Persist the harness-blind reasoning effort immediately (consistent with the other
+  # orchestrator settings). The next run_turn spawns with the per-harness flag.
+  def handle_event("set_reasoning_effort", %{"effort" => effort}, socket) do
+    update_orchestrator(
+      socket,
+      &Orchestrators.set_reasoning_effort(&1, reasoning_effort(effort)),
+      "Could not set reasoning effort"
+    )
+  end
+
+  # --- agent-template settings tab ---
+
+  # Start a blank new-template form (clears the selection + version history).
+  def handle_event("new_template", _params, socket) do
+    {:noreply, assign(socket, selected_template: nil, template_versions: [])}
+  end
+
+  # Load a template (current version) into the editor + its version history.
+  def handle_event("select_template", %{"name" => name}, socket) do
+    {:noreply, select_template(socket, name)}
+  end
+
+  # Save a new version of a template (author: operator) and re-select it.
+  def handle_event("save_agent_template", params, socket) do
+    attrs = %{
+      "name" => params["name"],
+      "description" => params["description"],
+      "body" => params["system_prompt"],
+      "model" => nilify_blank(params["model"] || ""),
+      "category" => nilify_blank(params["category"] || ""),
+      "author" => :operator
+    }
+
+    case Templates.save(attrs) do
+      {:ok, template} ->
+        {:noreply,
+         socket
+         |> assign_template_rows()
+         |> select_template(template.name)}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "Could not save template (check name/fields)")}
+    end
+  end
+
+  # Promote an old version to a fresh current one (non-destructive restore).
+  def handle_event("restore_template", %{"name" => name, "version" => version}, socket) do
+    case Integer.parse(version) do
+      {k, _rest} ->
+        case Templates.restore(name, k) do
+          {:ok, _template} ->
+            {:noreply, socket |> assign_template_rows() |> select_template(name)}
+
+          {:error, _reason} ->
+            {:noreply, put_flash(socket, :error, "Could not restore version")}
+        end
+
+      :error ->
+        {:noreply, put_flash(socket, :error, "Invalid version")}
+    end
+  end
+
+  # Delete a writable template's history; built-ins are read-only.
+  def handle_event("delete_template", %{"name" => name}, socket) do
+    case Templates.delete(name) do
+      :ok ->
+        {:noreply,
+         socket
+         |> assign(selected_template: nil, template_versions: [])
+         |> assign_template_rows()}
+
+      {:error, :builtin} ->
+        {:noreply, put_flash(socket, :error, "Built-in templates are read-only")}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "Could not delete template")}
+    end
+  end
+
   def handle_event("view:toggle", _params, socket), do: {:noreply, toggle_view(socket)}
 
   def handle_event("toggle_rail", _params, socket),
@@ -505,6 +636,24 @@ defmodule RepoBuilderWeb.ConsoleLive do
           {:error, _reason} ->
             {:noreply, put_flash(socket, :error, error_message)}
         end
+    end
+  end
+
+  @spec assign_template_rows(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp assign_template_rows(socket), do: assign(socket, :template_rows, Templates.list())
+
+  # Load a template's current version + version history into the editor assigns.
+  # A missing template falls back to the blank-form state (flash on error).
+  @spec select_template(Phoenix.LiveView.Socket.t(), String.t()) :: Phoenix.LiveView.Socket.t()
+  defp select_template(socket, name) do
+    case Templates.fetch(name) do
+      {:ok, template} ->
+        assign(socket, selected_template: template, template_versions: Templates.versions(name))
+
+      {:error, _reason} ->
+        socket
+        |> assign(selected_template: nil, template_versions: [])
+        |> put_flash(:error, "Template not found")
     end
   end
 
@@ -1260,11 +1409,15 @@ defmodule RepoBuilderWeb.ConsoleLive do
         auto_follow?={@auto_follow?}
         show_thinking?={@show_thinking?}
         harnesses={@harness_options}
+        system_prompt={@orchestrator_system_prompt}
+        system_prompt_mode={@orchestrator_system_prompt_mode}
+        default_system_prompt={@orchestrator_default_prompt}
+        reasoning_effort={@orchestrator_reasoning_effort}
+        reasoning_efforts={Orchestrators.reasoning_efforts()}
+        template_rows={@template_rows}
+        selected_template={@selected_template}
+        template_versions={@template_versions}
       />
-
-      <div class="fixed bottom-3 right-3 z-50">
-        <Layouts.theme_toggle />
-      </div>
     </div>
     """
   end
@@ -1395,10 +1548,28 @@ defmodule RepoBuilderWeb.ConsoleLive do
   defp to_chat_width("lg"), do: :lg
   defp to_chat_width(_other), do: :sm
 
-  @spec settings_tab(String.t()) :: :general | :appearance | :about
+  @spec settings_tab(String.t()) :: :general | :appearance | :about | :prompt | :templates
   defp settings_tab("appearance"), do: :appearance
   defp settings_tab("about"), do: :about
+  defp settings_tab("prompt"), do: :prompt
+  defp settings_tab("templates"), do: :templates
   defp settings_tab(_other), do: :general
+
+  # Guard operator-supplied mode string into the closed atom set (never
+  # String.to_atom/1 on input). Anything but "replace" defaults to :append.
+  @spec system_prompt_mode(String.t() | nil) :: :append | :replace
+  defp system_prompt_mode("replace"), do: :replace
+  defp system_prompt_mode(_other), do: :append
+
+  # Guard operator-supplied effort string into the closed atom set (never
+  # String.to_atom/1 on input). Anything unrecognized defaults to :default (no flag).
+  @spec reasoning_effort(String.t() | nil) :: RepoBuilder.Orchestrator.Orchestrator.effort()
+  defp reasoning_effort("off"), do: :off
+  defp reasoning_effort("low"), do: :low
+  defp reasoning_effort("medium"), do: :medium
+  defp reasoning_effort("high"), do: :high
+  defp reasoning_effort("max"), do: :max
+  defp reasoning_effort(_other), do: :default
 
   # Inference-only spec — a `term()` member would be a supertype under :underspecs.
   defp toggle_member(set, member) do

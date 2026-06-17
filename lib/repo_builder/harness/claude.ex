@@ -19,9 +19,12 @@ defmodule RepoBuilder.Harness.Claude do
   def orchestrator_spawn(_opts, ctx) do
     # Claude natively speaks MCP over HTTP via a declared server file. The bearer
     # token lives in that per-session file under the ephemeral cwd (cleaned up by
-    # the runtime) — never in argv (visible in `ps`).
-    path = Path.join(ctx.cwd, ".mcp.json")
-    File.mkdir_p!(ctx.cwd)
+    # the runtime) — never in argv (visible in `ps`). Use an ABSOLUTE path: the
+    # session cwd is relative to the BEAM root, but Claude runs WITH its cwd set to
+    # that workspace, so a relative `--mcp-config` would resolve against it twice.
+    cwd = Path.expand(ctx.cwd)
+    path = Path.join(cwd, ".mcp.json")
+    File.mkdir_p!(cwd)
     File.write!(path, mcp_config_json(ctx))
 
     # `--strict-mcp-config` ⇒ ONLY this generated server loads (no ambient ~/.mcp).
@@ -30,11 +33,17 @@ defmodule RepoBuilder.Harness.Claude do
     # block on an interactive prompt (the headless deadlock, §6) — no duplicate here.
     args =
       ["--mcp-config", path, "--strict-mcp-config"] ++
-        ["--append-system-prompt", ctx.system_prompt] ++
+        [system_prompt_flag(ctx.system_prompt_mode), ctx.system_prompt] ++
         resume_args(ctx.resume_session_id)
 
     {args, []}
   end
+
+  # Map the operator-chosen mode to Claude's prompt flag: `:append` keeps the
+  # default coding-agent prompt and adds ours; `:replace` swaps it out entirely.
+  @spec system_prompt_flag(:append | :replace) :: String.t()
+  defp system_prompt_flag(:replace), do: "--system-prompt"
+  defp system_prompt_flag(_append), do: "--append-system-prompt"
 
   @spec mcp_config_json(RepoBuilder.Harness.Orchestrating.tool_ctx()) :: String.t()
   defp mcp_config_json(ctx) do
@@ -72,9 +81,20 @@ defmodule RepoBuilder.Harness.Claude do
       base
       |> append_arg(opts[:model], fn model -> ["--model", model] end)
       |> append_flags(permission_args(opts))
+      |> append_flags(effort_args(opts[:reasoning_effort]))
 
     {"claude", args, env(opts), @ctx}
   end
+
+  # Map the harness-blind reasoning effort to Claude's `--effort` flag (print-mode,
+  # model-dependent levels). Claude has NO `off` — the lowest level is `low`, so both
+  # `:default` and `:off` omit the flag (model default). `:max` is Claude's top level.
+  @spec effort_args(RepoBuilder.Harness.reasoning_effort() | nil) :: [String.t()]
+  defp effort_args(:low), do: ["--effort", "low"]
+  defp effort_args(:medium), do: ["--effort", "medium"]
+  defp effort_args(:high), do: ["--effort", "high"]
+  defp effort_args(:max), do: ["--effort", "max"]
+  defp effort_args(_default_or_off_or_nil), do: []
 
   @spec append_arg([String.t()], term(), (term() -> [String.t()])) :: [String.t()]
   defp append_arg(args, nil, _build), do: args

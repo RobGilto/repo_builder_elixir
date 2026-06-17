@@ -11,7 +11,7 @@ defmodule RepoBuilder.Orchestrators do
   import Ecto.Query, only: [from: 2]
 
   alias RepoBuilder.Harness.Registry
-  alias RepoBuilder.Orchestrator.Orchestrator
+  alias RepoBuilder.Orchestrator.{Orchestrator, SystemPrompt}
   alias RepoBuilder.Repo
 
   @default_name "default"
@@ -147,6 +147,47 @@ defmodule RepoBuilder.Orchestrators do
   def set_provider(id, provider),
     do: update_fields(id, %{provider: provider, model: nil, session_id: nil})
 
+  @doc """
+  Set the orchestrator's custom system prompt (`nil`/blank falls back to the
+  generated default at spawn) and its append/replace `mode`. Both are persisted
+  together so the next turn spawns with the chosen text under the chosen flag.
+  """
+  @spec set_system_prompt(Ecto.UUID.t(), String.t() | nil, Orchestrator.mode()) ::
+          {:ok, Orchestrator.t()} | {:error, :not_found}
+  def set_system_prompt(id, prompt, mode) when mode in [:append, :replace],
+    do: update_fields(id, %{system_prompt: blank_to_nil(prompt), system_prompt_mode: mode})
+
+  @doc """
+  Reset the system prompt to its generated default: clears the custom override and
+  restores `:append` mode (today's behavior). Idempotent.
+  """
+  @spec reset_system_prompt(Ecto.UUID.t()) :: {:ok, Orchestrator.t()} | {:error, :not_found}
+  def reset_system_prompt(id),
+    do: update_fields(id, %{system_prompt: nil, system_prompt_mode: :append})
+
+  @doc """
+  The generated default system prompt for `orchestrator` (delegates to
+  `SystemPrompt.build/1`) — used by the console to render a read-only preview of
+  what the orchestrator runs with when no custom override is set.
+  """
+  @spec default_system_prompt(Orchestrator.t()) :: String.t()
+  def default_system_prompt(%Orchestrator{} = orchestrator), do: SystemPrompt.build(orchestrator)
+
+  @doc """
+  Set the orchestrator's harness-blind reasoning effort. Each adapter maps it to its
+  own CLI flag at spawn (`:default` ⇒ omit the flag). Persisted on the row so the
+  next turn picks it up; preserved across harness switches (orchestrator-level state).
+  """
+  @spec set_reasoning_effort(Ecto.UUID.t(), Orchestrator.effort()) ::
+          {:ok, Orchestrator.t()} | {:error, :not_found}
+  def set_reasoning_effort(id, effort)
+      when effort in [:default, :off, :low, :medium, :high, :max],
+      do: update_fields(id, %{reasoning_effort: effort})
+
+  @doc "The ordered reasoning-effort levels for the settings control (`:default` first)."
+  @spec reasoning_efforts() :: [Orchestrator.effort(), ...]
+  def reasoning_efforts, do: Orchestrator.efforts()
+
   @doc "The worker model roster: `%{category => entry}` where each entry has harness/provider/model."
   @spec agent_models(Orchestrator.t()) :: %{optional(String.t()) => map()}
   def agent_models(%Orchestrator{metadata: metadata}), do: Map.get(metadata, "agent_models", %{})
@@ -232,6 +273,53 @@ defmodule RepoBuilder.Orchestrators do
   end
 
   @doc """
+  Record a turn's token usage. ACCUMULATES `input`/`output` into the cumulative
+  lifetime counters (cost report) AND OVERWRITES `context_tokens` with this turn's
+  `input + output` (the context-window OCCUPANCY signal — latest turn, not a sum).
+  `nil` token args are treated as 0 (no-op-safe for unpriced/absent usage fields).
+  """
+  @spec add_usage(Ecto.UUID.t(), non_neg_integer() | nil, non_neg_integer() | nil) ::
+          {:ok, Orchestrator.t()} | {:error, :not_found}
+  def add_usage(id, input, output) do
+    input = non_neg(input)
+    output = non_neg(output)
+
+    case Repo.get(Orchestrator, id) do
+      nil ->
+        {:error, :not_found}
+
+      %Orchestrator{input_tokens: in_total, output_tokens: out_total} = orchestrator ->
+        update_record(orchestrator, %{
+          input_tokens: in_total + input,
+          output_tokens: out_total + output,
+          context_tokens: input + output
+        })
+    end
+  end
+
+  @doc """
+  Token snapshot for the cost report/UI: cumulative `input`/`output`/`total`
+  throughput plus the latest-turn `context` occupancy.
+  """
+  @spec token_totals(Orchestrator.t()) :: %{
+          input: non_neg_integer(),
+          output: non_neg_integer(),
+          total: non_neg_integer(),
+          context: non_neg_integer()
+        }
+  def token_totals(%Orchestrator{} = orchestrator) do
+    input = orchestrator.input_tokens || 0
+    output = orchestrator.output_tokens || 0
+
+    %{
+      input: input,
+      output: output,
+      total: input + output,
+      context: orchestrator.context_tokens || 0
+    }
+  end
+
+  @doc """
   Mint a fresh per-orchestrator bearer token: returns the PLAINTEXT (caller passes
   it to the harness via env) and stores only its hash. Re-minting rotates the token.
   """
@@ -287,6 +375,18 @@ defmodule RepoBuilder.Orchestrators do
     end
   end
 
+  # Trim a system-prompt string, treating blank/whitespace-only as nil (so spawn
+  # falls back to the generated default). A nil input passes through unchanged.
+  @spec blank_to_nil(String.t() | nil) :: String.t() | nil
+  defp blank_to_nil(nil), do: nil
+
+  defp blank_to_nil(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
   # Read a roster attribute from a string-keyed map, treating blank as nil.
   @spec attr(map(), String.t()) :: String.t() | nil
   defp attr(attrs, key) do
@@ -319,4 +419,9 @@ defmodule RepoBuilder.Orchestrators do
 
   @spec hash(String.t()) :: String.t()
   defp hash(token), do: :sha256 |> :crypto.hash(token) |> Base.encode16(case: :lower)
+
+  # Coerce a token field to a non-negative integer; nil/negative/non-integer ⇒ 0.
+  @spec non_neg(term()) :: non_neg_integer()
+  defp non_neg(value) when is_integer(value) and value > 0, do: value
+  defp non_neg(_value), do: 0
 end

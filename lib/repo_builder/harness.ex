@@ -13,9 +13,18 @@ defmodule RepoBuilder.Harness do
   alias RepoBuilder.Harness.Event
 
   @typedoc """
+  Harness-blind reasoning effort. An adapter maps it to its native effort/thinking
+  flag (Claude `--effort`, pi `--thinking`); `:default` means "omit the flag" (use
+  the harness's own default — zero regression). `:max` is the top level per harness.
+  """
+  @type reasoning_effort :: :default | :off | :low | :medium | :high | :max
+
+  @typedoc """
   Options passed to `command/1`. `:sink` is the pid that receives canonical events
   / raw chunks; `:secrets` are runtime-resolved credentials (§6) — NEVER logged and
   NEVER placed in argv (visible in `ps`); the adapter puts them in the child `env`.
+  `:reasoning_effort` is the operator-chosen effort (defaults to `:default` when
+  absent — e.g. worker sessions — so the adapter emits no effort flag).
   """
   @type start_opts :: %{
           required(:prompt) => String.t(),
@@ -25,7 +34,8 @@ defmodule RepoBuilder.Harness do
           optional(:provider) => String.t() | nil,
           optional(:config) => map(),
           optional(:secrets) => map(),
-          optional(:price_table) => map()
+          optional(:price_table) => map(),
+          optional(:reasoning_effort) => reasoning_effort()
         }
 
   @typedoc "Adapter-private per-session context returned by command/1 and threaded into normalize/2."

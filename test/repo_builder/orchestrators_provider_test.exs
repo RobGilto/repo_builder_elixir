@@ -126,6 +126,86 @@ defmodule RepoBuilder.OrchestratorsProviderTest do
     end
   end
 
+  describe "system prompt + mode (set/reset/default)" do
+    test "set_system_prompt persists trimmed text and the chosen mode" do
+      orch = orchestrator_fixture()
+
+      assert {:ok, updated} = Orchestrators.set_system_prompt(orch.id, "  Be terse.  ", :replace)
+      assert updated.system_prompt == "Be terse."
+      assert updated.system_prompt_mode == :replace
+    end
+
+    test "blank/whitespace-only text persists as nil (falls back to default at spawn)" do
+      orch = orchestrator_fixture(%{system_prompt: "old"})
+
+      assert {:ok, updated} = Orchestrators.set_system_prompt(orch.id, "   ", :append)
+      assert updated.system_prompt == nil
+      assert updated.system_prompt_mode == :append
+    end
+
+    test "the default mode is :append for a freshly created orchestrator" do
+      orch = orchestrator_fixture()
+      assert orch.system_prompt_mode == :append
+    end
+
+    test "reset_system_prompt clears the override and restores :append" do
+      orch = orchestrator_fixture()
+      {:ok, _} = Orchestrators.set_system_prompt(orch.id, "custom", :replace)
+
+      assert {:ok, reset} = Orchestrators.reset_system_prompt(orch.id)
+      assert reset.system_prompt == nil
+      assert reset.system_prompt_mode == :append
+
+      # Idempotent: resetting an already-default orchestrator still succeeds.
+      assert {:ok, _} = Orchestrators.reset_system_prompt(orch.id)
+    end
+
+    test "an unknown orchestrator id returns {:error, :not_found}" do
+      assert {:error, :not_found} =
+               Orchestrators.set_system_prompt(Ecto.UUID.generate(), "x", :append)
+
+      assert {:error, :not_found} = Orchestrators.reset_system_prompt(Ecto.UUID.generate())
+    end
+
+    test "default_system_prompt returns a non-empty generated prompt mentioning a tool" do
+      orch = orchestrator_fixture()
+      prompt = Orchestrators.default_system_prompt(orch)
+
+      assert is_binary(prompt) and prompt != ""
+      assert prompt =~ "create_agent"
+    end
+  end
+
+  describe "reasoning effort (harness-blind)" do
+    test "set_reasoning_effort persists each level" do
+      orch = orchestrator_fixture()
+
+      assert {:ok, high} = Orchestrators.set_reasoning_effort(orch.id, :high)
+      assert high.reasoning_effort == :high
+
+      assert {:ok, maxed} = Orchestrators.set_reasoning_effort(orch.id, :max)
+      assert maxed.reasoning_effort == :max
+
+      assert {:ok, off} = Orchestrators.set_reasoning_effort(orch.id, :off)
+      assert off.reasoning_effort == :off
+    end
+
+    test "the default for a freshly created orchestrator is :default" do
+      orch = orchestrator_fixture()
+      assert orch.reasoning_effort == :default
+    end
+
+    test "an unknown orchestrator id returns {:error, :not_found}" do
+      assert {:error, :not_found} =
+               Orchestrators.set_reasoning_effort(Ecto.UUID.generate(), :high)
+    end
+
+    test "reasoning_efforts/0 lists all six levels with :default first" do
+      assert Orchestrators.reasoning_efforts() ==
+               [:default, :off, :low, :medium, :high, :max]
+    end
+  end
+
   describe "open provider identity at the write boundary" do
     test "an arbitrary provider string is accepted (not a closed enum)" do
       assert {:ok, orch} =
@@ -139,6 +219,50 @@ defmodule RepoBuilder.OrchestratorsProviderTest do
                Orchestrators.create(%{name: "o-#{uniq()}", harness: "nope"})
 
       assert "is not a registered harness" in errors_on(cs).harness
+    end
+  end
+
+  describe "add_usage/3 and token_totals/1" do
+    test "fresh orchestrator has zero token totals" do
+      orch = orchestrator_fixture()
+      assert Orchestrators.token_totals(orch) == %{input: 0, output: 0, total: 0, context: 0}
+    end
+
+    test "accumulates cumulative input/output but OVERWRITES context_tokens per turn" do
+      orch = orchestrator_fixture()
+
+      assert {:ok, after1} = Orchestrators.add_usage(orch.id, 1000, 500)
+      assert after1.input_tokens == 1000
+      assert after1.output_tokens == 500
+      # Latest-turn occupancy = this turn's input+output.
+      assert after1.context_tokens == 1500
+
+      assert {:ok, after2} = Orchestrators.add_usage(orch.id, 200, 300)
+      # Cumulative counters SUM both turns...
+      assert after2.input_tokens == 1200
+      assert after2.output_tokens == 800
+      # ...but context_tokens reflects ONLY the 2nd turn (occupancy, not a sum).
+      assert after2.context_tokens == 500
+
+      assert Orchestrators.token_totals(after2) == %{
+               input: 1200,
+               output: 800,
+               total: 2000,
+               context: 500
+             }
+    end
+
+    test "nil/zero token args are no-op-safe" do
+      orch = orchestrator_fixture()
+
+      assert {:ok, updated} = Orchestrators.add_usage(orch.id, nil, nil)
+      assert updated.input_tokens == 0
+      assert updated.output_tokens == 0
+      assert updated.context_tokens == 0
+    end
+
+    test "a missing orchestrator returns {:error, :not_found}" do
+      assert {:error, :not_found} = Orchestrators.add_usage(Ecto.UUID.generate(), 10, 10)
     end
   end
 end

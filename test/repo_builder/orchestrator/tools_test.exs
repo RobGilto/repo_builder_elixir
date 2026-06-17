@@ -8,7 +8,7 @@ defmodule RepoBuilder.Orchestrator.ToolsTest do
   use RepoBuilder.SessionCase, async: false
 
   alias RepoBuilder.{Agents, Orchestrators, Workflows}
-  alias RepoBuilder.Orchestrator.Tools
+  alias RepoBuilder.Orchestrator.{Templates, Tools}
 
   defp uniq, do: System.unique_integer([:positive])
 
@@ -124,6 +124,123 @@ defmodule RepoBuilder.Orchestrator.ToolsTest do
 
       assert {:error, _reason} =
                Tools.call("create_agent", orch.id, %{"name" => "x-#{uniq()}", "harness" => "nope"})
+    end
+  end
+
+  describe "subagent templates" do
+    setup do
+      original = Application.get_env(:repo_builder, :orchestrator)
+      tmp = Path.join(System.tmp_dir!(), "rb_tools_templates_#{uniq()}")
+      File.mkdir_p!(tmp)
+      Application.put_env(:repo_builder, :orchestrator, Keyword.put(original, :agents_dir, tmp))
+
+      on_exit(fn ->
+        Application.put_env(:repo_builder, :orchestrator, original)
+        File.rm_rf(tmp)
+      end)
+
+      :ok
+    end
+
+    test "save_agent_template persists a version readable by Templates.fetch and list" do
+      name = "reviewer-#{uniq()}"
+
+      assert {:ok, %{"status" => "saved", "version" => 1}} =
+               Tools.call("save_agent_template", orchestrator().id, %{
+                 "name" => name,
+                 "description" => "Reviews diffs.",
+                 "system_prompt" => "You review code."
+               })
+
+      assert {:ok, template} = Templates.fetch(name)
+      assert template.author == :orchestrator
+      assert template.body == "You review code."
+
+      assert {:ok, %{"templates" => templates}} =
+               Tools.call("list_agent_templates", orchestrator().id, %{})
+
+      assert Enum.any?(templates, &(&1["name"] == name))
+    end
+
+    test "get_agent_template returns the current body + frontmatter" do
+      name = "scout-#{uniq()}"
+
+      {:ok, _} =
+        Tools.call("save_agent_template", orchestrator().id, %{
+          "name" => name,
+          "description" => "Scouts.",
+          "system_prompt" => "Find things.",
+          "category" => "fast"
+        })
+
+      assert {:ok, view} = Tools.call("get_agent_template", orchestrator().id, %{"name" => name})
+      assert view["body"] == "Find things."
+      assert view["category"] == "fast"
+    end
+
+    test "create_agent with subagent_template applies the body+model and records provenance" do
+      orch = orchestrator()
+      template_name = "tw-#{uniq()}"
+
+      {:ok, _} =
+        Tools.call("save_agent_template", orch.id, %{
+          "name" => template_name,
+          "description" => "Writes tests.",
+          "system_prompt" => "You write ExUnit tests.",
+          "model" => "fake-model-7"
+        })
+
+      worker_name = "worker-#{uniq()}"
+
+      assert {:ok, %{"model" => "fake-model-7"}} =
+               Tools.call("create_agent", orch.id, %{
+                 "name" => worker_name,
+                 "harness" => "fake",
+                 "subagent_template" => template_name
+               })
+
+      assert {:ok, worker} = Agents.get_by_name_for_orchestrator(orch.id, worker_name)
+      assert worker.system_prompt == "You write ExUnit tests."
+      assert worker.config["template_name"] == template_name
+      assert worker.config["template_version"] == 1
+    end
+
+    test "an explicit system_prompt overrides the template body" do
+      orch = orchestrator()
+      template_name = "ov-#{uniq()}"
+
+      {:ok, _} =
+        Tools.call("save_agent_template", orch.id, %{
+          "name" => template_name,
+          "description" => "Default.",
+          "system_prompt" => "template body"
+        })
+
+      worker_name = "worker-#{uniq()}"
+
+      {:ok, _} =
+        Tools.call("create_agent", orch.id, %{
+          "name" => worker_name,
+          "harness" => "fake",
+          "subagent_template" => template_name,
+          "system_prompt" => "explicit override"
+        })
+
+      assert {:ok, worker} = Agents.get_by_name_for_orchestrator(orch.id, worker_name)
+      assert worker.system_prompt == "explicit override"
+    end
+
+    test "an unknown subagent_template returns a helpful error" do
+      orch = orchestrator()
+
+      assert {:error, reason} =
+               Tools.call("create_agent", orch.id, %{
+                 "name" => "worker-#{uniq()}",
+                 "harness" => "fake",
+                 "subagent_template" => "does-not-exist"
+               })
+
+      assert reason =~ "unknown subagent_template does-not-exist"
     end
   end
 

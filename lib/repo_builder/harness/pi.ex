@@ -32,7 +32,7 @@ defmodule RepoBuilder.Harness.Pi do
     # handlers `fetch` the same MCP/JSON endpoint using the env below (token in env,
     # never argv). Session resume uses `--session <id>`.
     args =
-      ["-e", @pi_extension, "--append-system-prompt", ctx.system_prompt] ++
+      ["-e", @pi_extension, system_prompt_flag(ctx.system_prompt_mode), ctx.system_prompt] ++
         resume_args(ctx.resume_session_id)
 
     env = [
@@ -42,6 +42,12 @@ defmodule RepoBuilder.Harness.Pi do
 
     {args, env}
   end
+
+  # Map the operator-chosen mode to pi's prompt flag (both supported per the pi
+  # README "Other Options"): `:append` appends to the default; `:replace` swaps it.
+  @spec system_prompt_flag(:append | :replace) :: String.t()
+  defp system_prompt_flag(:replace), do: "--system-prompt"
+  defp system_prompt_flag(_append), do: "--append-system-prompt"
 
   @spec resume_args(String.t() | nil) :: [String.t()]
   defp resume_args(nil), do: []
@@ -60,6 +66,7 @@ defmodule RepoBuilder.Harness.Pi do
       |> append_provider(provider)
       |> append_model(model)
       |> append_approve(Map.get(opts, :config, %{}))
+      |> append_thinking(opts[:reasoning_effort])
 
     # Thread model + price table into the session_ctx so normalize/2 can derive cost
     # (pi reports no USD in its stream — §4.3).
@@ -87,6 +94,19 @@ defmodule RepoBuilder.Harness.Pi do
   end
 
   defp append_approve(args, _config), do: args
+
+  # Map the harness-blind reasoning effort to pi's `--thinking` flag (levels:
+  # off|minimal|low|medium|high|xhigh). `:max` ⇒ pi's top level `xhigh`; `:default`
+  # omits the flag (pi's own default). Self-contained per §10 (no cross-module share).
+  @spec append_thinking([String.t()], RepoBuilder.Harness.reasoning_effort() | nil) :: [
+          String.t()
+        ]
+  defp append_thinking(args, :off), do: args ++ ["--thinking", "off"]
+  defp append_thinking(args, :low), do: args ++ ["--thinking", "low"]
+  defp append_thinking(args, :medium), do: args ++ ["--thinking", "medium"]
+  defp append_thinking(args, :high), do: args ++ ["--thinking", "high"]
+  defp append_thinking(args, :max), do: args ++ ["--thinking", "xhigh"]
+  defp append_thinking(args, _default_or_nil), do: args
 
   @impl true
   def normalize(%{"type" => "session"} = raw, _ctx) do

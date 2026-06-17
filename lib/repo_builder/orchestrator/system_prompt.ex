@@ -7,7 +7,7 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
   tools rather than doing the work itself.
   """
   alias RepoBuilder.Harness.Registry
-  alias RepoBuilder.Orchestrator.{Orchestrator, ToolCatalog}
+  alias RepoBuilder.Orchestrator.{Orchestrator, Templates, ToolCatalog}
   alias RepoBuilder.Orchestrators
 
   @doc "Build the system prompt for `orchestrator`."
@@ -38,6 +38,12 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
 
     Worker model tiers:
     #{categories_block(orchestrator)}
+
+    Available subagent templates (apply by name via `create_agent`'s `subagent_template`):
+    #{subagent_map_block()}
+
+    Context management:
+    #{context_management_block()}
 
     Available tools:
     #{tools_block()}
@@ -76,6 +82,37 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
       "" -> "\"#{harness}\""
       detail -> "\"#{harness}\" (#{detail})"
     end
+  end
+
+  # The `{{SUBAGENT_MAP}}` equivalent: a markdown list of the available worker
+  # recipes the orchestrator can apply by name, with an empty-state fallback.
+  @spec subagent_map_block() :: String.t()
+  defp subagent_map_block do
+    case Templates.list() do
+      [] ->
+        "No subagent templates yet — author one in Settings → Agent Templates or via save_agent_template."
+
+      templates ->
+        Enum.map_join(templates, "\n", fn template ->
+          "- #{template.name}: #{template.description}"
+        end)
+    end
+  end
+
+  # Guidance for watching spend + context-window pressure and relieving it via
+  # compaction (ports the reference "Context Window Management" prompt section).
+  @spec context_management_block() :: String.t()
+  defp context_management_block do
+    """
+    - Call `report_cost` to check your own session: running USD cost, cumulative
+      tokens, and context-window usage %. Watch it on long multi-agent sessions.
+    - When a worker is filling its context window (or its output starts degrading),
+      compact it with `compact_agent` (or `command_agent(name, "/compact")`) to free
+      room before it hits the limit.
+    - At high usage (≈80%+), proactively compact the busiest workers and tell the
+      operator they may want to run `/compact` on you.
+    """
+    |> String.trim_trailing()
   end
 
   @spec tools_block() :: String.t()

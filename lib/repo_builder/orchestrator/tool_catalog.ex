@@ -40,6 +40,11 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
             "system_prompt" => %{
               "type" => "string",
               "description" => "Optional worker system prompt."
+            },
+            "subagent_template" => %{
+              "type" => "string",
+              "description" =>
+                "Optional name of a saved subagent template (see `list_agent_templates`). Applies the template's current body as the worker's system prompt and its model/category. An explicit `system_prompt`/`model` overrides the template; the template's name+version are recorded on the worker."
             }
           },
           "required" => ["name"]
@@ -219,6 +224,71 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
             "model" => %{"type" => "string", "description" => "New model."}
           },
           "required" => []
+        }
+      },
+      %{
+        name: "report_cost",
+        description:
+          "Report this orchestrator's session id, status, running USD cost, cumulative input/output/total tokens, and context-window usage % (from the latest turn's occupancy). Includes a warning when usage is high — call it to watch your own spend and context pressure.",
+        input_schema: %{"type" => "object", "properties" => %{}, "required" => []}
+      },
+      %{
+        name: "compact_agent",
+        description:
+          "Compact a worker's context by dispatching `/compact` to it (sugar over command_agent). Use it on a worker approaching its context-window limit to free up room before its output degrades.",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "name" => %{"type" => "string", "description" => "Target worker name."}
+          },
+          "required" => ["name"]
+        }
+      },
+      %{
+        name: "list_agent_templates",
+        description:
+          "List the available subagent templates (name + description) — the reusable worker recipes you can apply with `create_agent`'s `subagent_template`. This is the on-demand form of the SUBAGENT MAP in your system prompt.",
+        input_schema: %{"type" => "object", "properties" => %{}, "required" => []}
+      },
+      %{
+        name: "get_agent_template",
+        description:
+          "Read one subagent template's current version: its description, system-prompt body, and optional model/category/harness.",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "name" => %{"type" => "string", "description" => "Template name."}
+          },
+          "required" => ["name"]
+        }
+      },
+      %{
+        name: "save_agent_template",
+        description:
+          "Create or refine a subagent template, writing a NEW version (history is preserved). `system_prompt` is the worker recipe's body. Use this to mint your own reusable specialists; the saved template is then applicable via `create_agent(subagent_template:)`.",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "name" => %{
+              "type" => "string",
+              "description" => "Template name (kebab-case, e.g. `test-writer`)."
+            },
+            "description" => %{
+              "type" => "string",
+              "description" => "One-line summary shown in the subagent map."
+            },
+            "system_prompt" => %{
+              "type" => "string",
+              "description" => "The worker's system-prompt body (the recipe)."
+            },
+            "model" => %{"type" => "string", "description" => "Optional default model."},
+            "category" => %{
+              "type" => "string",
+              "enum" => ["fast", "main", "heavy", "leader"],
+              "description" => "Optional default worker tier."
+            }
+          },
+          "required" => ["name", "description", "system_prompt"]
         }
       }
     ]

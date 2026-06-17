@@ -99,7 +99,10 @@ config :repo_builder, :harnesses, %{
 config :repo_builder, :orchestrator,
   default_harness: "fake",
   default_model: nil,
-  mcp_base_url: "http://127.0.0.1:4002"
+  mcp_base_url: "http://127.0.0.1:4002",
+  # Per-run tmp root so template tests are hermetic and never touch the real
+  # ~/.repo_builder/agents. Each test may further override this via app-env.
+  agents_dir: Path.join(System.tmp_dir!(), "repo_builder_agents_test")
 
 # Don't reap on boot in tests — the suite drives OrphanReaper.reap_node/1 explicitly
 # so it doesn't race the Ecto sandbox.

@@ -159,6 +159,7 @@ defmodule RepoBuilder.Orchestrator.Server do
         orchestrator.model ||
           HarnessRegistry.orchestrator_defaults(orchestrator.harness)[:default_model],
       provider: orchestrator.provider,
+      reasoning_effort: orchestrator.reasoning_effort,
       config: %{orchestrator: true},
       orchestrator_ctx: tool_ctx(orchestrator, token),
       orchestrator_db_id: orchestrator.id
@@ -187,8 +188,9 @@ defmodule RepoBuilder.Orchestrator.Server do
     {:noreply, state}
   end
 
-  def handle_info({:harness_event, %Event.Usage{cost_usd: cost}}, %State{} = state) do
-    _ = Orchestrators.add_cost(state.orchestrator_id, cost)
+  def handle_info({:harness_event, %Event.Usage{} = event}, %State{} = state) do
+    _ = Orchestrators.add_cost(state.orchestrator_id, event.cost_usd)
+    _ = Orchestrators.add_usage(state.orchestrator_id, event.input_tokens, event.output_tokens)
     {:noreply, state}
   end
 
@@ -217,6 +219,7 @@ defmodule RepoBuilder.Orchestrator.Server do
       token: token,
       resume_session_id: orchestrator.session_id,
       system_prompt: orchestrator.system_prompt || SystemPrompt.build(orchestrator),
+      system_prompt_mode: orchestrator.system_prompt_mode,
       # Placeholder: the session runtime overwrites this with the real session cwd
       # (where `.mcp.json` etc. get written) before calling `orchestrator_spawn/2`.
       cwd: ""

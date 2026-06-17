@@ -231,13 +231,27 @@ config :repo_builder, :webhooks, replay_window_seconds: 300
 # Cost/error alerting thresholds (BUILD_PROMPT.md §13).
 config :repo_builder, :alerting, cost_threshold_usd: 10.0
 
+# Context-window sizes (tokens) for orchestrator/worker usage-% reporting. A
+# `{harness, model}` tuple overrides the `:default`; harness-blind at the call site
+# (RepoBuilder.Orchestrator.ContextWindow). Operator-tunable; pi's live model catalog
+# could later supply real per-model sizes (Future Consideration).
+config :repo_builder, :context_windows, %{
+  :default => 200_000,
+  {"claude", "claude-opus-4-8"} => 200_000,
+  {"claude", "claude-sonnet-4-6"} => 1_000_000
+}
+
 # Orchestrator brain defaults (issue-c). `default_harness` is the harness the
 # default orchestrator runs on; `mcp_base_url` is the localhost-bound base the
 # generated `.mcp.json` / pi extension point at. Overridden per env + runtime.
 config :repo_builder, :orchestrator,
   default_harness: "claude",
   default_model: nil,
-  mcp_base_url: "http://127.0.0.1:4000"
+  mcp_base_url: "http://127.0.0.1:4000",
+  # Writable root for operator/orchestrator-authored subagent templates (the
+  # read-only built-ins ship at priv/orchestrator/agents). Markdown-with-frontmatter
+  # files, versioned on the filesystem. Overridden to a tmp dir in test.exs.
+  agents_dir: Path.expand("~/.repo_builder/agents")
 
 # Live-session runtime defaults (BUILD_PROMPT.md §5/§6). Overridable per env.
 config :repo_builder, :session,

@@ -54,6 +54,9 @@ defmodule RepoBuilder.Session.Server do
       field :config, map(), default: %{}
       field :secrets, map(), default: %{}
       field :price_table, map(), default: %{}
+      # Operator-chosen reasoning effort (issue-reasoning-effort). :default ⇒ the
+      # adapter emits no effort/thinking flag (worker sessions also default here).
+      field :reasoning_effort, atom(), default: :default
       field :session_ctx, term(), enforce: false
       field :exec_pid, pid(), enforce: false
       field :os_pid, non_neg_integer(), enforce: false
@@ -126,6 +129,7 @@ defmodule RepoBuilder.Session.Server do
       provider: opts[:provider],
       config: opts[:config] || %{},
       secrets: resolve_secrets(opts, harness),
+      reasoning_effort: opts[:reasoning_effort] || :default,
       price_table: Map.get(config, :price_table, %{}),
       cwd: workspace_path(cfg, opts[:orchestrator_db_id], session_id),
       marker: generate_token(),
@@ -164,6 +168,7 @@ defmodule RepoBuilder.Session.Server do
       sink: self(),
       config: state.config,
       secrets: state.secrets,
+      reasoning_effort: state.reasoning_effort,
       price_table: state.price_table
     }
 

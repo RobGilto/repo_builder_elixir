@@ -53,6 +53,7 @@ defmodule RepoBuilder.Harness.OrchestratorAutonomyTest do
         token: "super-secret-token",
         resume_session_id: nil,
         system_prompt: "be the orchestrator",
+        system_prompt_mode: :append,
         cwd: cwd
       }
 

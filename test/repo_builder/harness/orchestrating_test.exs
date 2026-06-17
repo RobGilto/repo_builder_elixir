@@ -17,6 +17,7 @@ defmodule RepoBuilder.Harness.OrchestratingTest do
         token: "secret-token-xyz",
         resume_session_id: nil,
         system_prompt: "You are the orchestrator.",
+        system_prompt_mode: :append,
         cwd: Path.join(System.tmp_dir!(), "orch-test-#{System.unique_integer([:positive])}")
       },
       overrides

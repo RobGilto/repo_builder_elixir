@@ -77,6 +77,11 @@ const tools = [
         harness: { type: "string", description: "Registered harness (e.g. claude, pi)." },
         model: { type: "string", description: "Optional model override." },
         system_prompt: { type: "string", description: "Optional worker system prompt." },
+        subagent_template: {
+          type: "string",
+          description:
+            "Optional name of a saved subagent template (see list_agent_templates). Applies its body as the worker system prompt and its model/category; explicit system_prompt/model override it. The template name+version are recorded on the worker.",
+        },
       },
       required: ["name"],
     },
@@ -232,6 +237,58 @@ const tools = [
         model: { type: "string", description: "New model." },
       },
       required: [],
+    },
+  },
+  {
+    name: "report_cost",
+    description:
+      "Report this orchestrator's session id, status, running USD cost, cumulative input/output/total tokens, and context-window usage % (with a high-usage warning).",
+    parameters: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "compact_agent",
+    description:
+      "Compact a worker's context by dispatching /compact to it (sugar over command_agent).",
+    parameters: {
+      type: "object",
+      properties: { name: { type: "string", description: "Target worker name." } },
+      required: ["name"],
+    },
+  },
+  {
+    name: "list_agent_templates",
+    description:
+      "List the available subagent templates (name + description) — the reusable worker recipes applicable via create_agent's subagent_template.",
+    parameters: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "get_agent_template",
+    description:
+      "Read one subagent template's current version: description, system-prompt body, and optional model/category/harness.",
+    parameters: {
+      type: "object",
+      properties: { name: { type: "string", description: "Template name." } },
+      required: ["name"],
+    },
+  },
+  {
+    name: "save_agent_template",
+    description:
+      "Create or refine a subagent template, writing a NEW version. system_prompt is the worker recipe body; applicable afterwards via create_agent(subagent_template:).",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Template name (kebab-case, e.g. test-writer)." },
+        description: { type: "string", description: "One-line summary for the subagent map." },
+        system_prompt: { type: "string", description: "The worker's system-prompt body." },
+        model: { type: "string", description: "Optional default model." },
+        category: {
+          type: "string",
+          enum: ["fast", "main", "heavy", "leader"],
+          description: "Optional default worker tier.",
+        },
+      },
+      required: ["name", "description", "system_prompt"],
     },
   },
 ];

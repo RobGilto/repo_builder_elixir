@@ -23,7 +23,7 @@ defmodule RepoBuilder.MixProject do
     [
       plt_file: {:no_warn, "priv/plts/project.plt"},
       plt_core_path: "priv/plts/core.plt",
-      plt_add_apps: [:mix, :ex_unit],
+      plt_add_apps: [:mix, :ex_unit, :yaml_elixir],
       flags: [
         :error_handling,
         :underspecs,
@@ -101,6 +101,8 @@ defmodule RepoBuilder.MixProject do
       {:typedstruct, "~> 0.5", runtime: false},
       # Runtime conformance of untrusted harness JSON at the boundary (§4).
       {:type_check, "~> 0.13.7"},
+      # YAML frontmatter parsing for subagent template files (.claude/agents/*.md).
+      {:yaml_elixir, "~> 2.11"},
       # --- Tooling / quality ---
       # Phoenix runtime-intelligence MCP (project_eval/get_logs/get_source_location),
       # served at /tidewave/mcp via `plug Tidewave` in dev only (§2). Not in the prod

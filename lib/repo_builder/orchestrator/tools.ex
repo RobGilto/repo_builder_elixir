@@ -15,7 +15,7 @@ defmodule RepoBuilder.Orchestrator.Tools do
   alias RepoBuilder.Dashboard
   alias RepoBuilder.Harness.Pi.Models, as: PiModels
   alias RepoBuilder.Harness.Registry
-  alias RepoBuilder.Orchestrator.Orchestrator
+  alias RepoBuilder.Orchestrator.{ContextWindow, Orchestrator, Template, Templates}
 
   # Changeset failures are stringified at the boundary (`changeset_reason/1`), so a
   # reason that escapes a tool is always an atom or a string.
@@ -68,6 +68,13 @@ defmodule RepoBuilder.Orchestrator.Tools do
   defp dispatch("set_orchestrator_config", orchestrator_id, args),
     do: set_orchestrator_config(orchestrator_id, args)
 
+  defp dispatch("report_cost", orchestrator_id, _args), do: report_cost(orchestrator_id)
+  defp dispatch("compact_agent", orchestrator_id, args), do: compact_agent(orchestrator_id, args)
+
+  defp dispatch("list_agent_templates", _orchestrator_id, _args), do: list_agent_templates()
+  defp dispatch("get_agent_template", _orchestrator_id, args), do: get_agent_template(args)
+  defp dispatch("save_agent_template", _orchestrator_id, args), do: save_agent_template(args)
+
   defp dispatch(_tool, _orchestrator_id, _args), do: {:error, :unknown_tool}
 
   # --- tools ---
@@ -75,6 +82,8 @@ defmodule RepoBuilder.Orchestrator.Tools do
   @spec create_agent(Ecto.UUID.t(), map()) :: result()
   defp create_agent(orchestrator_id, args) do
     with {:ok, name} <- fetch_string(args, "name"),
+         {:ok, template} <- resolve_template(args),
+         args = apply_template_args(args, template),
          {:ok, spec} <- resolve_agent_spec(orchestrator_id, args) do
       params = %{
         "name" => name,
@@ -83,8 +92,8 @@ defmodule RepoBuilder.Orchestrator.Tools do
         "system_prompt" => blank_to_nil(args["system_prompt"]),
         # The worker's `provider` column is a closed enum that can't hold pi's open
         # provider set, so the real provider rides in `config` and is threaded into
-        # the session at command time.
-        "config" => provider_config(spec.provider)
+        # the session at command time. Template provenance (name+version) rides here too.
+        "config" => agent_config(spec.provider, template)
       }
 
       case Agents.create_worker(orchestrator_id, params) do
@@ -156,6 +165,75 @@ defmodule RepoBuilder.Orchestrator.Tools do
   # `map()` spec, which Dialyzer rejects as a supertype under :underspecs.
   defp provider_config(nil), do: %{}
   defp provider_config(provider), do: %{"provider" => provider}
+
+  # Fold the worker provider plus (optional) template provenance into the worker's
+  # open `config` map. Inference-only spec (mirrors `provider_config/1`).
+  defp agent_config(provider, nil), do: provider_config(provider)
+
+  defp agent_config(provider, %Template{} = template) do
+    provider
+    |> provider_config()
+    |> Map.merge(%{"template_name" => template.name, "template_version" => template.version})
+  end
+
+  # Resolve an optional `subagent_template` to its current version; nil when absent.
+  # An unknown name returns a helpful error listing the available template names.
+  @spec resolve_template(map()) :: {:ok, Template.t() | nil} | {:error, reason()}
+  defp resolve_template(args) do
+    case blank_to_nil(args["subagent_template"]) do
+      nil ->
+        {:ok, nil}
+
+      name ->
+        case Templates.fetch(name) do
+          {:ok, template} -> {:ok, template}
+          {:error, :not_found} -> {:error, template_not_found(name)}
+          {:error, reason} -> {:error, normalize_reason(reason)}
+        end
+    end
+  end
+
+  # Layer a template's body/model/category UNDER the explicit args (explicit wins).
+  # The category default only applies when the caller pinned no concrete target
+  # (category/model/harness), so an explicit `model` is never shadowed by the
+  # template's category.
+  @spec apply_template_args(map(), Template.t() | nil) :: map()
+  defp apply_template_args(args, nil), do: args
+
+  defp apply_template_args(args, %Template{} = template) do
+    args =
+      args |> put_default("system_prompt", template.body) |> put_default("model", template.model)
+
+    if explicit_target?(args),
+      do: args,
+      else: put_default(args, "category", template.category)
+  end
+
+  @spec explicit_target?(map()) :: boolean()
+  defp explicit_target?(args) do
+    not is_nil(blank_to_nil(args["category"])) or
+      not is_nil(blank_to_nil(args["model"])) or
+      not is_nil(blank_to_nil(args["harness"]))
+  end
+
+  # Set `key` from `value` only when the caller left it blank (explicit args win).
+  # Inference-only spec — callers pass literal string keys.
+  defp put_default(args, key, value) when is_binary(value) do
+    case blank_to_nil(args[key]) do
+      nil -> Map.put(args, key, value)
+      _present -> args
+    end
+  end
+
+  defp put_default(args, _key, _value), do: args
+
+  @spec template_not_found(String.t()) :: String.t()
+  defp template_not_found(name) do
+    case Enum.map(Templates.list(), & &1.name) do
+      [] -> "unknown subagent_template #{name}; no templates available"
+      names -> "unknown subagent_template #{name}; available: #{Enum.join(names, ", ")}"
+    end
+  end
 
   @spec command_agent(Ecto.UUID.t(), map()) :: result()
   defp command_agent(orchestrator_id, args) do
@@ -392,6 +470,123 @@ defmodule RepoBuilder.Orchestrator.Tools do
         {:ok, %{"harness" => orch.harness, "provider" => orch.provider, "model" => orch.model}}
       end
     end
+  end
+
+  # --- cost / context-window tools ---
+
+  # Occupancy at/above this fraction triggers the high-usage warning.
+  @high_usage_threshold 0.8
+
+  # Inference-only spec — the fully-concrete report map narrows below the hand-written
+  # `result()` contract, which Dialyzer rejects as a supertype under :underspecs
+  # (mirrors `get_config/1`).
+  defp report_cost(orchestrator_id) do
+    with {:ok, orch} <- fetch_orchestrator(orchestrator_id) do
+      harness = orch.harness || ""
+      totals = Orchestrators.token_totals(orch)
+      fraction = ContextWindow.usage_fraction(totals.context, harness, orch.model)
+
+      report = %{
+        "session_id" => orch.session_id,
+        "status" => to_string(orch.status),
+        "cost_usd" => Decimal.to_string(orch.total_cost_usd),
+        "input_tokens" => totals.input,
+        "output_tokens" => totals.output,
+        "total_tokens" => totals.total,
+        "context_tokens" => totals.context,
+        "context_window" => ContextWindow.size(harness, orch.model),
+        "context_usage_pct" => Float.round(fraction * 100, 1)
+      }
+
+      {:ok, maybe_warn(report, fraction)}
+    end
+  end
+
+  # Inference-only spec (mirrors `report_cost/1`): the concrete report map narrows
+  # below a hand-written `map()` return under :underspecs.
+  defp maybe_warn(report, fraction) when fraction >= @high_usage_threshold do
+    Map.put(
+      report,
+      "warning",
+      "context usage at #{Float.round(fraction * 100, 1)}% — compact workers nearing their limit or suggest the operator run /compact"
+    )
+  end
+
+  defp maybe_warn(report, _fraction), do: report
+
+  # Thin sugar over `command_agent`: resolve the worker by name and dispatch the
+  # `/compact` slash command (both Claude and pi honor it). Reuses the command path,
+  # so an unknown worker returns its `{:error, ...}` unchanged.
+  @spec compact_agent(Ecto.UUID.t(), map()) :: result()
+  defp compact_agent(orchestrator_id, args) do
+    with {:ok, name} <- fetch_string(args, "name") do
+      command_agent(orchestrator_id, %{"name" => name, "prompt" => "/compact"})
+    end
+  end
+
+  # --- subagent-template tools ---
+
+  @spec list_agent_templates() :: result()
+  defp list_agent_templates do
+    templates =
+      Enum.map(Templates.list(), fn template ->
+        %{
+          "name" => template.name,
+          "description" => template.description,
+          "version" => template.version
+        }
+      end)
+
+    {:ok, %{"templates" => templates, "count" => length(templates)}}
+  end
+
+  @spec get_agent_template(map()) :: result()
+  defp get_agent_template(args) do
+    with {:ok, name} <- fetch_string(args, "name") do
+      case Templates.fetch(name) do
+        {:ok, template} -> {:ok, template_view(template)}
+        {:error, :not_found} -> {:error, template_not_found(name)}
+        {:error, reason} -> {:error, normalize_reason(reason)}
+      end
+    end
+  end
+
+  @spec save_agent_template(map()) :: result()
+  defp save_agent_template(args) do
+    with {:ok, name} <- fetch_string(args, "name"),
+         {:ok, description} <- fetch_string(args, "description"),
+         {:ok, body} <- fetch_string(args, "system_prompt") do
+      attrs = %{
+        "name" => name,
+        "description" => description,
+        "body" => body,
+        "model" => blank_to_nil(args["model"]),
+        "category" => blank_to_nil(args["category"]),
+        "author" => :orchestrator
+      }
+
+      case Templates.save(attrs) do
+        {:ok, template} ->
+          {:ok, %{"status" => "saved", "name" => template.name, "version" => template.version}}
+
+        {:error, reason} ->
+          {:error, normalize_reason(reason)}
+      end
+    end
+  end
+
+  @spec template_view(Template.t()) :: map()
+  defp template_view(template) do
+    %{
+      "name" => template.name,
+      "description" => template.description,
+      "body" => template.body,
+      "model" => template.model,
+      "category" => template.category,
+      "harness" => template.harness,
+      "version" => template.version,
+      "author" => Atom.to_string(template.author)
+    }
   end
 
   @spec apply_harness(Ecto.UUID.t(), String.t() | nil) ::

@@ -683,12 +683,27 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   @spec hide_settings(JS.t()) :: JS.t()
   def hide_settings(js \\ %JS{}), do: JS.hide(js, to: "#settings-modal")
 
-  attr :settings_tab, :atom, default: :general, values: [:general, :appearance, :about]
+  attr :settings_tab, :atom,
+    default: :general,
+    values: [:general, :appearance, :about, :prompt, :templates]
+
   attr :view_mode, :atom, default: :logs
   attr :chat_width, :atom, default: :sm
   attr :auto_follow?, :boolean, default: true
   attr :show_thinking?, :boolean, default: true
   attr :harnesses, :list, default: []
+  attr :system_prompt, :string, default: ""
+  attr :system_prompt_mode, :atom, default: :append, values: [:append, :replace]
+  attr :default_system_prompt, :string, default: ""
+
+  attr :reasoning_effort, :atom,
+    default: :default,
+    values: [:default, :off, :low, :medium, :high, :max]
+
+  attr :reasoning_efforts, :list, default: []
+  attr :template_rows, :list, default: []
+  attr :selected_template, :any, default: nil
+  attr :template_versions, :list, default: []
 
   @doc """
   Settings modal with a vertical tab rail (General / Appearance / About). Shown and
@@ -719,6 +734,8 @@ defmodule RepoBuilderWeb.ConsoleComponents do
           >
             <.settings_tab_button tab={:general} active={@settings_tab} label="General" />
             <.settings_tab_button tab={:appearance} active={@settings_tab} label="Appearance" />
+            <.settings_tab_button tab={:prompt} active={@settings_tab} label="System Prompt" />
+            <.settings_tab_button tab={:templates} active={@settings_tab} label="Agent Templates" />
             <.settings_tab_button tab={:about} active={@settings_tab} label="About" />
           </nav>
 
@@ -756,6 +773,25 @@ defmodule RepoBuilderWeb.ConsoleComponents do
                   {if @show_thinking?, do: "ON", else: "OFF"}
                 </button>
               </.settings_field>
+
+              <.settings_field label="Reasoning effort">
+                <div id="settings-reasoning-effort" class="cns-toggle">
+                  <button
+                    :for={e <- @reasoning_efforts}
+                    type="button"
+                    id={"settings-reasoning-effort-#{e}"}
+                    phx-click="set_reasoning_effort"
+                    phx-value-effort={e}
+                    class={["cns-toggle__seg", @reasoning_effort == e && "cns-toggle__seg--active"]}
+                  >
+                    {e |> Atom.to_string() |> String.upcase()}
+                  </button>
+                </div>
+                <p class="mt-1 text-[0.625rem]" style="color: var(--cns-text-2)">
+                  How hard the orchestrator's model reasons. DEFAULT keeps each harness's
+                  own default (no flag); MAX maps to each harness's top level.
+                </p>
+              </.settings_field>
             </div>
 
             <div :if={@settings_tab == :appearance} class="flex flex-col gap-4">
@@ -773,10 +809,232 @@ defmodule RepoBuilderWeb.ConsoleComponents do
                   </button>
                 </div>
               </.settings_field>
+            </div>
 
-              <p class="text-[0.625rem]" style="color: var(--cns-text-2)">
-                Theme can be switched with the toggle at the bottom-right of the console.
-              </p>
+            <div :if={@settings_tab == :prompt} class="flex flex-col gap-4">
+              <.form
+                id="settings-system-prompt-form"
+                for={%{}}
+                phx-submit="save_system_prompt"
+                class="flex flex-col gap-4"
+              >
+                <.settings_field label="Apply mode">
+                  <div class="cns-toggle">
+                    <button
+                      :for={m <- [:append, :replace]}
+                      type="button"
+                      id={"settings-system-prompt-mode-#{m}"}
+                      phx-click="set_system_prompt_mode"
+                      phx-value-mode={m}
+                      class={[
+                        "cns-toggle__seg",
+                        @system_prompt_mode == m && "cns-toggle__seg--active"
+                      ]}
+                    >
+                      {m |> Atom.to_string() |> String.upcase()}
+                    </button>
+                  </div>
+                  <input type="hidden" name="mode" value={@system_prompt_mode} />
+                  <p class="mt-1 text-[0.625rem]" style="color: var(--cns-text-2)">
+                    APPEND adds your prompt onto the harness default. REPLACE swaps the
+                    harness's default coding-agent prompt out entirely — including its
+                    built-in tool/safety guidance.
+                  </p>
+                </.settings_field>
+
+                <.settings_field label="Custom system prompt (blank = generated default)">
+                  <textarea
+                    id="settings-system-prompt"
+                    name="system_prompt"
+                    rows="8"
+                    class="w-full rounded border bg-transparent p-2 font-mono text-xs"
+                    style="border-color: var(--cns-border)"
+                    phx-debounce="300"
+                  ><%= @system_prompt %></textarea>
+                </.settings_field>
+
+                <div class="flex gap-2">
+                  <button
+                    type="submit"
+                    id="settings-system-prompt-save"
+                    class="cns-chip cns-chip--active cns-chip--hook"
+                  >
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    id="settings-system-prompt-reset"
+                    phx-click="reset_system_prompt"
+                    class="cns-chip"
+                  >
+                    Reset to default
+                  </button>
+                </div>
+              </.form>
+
+              <.settings_field label="Generated default (preview)">
+                <pre
+                  id="settings-system-prompt-default"
+                  class="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded border p-2 font-mono text-[0.625rem]"
+                  style="border-color: var(--cns-border); color: var(--cns-text-2)"
+                  phx-no-curly-interpolation
+                ><%= @default_system_prompt %></pre>
+              </.settings_field>
+            </div>
+
+            <div :if={@settings_tab == :templates} class="flex gap-3">
+              <div
+                class="flex w-40 shrink-0 flex-col gap-1 border-r pr-2"
+                style="border-color: var(--cns-border)"
+              >
+                <button
+                  type="button"
+                  id="agent-template-new"
+                  phx-click="new_template"
+                  class={[
+                    "cns-chip text-left",
+                    is_nil(@selected_template) && "cns-chip--active cns-chip--hook"
+                  ]}
+                >
+                  + New template
+                </button>
+                <button
+                  :for={row <- @template_rows}
+                  type="button"
+                  id={"agent-template-row-#{row.name}"}
+                  phx-click="select_template"
+                  phx-value-name={row.name}
+                  class={[
+                    "cns-chip text-left",
+                    template_name(@selected_template) == row.name && "cns-chip--active cns-chip--hook"
+                  ]}
+                >
+                  {row.name} · v{row.version}
+                </button>
+                <p
+                  :if={@template_rows == []}
+                  class="text-[0.625rem]"
+                  style="color: var(--cns-text-2)"
+                >
+                  No templates yet.
+                </p>
+              </div>
+
+              <div class="flex min-w-0 flex-1 flex-col gap-3">
+                <.form
+                  id="agent-template-form"
+                  for={%{}}
+                  phx-submit="save_agent_template"
+                  class="flex flex-col gap-3"
+                >
+                  <.settings_field label="Name (kebab-case)">
+                    <input
+                      id="agent-template-name"
+                      name="name"
+                      value={template_field(@selected_template, :name)}
+                      class="w-full rounded border bg-transparent p-2 font-mono text-xs"
+                      style="border-color: var(--cns-border)"
+                    />
+                  </.settings_field>
+
+                  <.settings_field label="Description">
+                    <input
+                      id="agent-template-description"
+                      name="description"
+                      value={template_field(@selected_template, :description)}
+                      class="w-full rounded border bg-transparent p-2 text-xs"
+                      style="border-color: var(--cns-border)"
+                    />
+                  </.settings_field>
+
+                  <div class="flex gap-3">
+                    <.settings_field label="Model (optional)">
+                      <input
+                        id="agent-template-model"
+                        name="model"
+                        value={template_field(@selected_template, :model)}
+                        class="w-full rounded border bg-transparent p-2 font-mono text-xs"
+                        style="border-color: var(--cns-border)"
+                      />
+                    </.settings_field>
+
+                    <.settings_field label="Category (optional)">
+                      <select
+                        id="agent-template-category"
+                        name="category"
+                        class="w-full rounded border bg-transparent p-2 text-xs"
+                        style="border-color: var(--cns-border)"
+                      >
+                        <option
+                          value=""
+                          selected={template_field(@selected_template, :category) == ""}
+                        >
+                          —
+                        </option>
+                        <option
+                          :for={c <- ~w(fast main heavy leader)}
+                          value={c}
+                          selected={template_field(@selected_template, :category) == c}
+                        >
+                          {c}
+                        </option>
+                      </select>
+                    </.settings_field>
+                  </div>
+
+                  <.settings_field label="System prompt (worker body)">
+                    <textarea
+                      id="agent-template-body"
+                      name="system_prompt"
+                      rows="8"
+                      class="w-full rounded border bg-transparent p-2 font-mono text-xs"
+                      style="border-color: var(--cns-border)"
+                    ><%= template_field(@selected_template, :body) %></textarea>
+                  </.settings_field>
+
+                  <div class="flex gap-2">
+                    <button
+                      type="submit"
+                      id="agent-template-save"
+                      class="cns-chip cns-chip--active cns-chip--hook"
+                    >
+                      Save new version
+                    </button>
+                    <button
+                      :if={not is_nil(@selected_template)}
+                      type="button"
+                      id="agent-template-delete"
+                      phx-click="delete_template"
+                      phx-value-name={template_name(@selected_template)}
+                      data-confirm="Delete this template and all its versions?"
+                      class="cns-chip"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </.form>
+
+                <.settings_field :if={@template_versions != []} label="Version history">
+                  <div class="flex flex-col gap-1">
+                    <div
+                      :for={v <- @template_versions}
+                      class="flex items-center justify-between text-xs"
+                    >
+                      <span style="color: var(--cns-text-2)">v{v.version} · {v.author}</span>
+                      <button
+                        type="button"
+                        id={"agent-template-restore-#{v.version}"}
+                        phx-click="restore_template"
+                        phx-value-name={template_name(@selected_template)}
+                        phx-value-version={v.version}
+                        class="cns-chip"
+                      >
+                        Restore
+                      </button>
+                    </div>
+                  </div>
+                </.settings_field>
+              </div>
             </div>
 
             <div :if={@settings_tab == :about} class="flex flex-col gap-2 text-xs">
@@ -835,6 +1093,23 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     </div>
     """
   end
+
+  # Read a string-coerced field off the selected `Template` struct for a form value,
+  # tolerating `nil` (the "+ New" blank-form state) and nil optional fields.
+  @spec template_field(RepoBuilder.Orchestrator.Template.t() | nil, atom()) :: String.t()
+  defp template_field(nil, _field), do: ""
+
+  defp template_field(template, field) do
+    case Map.get(template, field) do
+      value when is_binary(value) -> value
+      _other -> ""
+    end
+  end
+
+  # The name of the selected template, or `nil` for the blank-form state.
+  @spec template_name(RepoBuilder.Orchestrator.Template.t() | nil) :: String.t() | nil
+  defp template_name(nil), do: nil
+  defp template_name(template), do: template.name
 
   attr :rows, :list,
     default: [],
@@ -933,7 +1208,9 @@ defmodule RepoBuilderWeb.ConsoleComponents do
       <div class="cns-cmd-panel">
         <div class="mb-2 flex items-center justify-between">
           <span class="text-xs font-semibold" style="color: var(--cns-cyan)">COMMAND (⌘K)</span>
-          <button type="button" phx-click={hide_command()} class="cns-chip">Esc</button>
+          <button id="prompt-close" type="button" phx-click={hide_command()} class="cns-chip">
+            Esc
+          </button>
         </div>
 
         <form id="command-form" phx-submit={JS.push("run_command") |> hide_command()}>

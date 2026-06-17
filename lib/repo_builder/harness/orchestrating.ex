@@ -31,6 +31,10 @@ defmodule RepoBuilder.Harness.Orchestrating do
     * `:token`         — the per-orchestrator bearer token (env only, never argv);
     * `:resume_session_id` — prior CLI session id to resume, or `nil` on first turn;
     * `:system_prompt` — the orchestrator system prompt to inject;
+    * `:system_prompt_mode` — `:append` ⇒ map to the harness's append-prompt flag
+      (Claude/pi `--append-system-prompt`); `:replace` ⇒ map to the harness's
+      replace-prompt flag (Claude/pi `--system-prompt`), swapping out the harness
+      default entirely;
     * `:cwd`           — the session working directory (where to write config files).
   """
   @type tool_ctx :: %{
@@ -39,6 +43,7 @@ defmodule RepoBuilder.Harness.Orchestrating do
           required(:token) => String.t(),
           required(:resume_session_id) => String.t() | nil,
           required(:system_prompt) => String.t(),
+          required(:system_prompt_mode) => :append | :replace,
           required(:cwd) => Path.t()
         }
 

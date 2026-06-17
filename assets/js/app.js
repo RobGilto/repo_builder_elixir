@@ -86,7 +86,10 @@ document.addEventListener("keydown", e => {
   const meta = e.metaKey || e.ctrlKey
   if (meta && (e.key === "k" || e.key === "K")) {
     e.preventDefault()
-    document.getElementById("prompt-toggle")?.click()
+    // Toggle: if the modal is already open, close it; otherwise open + focus.
+    const modal = document.getElementById("command-input")
+    const open = modal && modal.style.display !== "none"
+    document.getElementById(open ? "prompt-close" : "prompt-toggle")?.click()
   } else if (meta && (e.key === "j" || e.key === "J")) {
     e.preventDefault()
     document.getElementById("view-toggle")?.click()
@@ -94,6 +97,9 @@ document.addEventListener("keydown", e => {
     // Enter sends the command (Shift+Enter keeps the newline).
     e.preventDefault()
     e.target.form?.requestSubmit()
+    // requestSubmit dispatches synchronously, so the command is already read —
+    // clear the textarea so the modal reopens empty next time.
+    e.target.value = ""
   }
 })
 
