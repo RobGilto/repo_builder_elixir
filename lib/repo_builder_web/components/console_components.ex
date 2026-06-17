@@ -1194,6 +1194,10 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   attr :agents, :list, default: [], doc: "list of agent names"
   attr :example_adw, :string, default: "plan → build → review"
   attr :uploads, :map, required: true
+  attr :adw_builder?, :boolean, default: false
+  attr :adw_steps, :list, default: []
+  attr :adw_name, :string, default: ""
+  attr :adw_local?, :boolean, default: false
 
   @doc "Bottom-anchored ⌘K command-input modal with a system-info panel (harnesses/agents/example ADW)."
   @spec global_command_input(map()) :: Phoenix.LiveView.Rendered.t()
@@ -1207,11 +1211,28 @@ defmodule RepoBuilderWeb.ConsoleComponents do
       phx-key="Escape"
     >
       <div class="cns-cmd-panel">
+        <%!-- Header: title + mode toggle + close --%>
         <div class="mb-2 flex items-center justify-between">
-          <span class="text-xs font-semibold" style="color: var(--cns-cyan)">COMMAND (⌘K)</span>
           <div class="flex items-center gap-2">
-            <label for={@uploads.attachments.ref} class="cns-chip cursor-pointer" title="Attach files">
-              📎 <.live_file_input upload={@uploads.attachments} class="sr-only" />
+            <span class="text-xs font-semibold" style="color: var(--cns-cyan)">
+              {if @adw_builder?, do: "ADW BUILDER", else: "COMMAND (⌘K)"}
+            </span>
+            <button
+              type="button"
+              phx-click="toggle_adw_builder"
+              class={["cns-chip", @adw_builder? && "cns-chip--active"]}
+              title="Switch to ADW Builder mode"
+            >
+              ADW
+            </button>
+          </div>
+          <div class="flex items-center gap-2">
+            <label
+              for={@uploads.attachments.ref}
+              class="cns-chip cursor-pointer"
+              title="Attach files"
+            >
+              📎 <.live_file_input upload={@uploads.attachments} form="command-form" class="sr-only" />
             </label>
             <button id="prompt-close" type="button" phx-click={hide_command()} class="cns-chip">
               Esc
@@ -1219,81 +1240,212 @@ defmodule RepoBuilderWeb.ConsoleComponents do
           </div>
         </div>
 
-        <form id="command-form" phx-submit={JS.push("run_command") |> hide_command()}>
-          <div
-            id="cmd-drop-zone"
-            phx-drop-target={@uploads.attachments.ref}
-            class="cns-cmd-drop-zone"
+        <%!-- COMMAND MODE --%>
+        <div :if={not @adw_builder?}>
+          <form
+            id="command-form"
+            phx-change="validate_attachments"
+            phx-submit={JS.push("run_command") |> hide_command()}
           >
-            <textarea
-              id="command-textarea"
-              name="command"
-              rows="3"
-              placeholder="Type a command… (Enter ↵ send · Shift+Enter newline · drag & drop or paste images)"
+            <div
+              id="cmd-drop-zone"
+              phx-drop-target={@uploads.attachments.ref}
+              class="cns-cmd-drop-zone"
+            >
+              <textarea
+                id="command-textarea"
+                name="command"
+                rows="3"
+                placeholder="Type a command… (Enter ↵ send · Shift+Enter newline · drag & drop or paste images)"
+                class="cns-cmd-textarea"
+                phx-hook="CommandPaste"
+              ></textarea>
+            </div>
+
+            <div :if={@uploads.attachments.entries != []} class="mt-2 flex flex-wrap gap-2">
+              <div :for={entry <- @uploads.attachments.entries} class="cns-attachment-entry">
+                <.live_img_preview
+                  :if={String.starts_with?(entry.client_type, "image/")}
+                  entry={entry}
+                  class="cns-attachment-thumb"
+                />
+                <span
+                  :if={not String.starts_with?(entry.client_type, "image/")}
+                  class="cns-attachment-name"
+                >
+                  {entry.client_name}
+                </span>
+                <button
+                  type="button"
+                  phx-click="cancel_upload"
+                  phx-value-ref={entry.ref}
+                  class="cns-attachment-remove"
+                  aria-label="Remove"
+                >
+                  ✕
+                </button>
+                <p
+                  :for={err <- upload_errors(@uploads.attachments, entry)}
+                  class="cns-attachment-error"
+                >
+                  {upload_error_to_string(err)}
+                </p>
+              </div>
+            </div>
+          </form>
+
+          <div class="mt-3 grid grid-cols-3 gap-3 text-[0.625rem]">
+            <div>
+              <div class="mb-1 font-semibold" style="color: var(--cns-text-2)">HARNESSES</div>
+              <div class="flex flex-wrap gap-1">
+                <button
+                  :for={h <- @harnesses}
+                  type="button"
+                  class="cns-cmd-chip"
+                  data-copy={h}
+                  phx-hook="ClipboardCopy"
+                  id={"cmd-harness-#{h}"}
+                >
+                  {h}
+                </button>
+              </div>
+            </div>
+            <div>
+              <div class="mb-1 font-semibold" style="color: var(--cns-text-2)">AGENTS</div>
+              <div class="flex flex-wrap gap-1">
+                <span :for={a <- @agents} class="cns-cmd-chip">{a}</span>
+                <span :if={@agents == []} style="color: var(--cns-text-3)">none</span>
+              </div>
+            </div>
+            <div>
+              <div class="mb-1 font-semibold" style="color: var(--cns-text-2)">EXAMPLE ADW</div>
+              <div class="cns-cmd-chip inline-block">{@example_adw}</div>
+            </div>
+          </div>
+        </div>
+
+        <%!-- ADW BUILDER MODE --%>
+        <div :if={@adw_builder?} class="flex flex-col gap-3">
+          <%!-- Workflow name + local toggle --%>
+          <div class="flex items-center gap-2">
+            <input
+              type="text"
+              placeholder="Workflow name (optional)"
+              value={@adw_name}
+              phx-change="adw_set_name"
+              name="name"
               class="cns-cmd-textarea"
-              phx-hook="CommandPaste"
-            ></textarea>
+              style="padding: 0.25rem 0.5rem; height: auto"
+            />
+            <button
+              type="button"
+              phx-click="adw_toggle_local"
+              class={["cns-chip", @adw_local? && "cns-chip--active"]}
+              title="Local mode — no GitHub issue required"
+            >
+              local
+            </button>
           </div>
 
-          <div :if={@uploads.attachments.entries != []} class="mt-2 flex flex-wrap gap-2">
-            <div :for={entry <- @uploads.attachments.entries} class="cns-attachment-entry">
-              <.live_img_preview
-                :if={String.starts_with?(entry.client_type, "image/")}
-                entry={entry}
-                class="cns-attachment-thumb"
-              />
-              <span
-                :if={not String.starts_with?(entry.client_type, "image/")}
-                class="cns-attachment-name"
-              >
-                {entry.client_name}
-              </span>
-              <button
-                type="button"
-                phx-click="cancel_upload"
-                phx-value-ref={entry.ref}
-                class="cns-attachment-remove"
-                aria-label="Remove"
-              >
-                ✕
-              </button>
-              <p
-                :for={err <- upload_errors(@uploads.attachments, entry)}
-                class="cns-attachment-error"
-              >
-                {upload_error_to_string(err)}
-              </p>
-            </div>
-          </div>
-        </form>
-
-        <div class="mt-3 grid grid-cols-3 gap-3 text-[0.625rem]">
+          <%!-- Step palette --%>
           <div>
-            <div class="mb-1 font-semibold" style="color: var(--cns-text-2)">HARNESSES</div>
+            <div class="mb-1 text-[0.625rem] font-semibold" style="color: var(--cns-text-2)">
+              ADD STEP
+            </div>
             <div class="flex flex-wrap gap-1">
               <button
-                :for={h <- @harnesses}
+                :for={step <- ~w(plan patch build test review document ship)}
                 type="button"
+                phx-click="adw_add_step"
+                phx-value-step={step}
                 class="cns-cmd-chip"
-                data-copy={h}
-                phx-hook="ClipboardCopy"
-                id={"cmd-harness-#{h}"}
               >
-                {h}
+                + {step}
               </button>
             </div>
           </div>
-          <div>
-            <div class="mb-1 font-semibold" style="color: var(--cns-text-2)">AGENTS</div>
-            <div class="flex flex-wrap gap-1">
-              <span :for={a <- @agents} class="cns-cmd-chip">{a}</span>
-              <span :if={@agents == []} style="color: var(--cns-text-3)">none</span>
+
+          <%!-- Step list --%>
+          <div class="flex flex-col gap-1">
+            <div
+              :if={@adw_steps == []}
+              class="text-[0.625rem]"
+              style="color: var(--cns-text-3)"
+            >
+              No steps yet — click above to add steps in order.
+            </div>
+
+            <div :for={{step, idx} <- Enum.with_index(@adw_steps)} class="cns-adw-step-row">
+              <div class="flex items-center gap-1">
+                <span class="cns-adw-step-num">{idx + 1}</span>
+                <span class="cns-adw-step-name">{step.name}</span>
+
+                <button
+                  type="button"
+                  phx-click="adw_toggle_step"
+                  phx-value-id={step.id}
+                  class="cns-chip"
+                  title="View default prompt"
+                  style="font-size: 0.5rem; padding: 1px 4px"
+                >
+                  {if step.expanded, do: "▲", else: "▼"}
+                </button>
+
+                <div class="ml-auto flex items-center gap-1">
+                  <button
+                    type="button"
+                    phx-click="adw_move_step"
+                    phx-value-id={step.id}
+                    phx-value-dir="up"
+                    class="cns-chip"
+                    style="font-size: 0.5rem; padding: 1px 4px"
+                    disabled={idx == 0}
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    phx-click="adw_move_step"
+                    phx-value-id={step.id}
+                    phx-value-dir="down"
+                    class="cns-chip"
+                    style="font-size: 0.5rem; padding: 1px 4px"
+                    disabled={idx == length(@adw_steps) - 1}
+                  >
+                    ↓
+                  </button>
+                  <button
+                    type="button"
+                    phx-click="adw_remove_step"
+                    phx-value-id={step.id}
+                    class="cns-chip"
+                    style="font-size: 0.5rem; padding: 1px 4px; color: var(--cns-red, #f87171)"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+
+              <div
+                :if={step.expanded}
+                class="mt-1 rounded p-2 text-[0.6rem]"
+                style="background: var(--cns-surface-3); color: var(--cns-text-2)"
+              >
+                {adw_step_hint(step.name)}
+              </div>
             </div>
           </div>
-          <div>
-            <div class="mb-1 font-semibold" style="color: var(--cns-text-2)">EXAMPLE ADW</div>
-            <div class="cns-cmd-chip inline-block">{@example_adw}</div>
-          </div>
+
+          <%!-- Launch button --%>
+          <button
+            type="button"
+            phx-click="run_adw_builder"
+            class="cns-chip"
+            style="align-self: flex-end; color: var(--cns-cyan)"
+            disabled={@adw_steps == []}
+          >
+            ▶ Launch ADW
+          </button>
         </div>
       </div>
     </div>
@@ -1301,6 +1453,30 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   end
 
   # --- private helpers ------------------------------------------------------
+
+  @spec adw_step_hint(String.t()) :: String.t()
+  defp adw_step_hint("plan"),
+    do: "/feature <spec-file> — AI reads the spec and writes a detailed implementation plan."
+
+  defp adw_step_hint("patch"),
+    do: "/feature <spec-file> — like plan but for a targeted patch/hotfix."
+
+  defp adw_step_hint("build"),
+    do: "/implement <plan-file> — reads the plan and implements all tasks; leaves code green."
+
+  defp adw_step_hint("test"),
+    do: "/test <spec-file> — writes and runs tests to cover the plan's acceptance criteria."
+
+  defp adw_step_hint("review"),
+    do: "/review <spec-file> — reviews the git diff against the spec; passes or raises issues."
+
+  defp adw_step_hint("document"),
+    do: "/docs — generates or updates documentation based on the implemented changes."
+
+  defp adw_step_hint("ship"),
+    do: "/ship — finalises the branch, opens a PR, and posts a summary comment."
+
+  defp adw_step_hint(other), do: "/#{other} — custom step."
 
   @spec upload_error_to_string(atom()) :: String.t()
   defp upload_error_to_string(:too_large), do: "File too large (max 10 MB)"

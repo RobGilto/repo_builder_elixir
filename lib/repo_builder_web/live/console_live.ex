@@ -35,7 +35,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
       event_detail_panel: 1
     ]
 
-  alias RepoBuilder.{Agents, Dashboard, Logs, Orchestrators, Session, Workflows}
+  alias RepoBuilder.{Agents, Dashboard, Logs, Orchestrators, Session, WorkflowEngine, Workflows}
   alias RepoBuilder.Agents.Agent
   alias RepoBuilder.Harness.Event
   alias RepoBuilder.Harness.Pi.Models, as: PiModels
@@ -120,7 +120,13 @@ defmodule RepoBuilderWeb.ConsoleLive do
         # "—" until a priced amount arrives (§ edge cases).
         cost: nil,
         connected?: connected?(socket),
-        harness_options: HarnessRegistry.known()
+        harness_options: HarnessRegistry.known(),
+        # ADW Builder mode
+        adw_builder?: false,
+        adw_steps: [],
+        adw_name: "",
+        adw_harness: nil,
+        adw_local?: false
       )
 
     socket =
@@ -565,6 +571,103 @@ defmodule RepoBuilderWeb.ConsoleLive do
     {:noreply, assign(socket, :selected_agent_id, id)}
   end
 
+  def handle_event("toggle_adw_builder", _params, socket) do
+    {:noreply, assign(socket, adw_builder?: !socket.assigns.adw_builder?)}
+  end
+
+  def handle_event("adw_add_step", %{"step" => step}, socket) do
+    steps = socket.assigns.adw_steps
+    id = if steps == [], do: 1, else: Enum.max_by(steps, & &1.id).id + 1
+    new_step = %{id: id, name: step, expanded: false}
+    {:noreply, assign(socket, adw_steps: steps ++ [new_step])}
+  end
+
+  def handle_event("adw_remove_step", %{"id" => id}, socket) do
+    id = String.to_integer(id)
+    {:noreply, assign(socket, adw_steps: Enum.reject(socket.assigns.adw_steps, &(&1.id == id)))}
+  end
+
+  def handle_event("adw_move_step", %{"id" => id, "dir" => dir}, socket) do
+    id = String.to_integer(id)
+    steps = socket.assigns.adw_steps
+    idx = Enum.find_index(steps, &(&1.id == id))
+    new_idx = if dir == "up", do: idx - 1, else: idx + 1
+
+    if new_idx < 0 or new_idx >= length(steps) do
+      {:noreply, socket}
+    else
+      {item, rest} = List.pop_at(steps, idx)
+      {:noreply, assign(socket, adw_steps: List.insert_at(rest, new_idx, item))}
+    end
+  end
+
+  def handle_event("adw_toggle_step", %{"id" => id}, socket) do
+    id = String.to_integer(id)
+
+    steps =
+      Enum.map(socket.assigns.adw_steps, fn s ->
+        if s.id == id, do: %{s | expanded: !s.expanded}, else: s
+      end)
+
+    {:noreply, assign(socket, adw_steps: steps)}
+  end
+
+  def handle_event("adw_set_name", %{"name" => name}, socket) do
+    {:noreply, assign(socket, adw_name: name)}
+  end
+
+  def handle_event("adw_toggle_local", _params, socket) do
+    {:noreply, assign(socket, adw_local?: !socket.assigns.adw_local?)}
+  end
+
+  def handle_event("run_adw_builder", _params, socket) do
+    steps = socket.assigns.adw_steps
+    harness = socket.assigns.adw_harness || socket.assigns.orchestrator_harness || "fake"
+    name = if socket.assigns.adw_name == "", do: "custom-adw", else: socket.assigns.adw_name
+    name = String.replace(name, " ", "-")
+
+    if steps == [] do
+      {:noreply, put_flash(socket, :error, "Add at least one step before launching")}
+    else
+      step_list =
+        steps
+        |> Enum.map(fn s ->
+          %{
+            "name" => s.name,
+            "harness" => harness,
+            "on_success" => "done",
+            "on_failure" => "abort"
+          }
+        end)
+        |> Enum.with_index()
+        |> Enum.map(fn {step, i} ->
+          next = Enum.at(steps, i + 1)
+          if next, do: Map.put(step, "on_success", next.name), else: step
+        end)
+
+      case Workflows.create_workflow(%{
+             name: "#{name}-#{System.unique_integer([:positive])}",
+             type: "custom",
+             steps: step_list
+           }) do
+        {:ok, wf} ->
+          case WorkflowEngine.start_workflow(wf, inputs: %{"input" => name}) do
+            {:ok, _run_id, _pid} ->
+              {:noreply,
+               socket
+               |> assign(adw_builder?: false, adw_steps: [], adw_name: "")
+               |> put_flash(:info, "ADW launched — check the ADWS tab")}
+
+            {:error, reason} ->
+              {:noreply, put_flash(socket, :error, "Could not start ADW: #{inspect(reason)}")}
+          end
+
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Could not create workflow: #{inspect(reason)}")}
+      end
+    end
+  end
+
   # The ⌘K command modal is the sole prompt input: it routes to the orchestrator
   # (or the manually selected agent, if any) via run_prompt/4. The modal hides
   # itself client-side (hide_command/0) on submit.
@@ -594,6 +697,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
   def handle_event("cancel_upload", %{"ref" => ref}, socket) do
     {:noreply, cancel_upload(socket, :attachments, ref)}
   end
+
+  # Required for `allow_upload`: LiveView only tracks selected/pasted files when the
+  # upload input's form carries a `phx-change`. The validation itself is handled by
+  # the upload config (accept/max_*), so this is a no-op acknowledgement.
+  def handle_event("validate_attachments", _params, socket), do: {:noreply, socket}
 
   # --- filter handlers (re-stream from the bounded buffer; streams aren't filterable) ---
 
@@ -1536,6 +1644,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
         harnesses={@harness_options}
         agents={Enum.map(@agents, & &1.name)}
         uploads={@uploads}
+        adw_builder?={@adw_builder?}
+        adw_steps={@adw_steps}
+        adw_name={@adw_name}
+        adw_local?={@adw_local?}
       />
 
       <.agent_models_modal rows={@agent_model_rows} />

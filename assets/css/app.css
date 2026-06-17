@@ -474,3 +474,26 @@
   color: var(--cns-red, #f87171);
   font-size: 0.5rem;
 }
+
+/* ADW Builder */
+.cns-chip--active {
+  background: var(--cns-cyan);
+  color: var(--cns-bg, #0d1117);
+}
+.cns-adw-step-row {
+  background: var(--cns-surface-2);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 0.625rem;
+}
+.cns-adw-step-num {
+  color: var(--cns-text-3);
+  font-size: 0.55rem;
+  min-width: 12px;
+}
+.cns-adw-step-name {
+  color: var(--cns-cyan);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.6rem;
+}
