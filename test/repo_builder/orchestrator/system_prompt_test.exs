@@ -67,6 +67,14 @@ defmodule RepoBuilder.Orchestrator.SystemPromptTest do
     assert prompt =~ "No subagent templates yet"
   end
 
+  test "the AVAILABLE ADW TYPES block lists the catalog's workflow types" do
+    prompt = SystemPrompt.build(orchestrator())
+
+    assert prompt =~ "Available ADW types"
+    assert prompt =~ "- plan_build:"
+    assert prompt =~ "- plan_build_review_fix:"
+  end
+
   test "includes the context-management block referencing report_cost + compaction" do
     prompt = SystemPrompt.build(orchestrator())
 

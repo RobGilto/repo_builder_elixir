@@ -4,12 +4,15 @@ defmodule RepoBuilder.WorkflowEngine do
   durable `workflow_runs` row (source of truth) and starts a `Runner` under
   `RepoBuilder.WorkflowSupervisor`.
   """
+  alias RepoBuilder.Dashboard
   alias RepoBuilder.Workers.StepWorker
-  alias RepoBuilder.WorkflowEngine.Runner
+  alias RepoBuilder.WorkflowEngine.{Catalog, Runner}
   alias RepoBuilder.Workflows
-  alias RepoBuilder.Workflows.Workflow
+  alias RepoBuilder.Workflows.{Workflow, WorkflowRun}
 
   @sup RepoBuilder.WorkflowSupervisor
+
+  @type reason :: atom() | Ecto.Changeset.t()
 
   @doc "Create a run and start its Runner. Returns `{:ok, run_id, runner_pid}`."
   @spec start_workflow(Workflow.t(), keyword()) :: {:ok, Ecto.UUID.t(), pid()} | {:error, term()}
@@ -64,50 +67,61 @@ defmodule RepoBuilder.WorkflowEngine do
   end
 
   @doc """
-  The canonical `plan → build → review → fix` example ADW step list, parameterized
-  by harness. Deterministic edges: plan→build→review, review succeeds to `:done`
-  or branches to `fix` on failure, fix→`:done`.
+  Build and persist a `Workflow` for a catalog `type` slug on `harness`. The chosen
+  type is recorded on the row. An unknown type is `{:error, :unknown_type}` (validate
+  at the tool boundary for a helpful message).
   """
-  @spec example_steps(String.t()) :: [map()]
-  def example_steps(harness \\ "fake") do
-    [
-      %{
-        "name" => "plan",
-        "harness" => harness,
-        "prompt_template" => "Plan the work for: {{input}}",
-        "on_success" => "build",
-        "on_failure" => "abort"
-      },
-      %{
-        "name" => "build",
-        "harness" => harness,
-        "prompt_template" => "Build from the plan: {{plan}}",
-        "on_success" => "review",
-        "on_failure" => "abort"
-      },
-      %{
-        "name" => "review",
-        "harness" => harness,
-        "prompt_template" => "Review the build: {{build}}",
-        "on_success" => "done",
-        "on_failure" => "fix"
-      },
-      %{
-        "name" => "fix",
-        "harness" => harness,
-        "prompt_template" => "Fix the issues found: {{review}}",
-        "on_success" => "done",
-        "on_failure" => "abort"
-      }
-    ]
+  @spec create_workflow_of_type(String.t(), String.t(), String.t()) ::
+          {:ok, Workflow.t()} | {:error, reason()}
+  def create_workflow_of_type(name, type, harness \\ "fake") do
+    case Catalog.steps(type, harness) do
+      {:ok, steps} ->
+        Workflows.create_workflow(%{name: name, type: type, state: :active, steps: steps})
+
+      {:error, :unknown_type} = error ->
+        error
+    end
   end
 
-  @doc "Create (and persist) the seeded plan→build→review→fix example workflow."
+  @doc """
+  Create (and persist) the seeded default (`plan_build_review_fix`) workflow.
+  Delegates to `create_workflow_of_type/3` (back-compat).
+  """
   @spec create_example_workflow(String.t(), String.t()) ::
-          {:ok, Workflow.t()} | {:error, Ecto.Changeset.t()}
+          {:ok, Workflow.t()} | {:error, reason()}
   def create_example_workflow(name, harness \\ "fake") do
-    Workflows.create_workflow(%{name: name, state: :active, steps: example_steps(harness)})
+    create_workflow_of_type(name, Catalog.default_type(), harness)
   end
+
+  @doc """
+  The ONE canonical step-session agent id, shared by the live Runner and the durable
+  StepWorker so per-step logs/events correlate under a single prefix (`wf-<run>-<step>`).
+  """
+  @spec step_agent_id(Ecto.UUID.t(), String.t()) :: String.t()
+  def step_agent_id(run_id, step_name), do: "wf-#{run_id}-#{step_name}"
+
+  @doc """
+  Persist one step's per-step state AND broadcast the refreshed per-step progress —
+  the SHARED transition seam called by BOTH the live Runner and the durable
+  StepWorker so the two paths emit the identical observability shape. Returns the
+  updated run (or the unchanged run if the write fails — observability is never
+  load-bearing for the run's terminal status).
+  """
+  @spec record_step_state(WorkflowRun.t(), String.t(), map()) :: WorkflowRun.t()
+  def record_step_state(%WorkflowRun{} = run, step_name, attrs) do
+    case Workflows.put_step_state(run, step_name, attrs) do
+      {:ok, updated} ->
+        _ = Dashboard.broadcast_workflow_step(updated.id, Workflows.run_progress(updated))
+        updated
+
+      {:error, _changeset} ->
+        run
+    end
+  end
+
+  @doc "An ISO-8601 UTC timestamp for per-step `started_at`/`finished_at` fields."
+  @spec now_iso() :: String.t()
+  def now_iso, do: DateTime.utc_now() |> DateTime.to_iso8601()
 
   @spec first_step_name([map()]) :: String.t() | nil
   defp first_step_name([]), do: nil

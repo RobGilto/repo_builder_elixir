@@ -23,6 +23,7 @@ defmodule RepoBuilder.WorkflowEngine.Runner do
   alias RepoBuilder.Harness.Event
   alias RepoBuilder.Logs.Usage
   alias RepoBuilder.Session
+  alias RepoBuilder.WorkflowEngine
   alias RepoBuilder.WorkflowEngine.Step
   alias RepoBuilder.Workflows
   alias RepoBuilder.Workflows.WorkflowRun
@@ -73,8 +74,10 @@ defmodule RepoBuilder.WorkflowEngine.Runner do
   def handle_continue(:run_step, %State{current_step: name} = state) do
     step = Map.fetch!(state.steps, name)
     {:ok, run} = Workflows.update_run(state.run, %{status: :running, current_step: name})
+    # Per-step observability: mark this step running, then broadcast the lane + progress.
+    run = WorkflowEngine.record_step_state(run, name, %{status: :running, started_at: now()})
     broadcast_lane(run, :running)
-    agent_id = "wfrun-#{run.id}-#{name}"
+    agent_id = WorkflowEngine.step_agent_id(run.id, name)
     :ok = Phoenix.PubSub.subscribe(@pubsub, "agent:#{agent_id}:events")
     state = %{state | run: run, session_agent_id: agent_id, text_buf: ""}
     prompt = render(step.prompt_template, state.artifacts)
@@ -89,6 +92,7 @@ defmodule RepoBuilder.WorkflowEngine.Runner do
 
       {:error, reason} ->
         Logger.warning("workflow #{run.id} step #{name} could not start: #{inspect(reason)}")
+        state = record_step(state, name, :failed, nil)
         reply(advance(state, step.on_failure))
     end
   end
@@ -104,12 +108,15 @@ defmodule RepoBuilder.WorkflowEngine.Runner do
   def handle_info({:harness_event, %Event.Done{} = done}, %State{current_step: name} = state) do
     step = Map.fetch!(state.steps, name)
     output = done.final_text || state.text_buf
-    reply(advance(capture_output(state, name, output, done.cost_usd), step.on_success))
+    state = capture_output(state, name, output, done.cost_usd)
+    state = record_step(state, name, :succeeded, done.cost_usd)
+    reply(advance(state, step.on_success))
   end
 
   def handle_info({:harness_event, %Event.Error{} = error}, %State{current_step: name} = state) do
     step = Map.fetch!(state.steps, name)
     Logger.info("workflow #{state.run.id} step #{name} failed: #{error.reason}")
+    state = record_step(state, name, :failed, nil)
     reply(advance(state, step.on_failure))
   end
 
@@ -173,6 +180,25 @@ defmodule RepoBuilder.WorkflowEngine.Runner do
     {:ok, run} = Workflows.add_run_cost(state.run, Usage.cost_to_decimal(cost))
     %{state | run: run, artifacts: Map.put(state.artifacts, name, output)}
   end
+
+  # Persist + broadcast one step's terminal per-step state via the shared engine seam.
+  # `cost` is the step's display cost (string), never re-entering the run's Decimal
+  # accumulation (`capture_output/4` already rolled it into the run total).
+  @spec record_step(State.t(), String.t(), :succeeded | :failed, float() | nil) :: State.t()
+  defp record_step(state, name, status, cost) do
+    attrs = %{status: Atom.to_string(status), finished_at: now()}
+    attrs = if cost_string(cost), do: Map.put(attrs, :cost_usd, cost_string(cost)), else: attrs
+    %{state | run: WorkflowEngine.record_step_state(state.run, name, attrs)}
+  end
+
+  @spec cost_string(float() | nil) :: String.t() | nil
+  defp cost_string(nil), do: nil
+
+  defp cost_string(cost) when is_float(cost),
+    do: cost |> Usage.cost_to_decimal() |> Decimal.to_string()
+
+  @spec now() :: String.t()
+  defp now, do: WorkflowEngine.now_iso()
 
   @spec unsubscribe(State.t()) :: :ok
   defp unsubscribe(%State{session_agent_id: nil}), do: :ok

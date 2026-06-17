@@ -393,7 +393,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
         AUTO-FOLLOW
       </button>
       <button id="clear-filters" type="button" phx-click="clear_filters" class="cns-chip">
-        CLEAR ALL
+        CLEAR FILTERS
       </button>
     </div>
     """

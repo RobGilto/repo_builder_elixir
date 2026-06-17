@@ -126,11 +126,17 @@ const tools = [
   },
   {
     name: "start_adw",
-    description: "Launch the seeded plan→build→review→fix workflow. Returns the run id.",
+    description:
+      "Launch a named AI Developer Workflow. Choose workflow_type from the catalog (see AVAILABLE ADW TYPES in your system prompt); defaults to plan_build_review_fix. Returns the run id.",
     parameters: {
       type: "object",
       properties: {
         input: { type: "string", description: "The work item / task description." },
+        workflow_type: {
+          type: "string",
+          enum: ["plan_build", "plan_build_review", "plan_build_review_fix"],
+          description: "Which catalog workflow type to run (default: plan_build_review_fix).",
+        },
         harness: { type: "string", description: "Harness for the workflow steps." },
       },
       required: ["input"],
@@ -185,7 +191,7 @@ const tools = [
   {
     name: "check_adw",
     description:
-      "Inspect an ADW run by id: status, current step, cost, and artifacts. Pairs with start_adw.",
+      "Inspect an ADW run by id: status, current step, cost, artifacts, plus completed/total progress, a per-step status+cost list, and a recent per-step activity tail. Pairs with start_adw.",
     parameters: {
       type: "object",
       properties: {

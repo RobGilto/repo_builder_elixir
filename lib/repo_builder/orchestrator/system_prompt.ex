@@ -9,6 +9,7 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
   alias RepoBuilder.Harness.Registry
   alias RepoBuilder.Orchestrator.{Orchestrator, Templates, ToolCatalog}
   alias RepoBuilder.Orchestrators
+  alias RepoBuilder.WorkflowEngine.Catalog
 
   @doc "Build the system prompt for `orchestrator`."
   @spec build(Orchestrator.t()) :: String.t()
@@ -28,7 +29,9 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
       `leader` for coordination. A category with no model assigned cannot be spawned.
     - Dispatch work with `command_agent`; check progress with `check_agent_status`;
       stop a runaway worker with `interrupt_agent`.
-    - For a full plan→build→review→fix cycle, use `start_adw`.
+    - To run a multi-step AI Developer Workflow, use `start_adw` and pick a
+      `workflow_type` from the AVAILABLE ADW TYPES below (it defaults to the full
+      plan→build→review→fix cycle). Watch its per-step progress with `check_adw`.
     - If a tier shows `(unassigned — cannot spawn here)` or a spawn fails with "no
       model selected", call `get_config` to inspect the available harnesses/models,
       then `configure_tier` to assign one — do NOT stop and ask the operator unless
@@ -41,6 +44,9 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
 
     Available subagent templates (apply by name via `create_agent`'s `subagent_template`):
     #{subagent_map_block()}
+
+    Available ADW types (pass as `start_adw`'s `workflow_type`):
+    #{available_adw_types_block()}
 
     Context management:
     #{context_management_block()}
@@ -97,6 +103,16 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
           "- #{template.name}: #{template.description}"
         end)
     end
+  end
+
+  # The `{{AVAILABLE_ADW_TYPES}}` equivalent: a markdown list of the catalog's
+  # workflow types the orchestrator can launch via `start_adw`, with an empty-state
+  # fallback. Mirrors `subagent_map_block/0`/`tools_block/0`.
+  @spec available_adw_types_block() :: String.t()
+  defp available_adw_types_block do
+    # `Catalog.types()` is statically non-empty (the built-in registry), so this never
+    # blanks the prompt section.
+    Enum.map_join(Catalog.types(), "\n", fn type -> "- #{type.slug}: #{type.description}" end)
   end
 
   # Guidance for watching spend + context-window pressure and relieving it via

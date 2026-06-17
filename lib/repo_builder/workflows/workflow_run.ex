@@ -17,6 +17,7 @@ defmodule RepoBuilder.Workflows.WorkflowRun do
           status: status() | nil,
           current_step: String.t() | nil,
           artifacts: map(),
+          step_states: map(),
           total_cost_usd: Decimal.t() | nil,
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
@@ -29,6 +30,10 @@ defmodule RepoBuilder.Workflows.WorkflowRun do
     field :status, Ecto.Enum, values: @statuses, default: :queued
     field :current_step, :string
     field :artifacts, :map, default: %{}
+    # Per-step observability: %{step_name => %{"status", "started_at", "finished_at",
+    # "cost_usd"}}. Authoritative per-step view written at each transition by BOTH
+    # the live Runner and the durable StepWorker. See `Workflows.run_progress/1`.
+    field :step_states, :map, default: %{}
     field :total_cost_usd, :decimal
     timestamps()
   end
@@ -36,7 +41,14 @@ defmodule RepoBuilder.Workflows.WorkflowRun do
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(run, params) do
     run
-    |> cast(params, [:workflow_id, :status, :current_step, :artifacts, :total_cost_usd])
+    |> cast(params, [
+      :workflow_id,
+      :status,
+      :current_step,
+      :artifacts,
+      :step_states,
+      :total_cost_usd
+    ])
     |> validate_required([:workflow_id, :status])
     |> foreign_key_constraint(:workflow_id)
   end

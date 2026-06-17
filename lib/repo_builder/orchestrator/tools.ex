@@ -16,6 +16,7 @@ defmodule RepoBuilder.Orchestrator.Tools do
   alias RepoBuilder.Harness.Pi.Models, as: PiModels
   alias RepoBuilder.Harness.Registry
   alias RepoBuilder.Orchestrator.{ContextWindow, Orchestrator, Template, Templates}
+  alias RepoBuilder.WorkflowEngine.Catalog
 
   # Changeset failures are stringified at the boundary (`changeset_reason/1`), so a
   # reason that escapes a tool is always an atom or a string.
@@ -317,18 +318,42 @@ defmodule RepoBuilder.Orchestrator.Tools do
   @spec start_adw(Ecto.UUID.t(), map()) :: result()
   defp start_adw(orchestrator_id, args) do
     with {:ok, input} <- fetch_string(args, "input"),
-         {:ok, harness} <- resolve_harness(orchestrator_id, args) do
+         {:ok, harness} <- resolve_harness(orchestrator_id, args),
+         {:ok, type} <- resolve_workflow_type(args) do
       name = "orch-adw-#{System.unique_integer([:positive])}"
 
-      with {:ok, workflow} <- WorkflowEngine.create_example_workflow(name, harness),
+      with {:ok, workflow} <- WorkflowEngine.create_workflow_of_type(name, type, harness),
            {:ok, run_id, _pid} <-
              WorkflowEngine.start_workflow(workflow, inputs: %{"input" => input}) do
-        {:ok, %{"status" => "started", "run_id" => run_id}}
+        {:ok, %{"status" => "started", "run_id" => run_id, "workflow_type" => type}}
       else
         {:error, %Ecto.Changeset{} = changeset} -> {:error, changeset_reason(changeset)}
         {:error, reason} -> {:error, normalize_reason(reason)}
       end
     end
+  end
+
+  # Resolve + validate the optional `workflow_type` against the catalog; an omitted
+  # type defaults to the catalog default (back-compat). An unknown type returns a
+  # helpful error listing the available slugs (never a crash).
+  @spec resolve_workflow_type(map()) :: {:ok, String.t()} | {:error, reason()}
+  defp resolve_workflow_type(args) do
+    case blank_to_nil(args["workflow_type"]) do
+      nil ->
+        {:ok, Catalog.default_type()}
+
+      type ->
+        case Catalog.fetch(type) do
+          {:ok, _type_def} -> {:ok, type}
+          {:error, :unknown_type} -> {:error, unknown_workflow_type(type)}
+        end
+    end
+  end
+
+  @spec unknown_workflow_type(String.t()) :: String.t()
+  defp unknown_workflow_type(type) do
+    slugs = Enum.map_join(Catalog.types(), ", ", & &1.slug)
+    "unknown workflow_type #{type}; available: #{slugs}"
   end
 
   @spec update_agent(Ecto.UUID.t(), map()) :: result()
@@ -786,16 +811,74 @@ defmodule RepoBuilder.Orchestrator.Tools do
     }
   end
 
-  @spec run_summary(Workflows.WorkflowRun.t()) :: map()
+  # Inference-only spec — the fully-concrete summary map narrows below a hand-written
+  # `map()` contract, which Dialyzer rejects as a supertype under :underspecs.
   defp run_summary(run) do
+    progress = Workflows.run_progress(run)
+
     %{
       "run_id" => run.id,
       "status" => to_string(run.status),
       "current_step" => run.current_step,
       # Preserve the unpriced (NULL) vs 0 distinction — nil stays nil, never "0".
       "cost_usd" => decimal_to_string(run.total_cost_usd),
-      "artifacts" => run.artifacts
+      "artifacts" => run.artifacts,
+      # Per-step observability (§9): completed/total progress, the per-step status+cost
+      # list, and a recent per-step activity tail over the current/last step.
+      "progress" => %{"completed" => progress.completed, "total" => progress.total},
+      "steps" => Enum.map(progress.steps, &step_summary/1),
+      "tail" => activity_tail(run, progress)
     }
+  end
+
+  @spec step_summary(Workflows.step_progress()) :: map()
+  defp step_summary(step) do
+    %{
+      "name" => step.name,
+      "status" => to_string(step.status),
+      "cost_usd" => step.cost_usd,
+      "started_at" => step.started_at,
+      "finished_at" => step.finished_at
+    }
+  end
+
+  # The recent per-step activity tail for the run's current (or last) step, read from
+  # `agent_logs` keyed by the canonical step-session agent id. Step sessions broadcast
+  # live but persist only when correlated by a UUID owner, so a synthetic step id with
+  # no persisted rows yields an empty tail (no crash) — the shape is always present.
+  @spec activity_tail(Workflows.WorkflowRun.t(), Workflows.progress()) :: [map()]
+  defp activity_tail(run, progress) do
+    case current_or_last_step(progress) do
+      nil ->
+        []
+
+      step_name ->
+        run.id
+        |> WorkflowEngine.step_agent_id(step_name)
+        |> recent_step_events(20)
+        |> Enum.map(&log_summary/1)
+    end
+  end
+
+  @spec current_or_last_step(Workflows.progress()) :: String.t() | nil
+  defp current_or_last_step(%{current: current}) when is_binary(current), do: current
+
+  defp current_or_last_step(%{steps: steps}) do
+    case List.last(steps) do
+      %{name: name} -> name
+      _ -> nil
+    end
+  end
+
+  # Read persisted step events only when the step-session agent id is a real UUID
+  # (the `agent_logs.agent_id` column is a binary_id); the synthetic `wf-<run>-<step>`
+  # id never is, so this returns `[]` rather than raising a cast error.
+  @spec recent_step_events(String.t(), pos_integer()) :: [Logs.AgentLog.t()]
+  defp recent_step_events(agent_id, limit) do
+    case Ecto.UUID.cast(agent_id) do
+      {:ok, uuid} -> Logs.list_recent(uuid, limit)
+      :error -> []
+    end
   end
 
   @spec decimal_to_string(Decimal.t() | nil) :: String.t() | nil

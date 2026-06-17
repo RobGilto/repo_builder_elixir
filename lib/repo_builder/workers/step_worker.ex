@@ -27,9 +27,11 @@ defmodule RepoBuilder.Workers.StepWorker do
 
   require Logger
 
+  alias RepoBuilder.Dashboard
   alias RepoBuilder.Harness.Event
   alias RepoBuilder.Logs.Usage
   alias RepoBuilder.Session
+  alias RepoBuilder.WorkflowEngine
   alias RepoBuilder.WorkflowEngine.Step
   alias RepoBuilder.Workflows
   alias RepoBuilder.Workflows.{Workflow, WorkflowRun}
@@ -76,7 +78,13 @@ defmodule RepoBuilder.Workers.StepWorker do
 
       %Step{} = step ->
         {:ok, run} = Workflows.update_run(run, %{status: :running, current_step: step_name})
-        agent_id = "wfjob-#{run.id}-#{step_name}"
+        # Per-step observability on the durable path (previously broadcast nothing):
+        # mark this step running, broadcast the lane + progress, then run the session.
+        run =
+          WorkflowEngine.record_step_state(run, step_name, %{status: :running, started_at: now()})
+
+        broadcast_lane(run, :running)
+        agent_id = WorkflowEngine.step_agent_id(run.id, step_name)
         :ok = Phoenix.PubSub.subscribe(@pubsub, "agent:#{agent_id}:events")
         result = run_session(agent_id, step, run.artifacts)
         :ok = Phoenix.PubSub.unsubscribe(@pubsub, "agent:#{agent_id}:events")
@@ -124,45 +132,91 @@ defmodule RepoBuilder.Workers.StepWorker do
   @spec handle_result(term(), WorkflowRun.t(), Step.t(), Workflow.t()) :: :ok | {:error, term()}
   defp handle_result({:done, output, cost}, run, step, workflow) do
     {:ok, run} = Workflows.add_run_cost(run, Usage.cost_to_decimal(cost))
+    run = record_step(run, step.name, :succeeded, cost)
     artifacts = Map.put(run.artifacts, step.name, output)
     advance(run, workflow, step.on_success, artifacts)
   end
 
   defp handle_result({:error, reason}, run, step, workflow) do
     Logger.info("durable workflow #{run.id} step #{step.name} failed: #{inspect(reason)}")
+    run = record_step(run, step.name, :failed, nil)
     advance(run, workflow, step.on_failure, run.artifacts)
   end
 
   defp handle_result(:timeout, run, step, _workflow) do
     Logger.warning("durable workflow #{run.id} step #{step.name} timed out")
+    _ = record_step(run, step.name, :failed, nil)
     {:error, :step_timeout}
   end
 
   @spec advance(WorkflowRun.t(), Workflow.t(), Step.edge(), map()) :: :ok | {:error, term()}
   defp advance(run, _workflow, :done, artifacts) do
-    {:ok, _} = Workflows.update_run(run, %{status: :succeeded, artifacts: artifacts})
+    {:ok, run} = Workflows.update_run(run, %{status: :succeeded, artifacts: artifacts})
+    broadcast_lane(run, :succeeded)
     :ok
   end
 
   defp advance(run, _workflow, :abort, artifacts) do
-    {:ok, _} = Workflows.update_run(run, %{status: :failed, artifacts: artifacts})
+    {:ok, run} = Workflows.update_run(run, %{status: :failed, artifacts: artifacts})
+    broadcast_lane(run, :failed)
     :ok
   end
 
   defp advance(run, workflow, next, artifacts) when is_binary(next) do
     if find_step(workflow, next) do
-      {:ok, _} =
+      {:ok, run} =
         Workflows.update_run(run, %{status: :running, current_step: next, artifacts: artifacts})
+
+      broadcast_lane(run, :running)
 
       case enqueue(run.id, next) do
         {:ok, _job} -> :ok
         {:error, reason} -> {:error, reason}
       end
     else
-      {:ok, _} = Workflows.update_run(run, %{status: :failed, artifacts: artifacts})
+      {:ok, run} = Workflows.update_run(run, %{status: :failed, artifacts: artifacts})
+      broadcast_lane(run, :failed)
       :ok
     end
   end
+
+  # --- per-step observability (mirrors `Runner`, shared engine seam) ---
+
+  # Persist + broadcast one step's terminal per-step state via the shared engine
+  # seam. `cost` is a display string only — `add_run_cost/2` already owns the run's
+  # Decimal total, so it never re-enters that path.
+  @spec record_step(WorkflowRun.t(), String.t(), :succeeded | :failed, float() | nil) ::
+          WorkflowRun.t()
+  defp record_step(run, name, status, cost) do
+    attrs = %{status: Atom.to_string(status), finished_at: now()}
+    attrs = if cost_string(cost), do: Map.put(attrs, :cost_usd, cost_string(cost)), else: attrs
+    WorkflowEngine.record_step_state(run, name, attrs)
+  end
+
+  # Mirror the live Runner's lane + per-run broadcast so a durable/resumed run is
+  # visible to the console in real time (the durable path was observability-blind).
+  @spec broadcast_lane(WorkflowRun.t(), atom()) :: :ok
+  defp broadcast_lane(run, status) do
+    _ =
+      Dashboard.broadcast_lane(%{
+        id: "workflow:#{run.id}",
+        kind: :workflow,
+        label: run.current_step || "workflow",
+        status: status,
+        harness: nil
+      })
+
+    Dashboard.broadcast_workflow(run.id, {:workflow_update, run})
+  end
+
+  @spec cost_string(float() | nil) :: String.t() | nil
+  defp cost_string(nil), do: nil
+
+  defp cost_string(cost) when is_float(cost),
+    do: cost |> Usage.cost_to_decimal() |> Decimal.to_string()
+
+  @spec now() :: String.t()
+  defp now, do: WorkflowEngine.now_iso()
 
   # --- helpers ---
 

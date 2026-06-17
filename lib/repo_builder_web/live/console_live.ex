@@ -27,7 +27,13 @@ defmodule RepoBuilderWeb.ConsoleLive do
   import RepoBuilderWeb.ConsoleComponents
 
   import RepoBuilderWeb.DashboardComponents,
-    only: [swimlane_row: 1, swimlane: 1, event_square: 1, event_detail_panel: 1]
+    only: [
+      swimlane_row: 1,
+      swimlane: 1,
+      workflow_swimlane: 1,
+      event_square: 1,
+      event_detail_panel: 1
+    ]
 
   alias RepoBuilder.{Agents, Dashboard, Logs, Orchestrators, Session, Workflows}
   alias RepoBuilder.Agents.Agent
@@ -100,6 +106,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
         stream_pending: %{},
         stream_flush_ref: nil,
         event_buffer: [],
+        # Per-step ADW observability (§9): run_id => a per-step progress view
+        # (status/completed/total/current/cost/steps). Seeded from recent runs,
+        # updated live on the lanes topic's workflow broadcasts.
+        workflow_progress: %{},
         selected_event: nil,
         pulsed_id: nil,
         typing?: false,
@@ -119,6 +129,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
         |> load_agents()
         |> seed_agent_costs()
         |> seed_lanes()
+        |> seed_workflow_progress()
         |> seed_cost()
         |> backfill_events()
         |> assign_orchestrator()
@@ -243,10 +254,86 @@ defmodule RepoBuilderWeb.ConsoleLive do
   @spec nilify_zero(Decimal.t()) :: Decimal.t() | nil
   defp nilify_zero(%Decimal{} = d), do: if(Decimal.equal?(d, 0), do: nil, else: d)
 
+  # Only AGENT lanes go into the flat lane stream now; workflow runs render as rich
+  # per-step swimlanes from `@workflow_progress` (seeded by `seed_workflow_progress/1`).
   @spec seed_lanes(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp seed_lanes(socket) do
-    lanes = agent_lanes(socket.assigns.agents) ++ workflow_lanes()
+    lanes = agent_lanes(socket.assigns.agents)
     Enum.reduce(lanes, socket, &stream_insert(&2, :lanes, &1))
+  end
+
+  # Seed the per-step workflow views from the most-recent runs so the ADWS view shows
+  # per-step squares on connect (a reconnect backfills rather than starting empty).
+  @spec seed_workflow_progress(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp seed_workflow_progress(socket) do
+    progress =
+      Map.new(Workflows.list_recent_runs(), fn run -> {run.id, workflow_view(run)} end)
+
+    assign(socket, :workflow_progress, progress)
+  end
+
+  # Merge a workflow lane's status/current step into the run's per-step view (creating
+  # a minimal view if the run was launched after mount).
+  @spec update_workflow_status(Phoenix.LiveView.Socket.t(), map()) ::
+          Phoenix.LiveView.Socket.t()
+  defp update_workflow_status(socket, %{id: "workflow:" <> run_id, status: status, label: label}) do
+    view =
+      socket.assigns.workflow_progress
+      |> Map.get(run_id, default_workflow_view(run_id))
+      |> Map.merge(%{status: status, current: label})
+
+    assign(socket, :workflow_progress, Map.put(socket.assigns.workflow_progress, run_id, view))
+  end
+
+  defp update_workflow_status(socket, _lane), do: socket
+
+  # Merge a per-step progress map (total/completed/current/steps) into the run's view.
+  @spec update_workflow_steps(Phoenix.LiveView.Socket.t(), Ecto.UUID.t(), map()) ::
+          Phoenix.LiveView.Socket.t()
+  defp update_workflow_steps(socket, run_id, progress) do
+    view =
+      socket.assigns.workflow_progress
+      |> Map.get(run_id, default_workflow_view(run_id))
+      |> Map.merge(%{
+        completed: progress.completed,
+        total: progress.total,
+        current: progress.current,
+        steps: progress.steps
+      })
+
+    assign(socket, :workflow_progress, Map.put(socket.assigns.workflow_progress, run_id, view))
+  end
+
+  # A minimal view for a run first seen via a live broadcast (assume it is running
+  # until a lane status says otherwise).
+  @spec default_workflow_view(Ecto.UUID.t()) :: map()
+  defp default_workflow_view(run_id) do
+    %{
+      run_id: run_id,
+      status: :running,
+      current: nil,
+      cost: nil,
+      completed: 0,
+      total: 0,
+      steps: []
+    }
+  end
+
+  # Build a per-step workflow view from a run (seed/refetch path): full status + cost
+  # from the row, plus the derived per-step progress (ordered, branching-safe).
+  # Inference-only spec — the concrete view map narrows below `map()` under :underspecs.
+  defp workflow_view(run) do
+    progress = Workflows.run_progress(run)
+
+    %{
+      run_id: run.id,
+      status: run.status,
+      current: run.current_step,
+      cost: run.total_cost_usd,
+      completed: progress.completed,
+      total: progress.total,
+      steps: progress.steps
+    }
   end
 
   @spec seed_cost(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
@@ -296,19 +383,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
         label: agent.name,
         status: agent.status,
         harness: agent.harness
-      }
-    end)
-  end
-
-  @spec workflow_lanes() :: [Dashboard.lane()]
-  defp workflow_lanes do
-    Enum.map(Workflows.list_recent_runs(), fn run ->
-      %{
-        id: "workflow:#{run.id}",
-        kind: :workflow,
-        label: run.current_step || "workflow",
-        status: run.status,
-        harness: nil
       }
     end)
   end
@@ -896,9 +970,21 @@ defmodule RepoBuilderWeb.ConsoleLive do
      |> stream_delete(:lanes, %{id: "agent:#{agent.id}"})}
   end
 
+  # Workflow lanes drive the per-step swimlane (status/current step), not the flat
+  # lane stream. Update the matching `@workflow_progress` view in place.
+  def handle_info({:lane, %{kind: :workflow} = lane}, socket) do
+    {:noreply, update_workflow_status(socket, lane)}
+  end
+
   def handle_info({:lane, lane}, socket) do
     # Stable dom_id (lane.id) ⇒ re-inserting the same lane REPLACES the row in place.
     {:noreply, stream_insert(socket, :lanes, lane)}
+  end
+
+  # Per-step progress for a run (from BOTH the live Runner and the durable
+  # StepWorker, via the shared engine seam): merge the per-step view in place.
+  def handle_info({:workflow_step, run_id, progress}, socket) do
+    {:noreply, update_workflow_steps(socket, run_id, progress)}
   end
 
   # The single hot path: append to the bounded buffer, bump pills + counters, push
@@ -1310,7 +1396,20 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
           <div id="swimlanes" class={["flex min-h-0 flex-1", @view_mode != :adws && "hidden"]}>
             <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
-              <div id="workflow-lanes" phx-update="stream" class="flex flex-col gap-2">
+              <div id="workflow-runs" class="flex flex-col gap-2">
+                <.workflow_swimlane
+                  :for={view <- workflow_views(@workflow_progress)}
+                  id={"workflow-#{view.run_id}"}
+                  label={view.current || view.run_id}
+                  status={view.status}
+                  completed={view.completed}
+                  total={view.total}
+                  cost={view.cost}
+                  steps={view.steps}
+                />
+              </div>
+
+              <div id="agent-lanes" phx-update="stream" class="flex flex-col gap-2">
                 <div :for={{dom_id, lane} <- @streams.lanes} id={dom_id}>
                   <.swimlane_row
                     id={lane.id}
@@ -1423,6 +1522,13 @@ defmodule RepoBuilderWeb.ConsoleLive do
   end
 
   # --- view helpers ---
+
+  # The per-step workflow views as a stable, ordered list for rendering (the assign is
+  # a run_id-keyed map; sort by run_id so live updates don't reshuffle the column).
+  @spec workflow_views(%{optional(Ecto.UUID.t()) => map()}) :: [map()]
+  defp workflow_views(workflow_progress) do
+    workflow_progress |> Map.values() |> Enum.sort_by(& &1.run_id)
+  end
 
   @spec agent_swimlanes(map()) :: [map()]
   defp agent_swimlanes(assigns) do

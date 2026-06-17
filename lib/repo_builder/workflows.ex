@@ -83,4 +83,94 @@ defmodule RepoBuilder.Workflows do
   def list_recent_runs(limit \\ 50) do
     Repo.all(from(r in WorkflowRun, order_by: [desc: r.updated_at], limit: ^limit))
   end
+
+  # --- per-step observability (BUILD_PROMPT.md §7/§9) ---
+
+  @type step_status :: :pending | :running | :succeeded | :failed | :cancelled
+
+  @type step_progress :: %{
+          name: String.t(),
+          status: step_status(),
+          cost_usd: String.t() | nil,
+          started_at: String.t() | nil,
+          finished_at: String.t() | nil
+        }
+
+  @type progress :: %{
+          total: non_neg_integer(),
+          completed: non_neg_integer(),
+          current: String.t() | nil,
+          steps: [step_progress()]
+        }
+
+  @doc """
+  Read-modify-write merge of one step's attributes into the run's `step_states`
+  (per-step observability), preserving sibling steps. `attrs` carry the per-step
+  `status`/`started_at`/`finished_at`/`cost_usd`; keys are stringified and merged
+  onto any existing entry for `step_name`. Cost stays a display string here — it
+  never re-enters the run's Decimal accumulation (`add_run_cost/2` owns that).
+  """
+  @spec put_step_state(WorkflowRun.t(), String.t(), map()) ::
+          {:ok, WorkflowRun.t()} | {:error, Ecto.Changeset.t()}
+  def put_step_state(%WorkflowRun{} = run, step_name, attrs) when is_binary(step_name) do
+    existing = Map.get(run.step_states, step_name, %{})
+    merged = Map.merge(existing, stringify_keys(attrs))
+    new_states = Map.put(run.step_states, step_name, merged)
+    update_run(run, %{step_states: new_states})
+  end
+
+  @doc """
+  A typed per-step view of a run, ordered by the run's workflow `steps`. Folds in
+  `step_states` (default `:pending` for an unstarted step), counts `completed` as the
+  number of `:succeeded` steps, and reports `current` as the run's `current_step`.
+  Authoritative and branching-safe (no double counting).
+  """
+  @spec run_progress(WorkflowRun.t()) :: progress()
+  def run_progress(%WorkflowRun{} = run) do
+    names = step_names(run)
+    states = run.step_states
+
+    steps = Enum.map(names, &step_progress(&1, Map.get(states, &1, %{})))
+    completed = Enum.count(steps, &(&1.status == :succeeded))
+
+    %{
+      total: length(names),
+      completed: completed,
+      current: run.current_step,
+      steps: steps
+    }
+  end
+
+  @spec step_names(WorkflowRun.t()) :: [String.t()]
+  defp step_names(%WorkflowRun{workflow_id: workflow_id}) do
+    case workflow_id && get_workflow(workflow_id) do
+      %Workflow{steps: steps} -> Enum.map(steps, &Map.get(&1, "name"))
+      _ -> []
+    end
+  end
+
+  @spec step_progress(String.t(), map()) :: step_progress()
+  defp step_progress(name, state) do
+    %{
+      name: name,
+      status: parse_step_status(state["status"]),
+      cost_usd: state["cost_usd"],
+      started_at: state["started_at"],
+      finished_at: state["finished_at"]
+    }
+  end
+
+  # Map the persisted (string) status to the typed atom; an absent/unknown status is
+  # `:pending` (never `String.to_atom/1` on stored data — AGENTS.md).
+  @spec parse_step_status(term()) :: step_status()
+  defp parse_step_status("running"), do: :running
+  defp parse_step_status("succeeded"), do: :succeeded
+  defp parse_step_status("failed"), do: :failed
+  defp parse_step_status("cancelled"), do: :cancelled
+  defp parse_step_status(_other), do: :pending
+
+  @spec stringify_keys(map()) :: %{optional(String.t()) => term()}
+  defp stringify_keys(map) do
+    Map.new(map, fn {k, v} -> {to_string(k), v} end)
+  end
 end

@@ -36,6 +36,25 @@ defmodule RepoBuilder.Dashboard do
   end
 
   @doc """
+  Broadcast a per-step progress view for a workflow run on the lanes topic so the
+  console ADWS view can redraw per-step squares live (per-step observability §9).
+  Subscribers receive `{:workflow_step, run_id, progress}`. Additive seam — NOT a
+  canonical `Event` variant (§4); `progress` is the `Workflows.progress()` map.
+  Emitted from BOTH the live Runner and the durable StepWorker at each transition.
+  """
+  @spec broadcast_workflow_step(Ecto.UUID.t(), map()) :: :ok
+  def broadcast_workflow_step(run_id, progress) do
+    _ =
+      Phoenix.PubSub.broadcast(
+        RepoBuilder.PubSub,
+        @lanes_topic,
+        {:workflow_step, run_id, progress}
+      )
+
+    :ok
+  end
+
+  @doc """
   Subscribe to the GLOBAL console event feed — a unified stream of every live
   session's canonical events across ALL agents (the per-agent
   `agent:<id>:events` topics stay unchanged). The multi-layered console (§9)

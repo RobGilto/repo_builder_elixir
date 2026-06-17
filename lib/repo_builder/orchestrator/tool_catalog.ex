@@ -13,6 +13,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
           input_schema: map()
         }
 
+  alias RepoBuilder.WorkflowEngine.Catalog
+
   @doc "All orchestrator tool definitions, in a stable order."
   @spec tools() :: [tool_def()]
   def tools do
@@ -97,11 +99,17 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       %{
         name: "start_adw",
         description:
-          "Launch the seeded plan→build→review→fix AI Developer Workflow on a harness. Returns the workflow run id.",
+          "Launch a named AI Developer Workflow on a harness. Choose `workflow_type` from the catalog (see the AVAILABLE ADW TYPES in your system prompt); defaults to `#{Catalog.default_type()}` (plan→build→review→fix). Returns the workflow run id (use `check_adw` to watch per-step progress).",
         input_schema: %{
           "type" => "object",
           "properties" => %{
             "input" => %{"type" => "string", "description" => "The work item / task description."},
+            "workflow_type" => %{
+              "type" => "string",
+              "enum" => Enum.map(Catalog.types(), & &1.slug),
+              "description" =>
+                "Which catalog workflow type to run (default: #{Catalog.default_type()})."
+            },
             "harness" => %{
               "type" => "string",
               "description" => "Harness for the workflow steps (default: orchestrator's harness)."
@@ -165,7 +173,7 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       %{
         name: "check_adw",
         description:
-          "Inspect an ADW run by id: status, current step, cost, and artifacts. Pairs with `start_adw`.",
+          "Inspect an ADW run by id: status, current step, cost, artifacts, plus completed/total progress, a per-step status+cost list, and a recent per-step activity tail. Pairs with `start_adw`.",
         input_schema: %{
           "type" => "object",
           "properties" => %{

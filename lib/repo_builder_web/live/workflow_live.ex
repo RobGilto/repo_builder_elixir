@@ -38,13 +38,19 @@ defmodule RepoBuilderWeb.WorkflowLive do
     end
   end
 
-  @spec run_info(Workflows.WorkflowRun.t()) :: map()
+  # Inference-only spec — the concrete run-info map narrows below a hand-written
+  # `map()` contract, which Dialyzer rejects as a supertype under :underspecs.
   defp run_info(run) do
+    progress = Workflows.run_progress(run)
+
     %{
       status: run.status,
       current_step: run.current_step,
       cost: run.total_cost_usd,
-      artifacts: run.artifacts
+      artifacts: run.artifacts,
+      steps: progress.steps,
+      completed: progress.completed,
+      total: progress.total
     }
   end
 
@@ -69,6 +75,16 @@ defmodule RepoBuilderWeb.WorkflowLive do
                 kind={:workflow}
               />
               <.cost_badge cost={run.cost} />
+            </div>
+
+            <div>
+              <span class="font-medium">Steps ({run.completed}/{run.total}):</span>
+              <ul class="list-disc pl-6 font-mono text-sm">
+                <li :for={step <- run.steps}>
+                  {step.name}: {step.status}
+                  <span :if={step.cost_usd} class="text-base-content/60">(${step.cost_usd})</span>
+                </li>
+              </ul>
             </div>
 
             <div>

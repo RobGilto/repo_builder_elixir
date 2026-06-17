@@ -13,6 +13,7 @@ defmodule RepoBuilder.Workflows.Workflow do
   @type t :: %__MODULE__{
           id: Ecto.UUID.t() | nil,
           name: String.t() | nil,
+          type: String.t() | nil,
           state: state() | nil,
           steps: [map()],
           metadata: map(),
@@ -22,6 +23,9 @@ defmodule RepoBuilder.Workflows.Workflow do
 
   schema "workflows" do
     field :name, :string
+    # The catalog slug this workflow was built from (free-form; the catalog validates
+    # membership at the tool boundary). Nullable for back-compat with older rows.
+    field :type, :string
     field :state, Ecto.Enum, values: [:draft, :active, :archived], default: :draft
     field :steps, {:array, :map}, default: []
     field :metadata, :map, default: %{}
@@ -31,7 +35,7 @@ defmodule RepoBuilder.Workflows.Workflow do
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(workflow, params) do
     workflow
-    |> cast(params, [:name, :state, :steps, :metadata])
+    |> cast(params, [:name, :type, :state, :steps, :metadata])
     |> validate_required([:name])
     |> unique_constraint(:name)
   end

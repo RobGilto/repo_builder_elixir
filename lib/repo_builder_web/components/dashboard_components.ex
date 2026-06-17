@@ -81,6 +81,56 @@ defmodule RepoBuilderWeb.DashboardComponents do
     """
   end
 
+  attr :id, :string, required: true
+  attr :label, :string, required: true, doc: "the run id / current step"
+  attr :status, :atom, required: true, values: @statuses
+  attr :completed, :integer, required: true
+  attr :total, :integer, required: true
+  attr :cost, :any, default: nil
+
+  attr :steps, :list,
+    required: true,
+    doc: "per-step view maps (name/status/cost_usd) from Workflows.run_progress/1"
+
+  @doc "A per-step ADW swimlane: run label + status/progress, then one colored square per step (status-keyed)."
+  @spec workflow_swimlane(map()) :: Phoenix.LiveView.Rendered.t()
+  def workflow_swimlane(assigns) do
+    ~H"""
+    <div id={@id} class="cns-panel rounded p-2" data-run-status={@status}>
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="cns-cat cns-cat--system">workflow</span>
+          <span class="text-sm font-semibold" style="color: var(--cns-text-0)">{@label}</span>
+          <span class="text-[0.625rem]" style="color: var(--cns-text-2)">{@completed}/{@total}</span>
+        </div>
+        <span class="flex items-center gap-1.5">
+          <.adw_orb active?={@status == :running} />
+          <.cost_badge cost={@cost} />
+          <span class={["badge", status_class(@status)]}>{@status}</span>
+        </span>
+      </div>
+      <div class="mt-2 flex gap-2 overflow-x-auto pb-1">
+        <div :for={step <- @steps} class="flex flex-col items-center gap-1">
+          <span
+            id={"#{@id}-step-#{step.name}"}
+            data-step-status={step.status}
+            title={"#{step.name}: #{step.status}"}
+            class={["cns-square", step_square_class(step.status)]}
+          />
+          <span class="text-[0.5rem] uppercase" style="color: var(--cns-text-3)">{step.name}</span>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  @spec step_square_class(atom()) :: String.t()
+  defp step_square_class(:succeeded), do: "cns-square--response"
+  defp step_square_class(:running), do: "cns-square--tool"
+  defp step_square_class(:failed), do: "cns-square--system"
+  defp step_square_class(:cancelled), do: "cns-square--hook"
+  defp step_square_class(_pending), do: "cns-square--thinking"
+
   attr :category, :atom, required: true, values: @event_categories
   attr :summary, :string, required: true, doc: "hover-tooltip text"
   attr :event_id, :integer, required: true
