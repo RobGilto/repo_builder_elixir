@@ -106,6 +106,22 @@ defmodule RepoBuilder.Dashboard do
     :ok
   end
 
+  @doc """
+  Broadcast that the orchestrator record was updated so any connected ConsoleLive
+  socket can refresh its assigns without a page reload.
+  """
+  @spec broadcast_orchestrator_updated(RepoBuilder.Orchestrator.Orchestrator.t()) :: :ok
+  def broadcast_orchestrator_updated(orchestrator) do
+    _ =
+      Phoenix.PubSub.broadcast(
+        RepoBuilder.PubSub,
+        @events_topic,
+        {:orchestrator_updated, orchestrator}
+      )
+
+    :ok
+  end
+
   @doc "Topic for one workflow run's transition stream (per-workflow view)."
   @spec workflow_topic(Ecto.UUID.t()) :: String.t()
   def workflow_topic(run_id), do: "workflow:#{run_id}:events"

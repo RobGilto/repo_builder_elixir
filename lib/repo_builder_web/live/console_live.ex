@@ -959,6 +959,14 @@ defmodule RepoBuilderWeb.ConsoleLive do
     end
   end
 
+  def handle_info({:orchestrator_updated, orchestrator}, socket) do
+    if orchestrator.id == socket.assigns.orchestrator_id do
+      {:noreply, assign_orchestrator_selection(socket, orchestrator)}
+    else
+      {:noreply, socket}
+    end
+  end
+
   # A worker the orchestrator just deleted (issue agent-CRUD): drop it from the
   # rail roster + the swimlane stream live. Idempotent for an already-absent worker.
   def handle_info({:agent_deleted, %Agent{} = agent}, socket) do
