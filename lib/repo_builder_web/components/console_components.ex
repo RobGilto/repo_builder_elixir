@@ -233,7 +233,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     <button
       id={"agent-#{@id}"}
       type="button"
-      phx-click="select_agent"
+      phx-click="toggle_agent_filter"
       phx-value-id={@id}
       style={"--agent-color: #{@color}; --pulse-color: #{@color}"}
       class={[
@@ -299,7 +299,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     <button
       id={"agent-#{@id}"}
       type="button"
-      phx-click="select_agent"
+      phx-click="toggle_agent_filter"
       phx-value-id={@id}
       title={@name}
       style={"--agent-color: #{@color}; --pulse-color: #{@color}"}
@@ -322,7 +322,8 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   # --- filter bar -----------------------------------------------------------
 
   attr :active_categories, :any, required: true, doc: "MapSet of active categories"
-  attr :active_agents, :list, default: [], doc: "list of active agent-name filters"
+  attr :active_agents, :list, default: [], doc: "list of active agent-id filters"
+  attr :agent_names, :map, default: %{}, doc: "agent id => display name map for pill labels"
   attr :search, :string, default: ""
   attr :regex?, :boolean, default: false
   attr :auto_follow?, :boolean, default: true
@@ -349,14 +350,14 @@ defmodule RepoBuilderWeb.ConsoleComponents do
       />
       <.filter_chip cat={:hook} label="HOOK" active?={MapSet.member?(@active_categories, :hook)} />
 
-      <span :for={name <- @active_agents} class="cns-namepill">
-        {name}
+      <span :for={id <- @active_agents} class="cns-namepill">
+        {Map.get(@agent_names, id, id)}
         <button
           type="button"
           phx-click="toggle_agent_filter"
-          phx-value-name={name}
+          phx-value-id={id}
           class="opacity-60 hover:opacity-100"
-          aria-label={"Remove #{name} filter"}
+          aria-label={"Remove #{Map.get(@agent_names, id, id)} filter"}
         >
           ×
         </button>

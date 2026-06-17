@@ -66,7 +66,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
         agent_names: %{},
         statuses: %{},
         agent_costs: %{},
-        selected_agent_id: nil,
         orchestrator_id: nil,
         orchestrator_harness: nil,
         orchestrator_provider: nil,
@@ -567,10 +566,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
   def handle_event("set_chat_width", %{"width" => width}, socket),
     do: {:noreply, assign(socket, :chat_width, to_chat_width(width))}
 
-  def handle_event("select_agent", %{"id" => id}, socket) do
-    {:noreply, assign(socket, :selected_agent_id, id)}
-  end
-
   def handle_event("toggle_adw_builder", _params, socket) do
     {:noreply, assign(socket, adw_builder?: !socket.assigns.adw_builder?)}
   end
@@ -685,11 +680,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
     end
   end
 
-  def handle_event("toggle_agent_filter", %{"name" => name}, socket) do
+  def handle_event("toggle_agent_filter", %{"id" => id}, socket) do
     active =
-      if name in socket.assigns.active_agents,
-        do: List.delete(socket.assigns.active_agents, name),
-        else: [name | socket.assigns.active_agents]
+      if id in socket.assigns.active_agents,
+        do: List.delete(socket.assigns.active_agents, id),
+        else: [id | socket.assigns.active_agents]
 
     {:noreply, socket |> assign(:active_agents, active) |> restream()}
   end
@@ -769,13 +764,14 @@ defmodule RepoBuilderWeb.ConsoleLive do
     end
   end
 
-  # No selected agent ⇒ route the prompt to the ORCHESTRATOR brain (issue-c): it
-  # chooses/creates/dispatches workers. A selected agent keeps the manual
-  # single-agent run as an explicit fallback. The hard "select an agent" gate is gone.
+  # Routing is derived from the agent-filter set: exactly one active filter ⇒ route the
+  # prompt to that single agent (the manual single-agent run); zero or multiple active
+  # filters ⇒ route to the ORCHESTRATOR brain (issue-c), which chooses/creates/dispatches
+  # workers. The hard "select an agent" gate is gone.
   @spec run_prompt(Phoenix.LiveView.Socket.t(), String.t(), String.t() | nil, String.t() | nil) ::
           {:noreply, Phoenix.LiveView.Socket.t()}
   defp run_prompt(socket, prompt, harness, model) do
-    case socket.assigns.selected_agent_id do
+    case single_active_agent(socket.assigns.active_agents) do
       nil ->
         {:noreply, run_orchestrator(socket, prompt)}
 
@@ -797,6 +793,12 @@ defmodule RepoBuilderWeb.ConsoleLive do
         {:noreply, socket}
     end
   end
+
+  # The lone active agent-filter id drives single-agent routing; zero or multiple
+  # active filters fall back to the orchestrator (returns nil).
+  @spec single_active_agent([String.t()]) :: String.t() | nil
+  defp single_active_agent([id]), do: id
+  defp single_active_agent(_active), do: nil
 
   @spec run_orchestrator(Phoenix.LiveView.Socket.t(), String.t()) :: Phoenix.LiveView.Socket.t()
   defp run_orchestrator(socket, prompt) do
@@ -1329,7 +1331,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   @spec agent_pass?(map(), [String.t()]) :: boolean()
   defp agent_pass?(_row, []), do: true
-  defp agent_pass?(row, active), do: row.agent in active
+  defp agent_pass?(row, active), do: row.agent_key in active
 
   @spec search_pass?(String.t(), String.t(), boolean()) :: boolean()
   defp search_pass?(_body, "", _regex?), do: true
@@ -1462,7 +1464,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
                   name={agent.name}
                   status={Map.get(@statuses, agent.id, agent.status)}
                   color={AgentColors.hex(agent.id)}
-                  selected?={@selected_agent_id == agent.id}
+                  selected?={agent.id in @active_agents}
                   pulse?={@pulsed_id == agent.id}
                   active?={Map.get(@statuses, agent.id, agent.status) == :running}
                 />
@@ -1474,7 +1476,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
                   harness={agent.harness}
                   cost={Map.get(@agent_costs, agent.id)}
                   color={AgentColors.hex(agent.id)}
-                  selected?={@selected_agent_id == agent.id}
+                  selected?={agent.id in @active_agents}
                   pulse?={@pulsed_id == agent.id}
                   active?={Map.get(@statuses, agent.id, agent.status) == :running}
                   context_tokens={Map.get(@context_tokens, agent.id, 0)}
@@ -1499,6 +1501,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
             <.filter_bar
               active_categories={@active_categories}
               active_agents={@active_agents}
+              agent_names={@agent_names}
               search={@search}
               regex?={@regex?}
               auto_follow?={@auto_follow?}

@@ -43,7 +43,9 @@ defmodule RepoBuilderWeb.TestOrchestratorAgentTest do
     assert wait_render(view, worker.name)
   end
 
-  test "a selected agent still uses the manual single-agent run (fallback intact)", %{conn: conn} do
+  test "a single agent filter still uses the manual single-agent run (fallback intact)", %{
+    conn: conn
+  } do
     {:ok, agent} =
       RepoBuilder.Agents.create_agent(%{
         name: "manual-#{System.unique_integer([:positive])}",
@@ -52,7 +54,8 @@ defmodule RepoBuilderWeb.TestOrchestratorAgentTest do
       })
 
     {:ok, view, _html} = live(conn, "/")
-    render_click(view, "select_agent", %{"id" => agent.id})
+    # A lone active agent filter is the routing selection (id-based, mirrors a card click).
+    render_click(view, "toggle_agent_filter", %{"id" => agent.id})
 
     html = run_via_command(view, "run directly")
 
