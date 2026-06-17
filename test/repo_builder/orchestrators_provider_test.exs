@@ -108,7 +108,10 @@ defmodule RepoBuilder.OrchestratorsProviderTest do
 
       attrs = %{"harness" => "pi", "provider" => "minimax", "model" => "MiniMax-M3"}
       assert {:ok, updated} = Orchestrators.set_agent_model(orch.id, "heavy", attrs)
-      assert Orchestrators.agent_models(updated)["heavy"] == attrs
+      entry = Orchestrators.agent_models(updated)["heavy"]
+      assert entry["harness"] == "pi"
+      assert entry["provider"] == "minimax"
+      assert entry["model"] == "MiniMax-M3"
     end
 
     test "a blank model is stored as nil (category unassigned)" do

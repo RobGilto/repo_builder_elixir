@@ -74,6 +74,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
         model_options: [],
         recent_models: [],
         agent_model_rows: [],
+        configured_tier_count: 0,
+        agent_models_updated_at: nil,
+        agent_model_saved: false,
         # System-prompt settings: safe defaults for the disconnected render (mount
         # runs twice); the connected socket reflects the orchestrator's real values.
         orchestrator_system_prompt: "",
@@ -172,6 +175,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
           RepoBuilder.Orchestrator.Orchestrator.t()
         ) :: Phoenix.LiveView.Socket.t()
   defp assign_orchestrator_selection(socket, orchestrator) do
+    rows = agent_model_rows(orchestrator)
+
     assign(socket,
       orchestrator_id: orchestrator.id,
       orchestrator_harness: orchestrator.harness,
@@ -180,7 +185,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
       provider_options: provider_options_for(orchestrator.harness),
       model_options: model_options_for(orchestrator.harness, orchestrator.provider),
       recent_models: Orchestrators.recent_models(orchestrator, orchestrator.provider),
-      agent_model_rows: agent_model_rows(orchestrator),
+      agent_model_rows: rows,
+      configured_tier_count: configured_tier_count(rows),
+      agent_models_updated_at: agent_models_updated_at(orchestrator),
       orchestrator_system_prompt: orchestrator.system_prompt || "",
       orchestrator_system_prompt_mode: orchestrator.system_prompt_mode,
       orchestrator_default_prompt: Orchestrators.default_system_prompt(orchestrator),
@@ -188,10 +195,17 @@ defmodule RepoBuilderWeb.ConsoleLive do
     )
   end
 
+  @spec agent_models_updated_at(RepoBuilder.Orchestrator.Orchestrator.t()) :: String.t() | nil
+  defp agent_models_updated_at(%RepoBuilder.Orchestrator.Orchestrator{metadata: metadata}) do
+    metadata
+    |> Map.get("agent_models", %{})
+    |> Enum.find_value(fn {_cat, entry} -> entry["_updated_at"] end)
+  end
+
   # Build the per-category roster rows for the agent-models modal: each category's
   # current {harness, provider, model} plus the option lists derived from them.
   @spec agent_model_rows(RepoBuilder.Orchestrator.Orchestrator.t()) :: [map()]
-  defp agent_model_rows(orchestrator) do
+  def agent_model_rows(orchestrator) do
     roster = Orchestrators.agent_models(orchestrator)
     harnesses = orchestrator_harness_options()
 
@@ -210,6 +224,12 @@ defmodule RepoBuilderWeb.ConsoleLive do
         model_options: if(harness, do: model_options_for(harness, provider), else: [])
       }
     end)
+  end
+
+  @doc "Count of categories that have a non-blank model assigned."
+  @spec configured_tier_count([map()]) :: non_neg_integer()
+  def configured_tier_count(rows) do
+    Enum.count(rows, fn row -> not is_nil(row.model) and row.model != "" end)
   end
 
   @spec provider_options_for(String.t()) :: [String.t()]
@@ -432,16 +452,48 @@ defmodule RepoBuilderWeb.ConsoleLive do
     update_orchestrator(socket, &Orchestrators.set_model(&1, model), "Could not set model")
   end
 
+  # Re-fetch the orchestrator from the DB when the user opens the agent-models modal
+  # so the panel always shows live state (including out-of-band mutations).
+  def handle_event("open_agent_models", _params, socket) do
+    case socket.assigns.orchestrator_id do
+      nil ->
+        {:noreply, socket}
+
+      id ->
+        case Orchestrators.fetch(id) do
+          {:ok, orchestrator} ->
+            {:noreply, assign_orchestrator_selection(socket, orchestrator)}
+
+          {:error, _} ->
+            {:noreply, socket}
+        end
+    end
+  end
+
   # Assign a worker category's harness/provider/model (agent-models modal). Cascade:
   # changing the harness clears provider+model; changing the provider clears model.
+  # On success: transiently set `agent_model_saved: true` for the "Saved ✓" chip.
   def handle_event("set_agent_model", %{"category" => category} = params, socket) do
     attrs = agent_model_attrs(params)
 
-    update_orchestrator(
-      socket,
-      &Orchestrators.set_agent_model(&1, category, attrs),
-      "Could not set agent model"
-    )
+    case socket.assigns.orchestrator_id do
+      nil ->
+        {:noreply, put_flash(socket, :error, "No orchestrator available")}
+
+      id ->
+        case Orchestrators.set_agent_model(id, category, attrs) do
+          {:ok, orchestrator} ->
+            Process.send_after(self(), :clear_agent_model_saved, 2_000)
+
+            {:noreply,
+             socket
+             |> assign_orchestrator_selection(orchestrator)
+             |> assign(:agent_model_saved, true)}
+
+          {:error, _reason} ->
+            {:noreply, put_flash(socket, :error, "Could not set agent model")}
+        end
+    end
   end
 
   # Save the custom system prompt + mode. Blank text persists as nil (spawn falls
@@ -1087,6 +1139,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
     end
   end
 
+  def handle_info(:clear_agent_model_saved, socket) do
+    {:noreply, assign(socket, :agent_model_saved, false)}
+  end
+
   def handle_info({:orchestrator_updated, orchestrator}, socket) do
     if orchestrator.id == socket.assigns.orchestrator_id do
       {:noreply, assign_orchestrator_selection(socket, orchestrator)}
@@ -1641,7 +1697,12 @@ defmodule RepoBuilderWeb.ConsoleLive do
         adw_local?={@adw_local?}
       />
 
-      <.agent_models_modal rows={@agent_model_rows} />
+      <.agent_models_modal
+        rows={@agent_model_rows}
+        saved={@agent_model_saved}
+        configured_count={@configured_tier_count}
+        updated_at={@agent_models_updated_at}
+      />
 
       <.settings_modal
         settings_tab={@settings_tab}

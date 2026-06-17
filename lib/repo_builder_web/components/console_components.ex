@@ -154,7 +154,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
         <button
           id="agent-models-toggle"
           type="button"
-          phx-click={show_agent_models()}
+          phx-click={JS.push("open_agent_models") |> show_agent_models()}
           class="cns-chip"
           title="Configure the harness/provider/model the orchestrator spawns workers into"
         >
@@ -1116,6 +1116,10 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     default: [],
     doc: "per-category roster rows: %{category, harness, provider, model, *_options}"
 
+  attr :saved, :boolean, default: false, doc: "transient 'Saved ✓' state"
+  attr :configured_count, :integer, default: 0, doc: "count of categories with a non-blank model"
+  attr :updated_at, :string, default: nil, doc: "ISO8601 UTC timestamp of last agent_models write"
+
   @doc """
   Modal to assign, per worker category (fast/main/heavy/leader), the
   harness/provider/model the orchestrator spawns into. Always rendered (shown/hidden
@@ -1136,7 +1140,19 @@ defmodule RepoBuilderWeb.ConsoleComponents do
           <span class="text-xs font-semibold" style="color: var(--cns-cyan)">
             AGENT MODELS — what the orchestrator spawns workers into
           </span>
-          <button type="button" phx-click={hide_agent_models()} class="cns-chip">Done</button>
+          <div class="flex items-center gap-2">
+            <span
+              :if={@saved}
+              class="cns-chip"
+              style="color: var(--cns-green, #4ade80)"
+            >
+              Saved ✓
+            </span>
+            <span class="text-[0.625rem]" style="color: var(--cns-text-2)">
+              {@configured_count}/4 configured
+            </span>
+            <button type="button" phx-click={hide_agent_models()} class="cns-chip">Done</button>
+          </div>
         </div>
 
         <div class="flex flex-col gap-2">
@@ -1186,9 +1202,30 @@ defmodule RepoBuilderWeb.ConsoleComponents do
           Leave a model blank to keep that category unassigned — the orchestrator will
           error with "no model selected" if it tries to spawn into it.
         </p>
+        <p :if={@updated_at} class="mt-1 text-[0.625rem]" style="color: var(--cns-text-2)">
+          Last changed {format_relative_time(@updated_at)}
+        </p>
       </div>
     </div>
     """
+  end
+
+  @spec format_relative_time(String.t()) :: String.t()
+  defp format_relative_time(iso8601) do
+    case DateTime.from_iso8601(iso8601) do
+      {:ok, dt, _offset} ->
+        diff = DateTime.diff(DateTime.utc_now(), dt, :second)
+
+        cond do
+          diff < 60 -> "#{diff}s ago"
+          diff < 3600 -> "#{div(diff, 60)}m ago"
+          diff < 86_400 -> "#{div(diff, 3600)}h ago"
+          true -> "#{div(diff, 86_400)}d ago"
+        end
+
+      _ ->
+        "unknown"
+    end
   end
 
   attr :harnesses, :list, default: []

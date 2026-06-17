@@ -205,11 +205,17 @@ defmodule RepoBuilder.Orchestrators do
         entry = %{
           "harness" => attr(attrs, "harness"),
           "provider" => attr(attrs, "provider"),
-          "model" => attr(attrs, "model")
+          "model" => attr(attrs, "model"),
+          "_updated_at" => DateTime.utc_now() |> DateTime.to_iso8601()
         }
 
         roster = Map.put(Map.get(metadata, "agent_models", %{}), category, entry)
-        update_fields(id, %{metadata: Map.put(metadata, "agent_models", roster)})
+
+        with {:ok, updated} <-
+               update_fields(id, %{metadata: Map.put(metadata, "agent_models", roster)}) do
+          :ok = RepoBuilder.Dashboard.broadcast_orchestrator_updated(updated)
+          {:ok, updated}
+        end
 
       error ->
         error

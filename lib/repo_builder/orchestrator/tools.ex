@@ -458,9 +458,7 @@ defmodule RepoBuilder.Orchestrator.Tools do
       attrs = %{"harness" => harness, "provider" => provider, "model" => model}
 
       case Orchestrators.set_agent_model(orchestrator_id, category, attrs) do
-        {:ok, orch} ->
-          Dashboard.broadcast_orchestrator_updated(orch)
-
+        {:ok, _orch} ->
           {:ok,
            %{
              "status" => "configured",
