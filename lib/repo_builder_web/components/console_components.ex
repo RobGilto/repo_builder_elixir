@@ -172,6 +172,16 @@ defmodule RepoBuilderWeb.ConsoleComponents do
         <button id="prompt-toggle" type="button" phx-click={show_command()} class="cns-chip">
           Prompt ⌘K
         </button>
+        <button
+          id="settings-toggle"
+          type="button"
+          phx-click={show_settings()}
+          class="cns-chip flex items-center"
+          title="Settings"
+          aria-label="Settings"
+        >
+          <span class="text-lg leading-none">⚙</span>
+        </button>
       </div>
     </header>
     """
@@ -203,6 +213,11 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   attr :color, :string, required: true, doc: "the agent's deterministic hex color"
   attr :selected?, :boolean, default: false
   attr :pulse?, :boolean, default: false
+
+  attr :active?, :boolean,
+    default: false,
+    doc: "live status is :running (drives the activity orb)"
+
   attr :context_tokens, :integer, default: 0
   attr :responses, :integer, default: 0
   attr :tools, :integer, default: 0
@@ -229,7 +244,10 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     >
       <div class="flex items-center justify-between gap-2">
         <span class="truncate text-sm font-semibold" style={"color: #{@color}"}>{@name}</span>
-        <span class={["cns-cat", status_cat_class(@status)]}>{@status}</span>
+        <span class="flex items-center gap-1.5">
+          <.activity_orb variant={:agent} color={@color} active?={@active?} />
+          <span class={["cns-cat", status_cat_class(@status)]}>{@status}</span>
+        </span>
       </div>
 
       <div class="mt-2">
@@ -270,6 +288,10 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   attr :selected?, :boolean, default: false
   attr :pulse?, :boolean, default: false
 
+  attr :active?, :boolean,
+    default: false,
+    doc: "live status is :running (drives the activity orb)"
+
   @doc "Compact 44px icon-rail agent item: initial + status dot, pulses on activity."
   @spec agent_rail_compact(map()) :: Phoenix.LiveView.Rendered.t()
   def agent_rail_compact(assigns) do
@@ -289,6 +311,9 @@ defmodule RepoBuilderWeb.ConsoleComponents do
       ]}
     >
       <span style={"color: #{@color}"}>{initial(@name)}</span>
+      <span :if={@active?} class="absolute -top-0.5 -right-0.5">
+        <.activity_orb variant={:agent} color={@color} active?={@active?} />
+      </span>
       <span class={["absolute bottom-0.5 right-0.5 size-2 rounded-full", status_dot_class(@status)]} />
     </button>
     """
@@ -474,6 +499,37 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     """
   end
 
+  attr :content, :string, required: true
+  attr :thinking?, :boolean, default: false
+  attr :label, :string, default: "ORCHESTRATOR"
+  attr :time, :string, default: ""
+  attr :id, :string, default: nil
+
+  @doc """
+  In-progress streaming bubble: the live token-by-token buffer for one harness
+  turn, with a blinking caret. `thinking?: true` renders the reasoning variant.
+  Coalesces partials in place; replaced by a finalized `chat_message`/`thinking_bubble`.
+  """
+  @spec streaming_bubble(map()) :: Phoenix.LiveView.Rendered.t()
+  def streaming_bubble(assigns) do
+    ~H"""
+    <div id={@id} class="flex flex-col gap-0.5">
+      <div
+        class="cns-bubble__label"
+        style={"color: var(#{(@thinking? && "--cns-thinking") || "--cns-text-2"})"}
+      >
+        {(@thinking? && "🤔 ORCHESTRATOR THINKING") || @label} · {@time}
+      </div>
+      <div class={[
+        "cns-bubble cns-bubble--streaming",
+        (@thinking? && "cns-bubble--thinking") || "cns-bubble--orch"
+      ]}>
+        {@content}<span class="cns-caret">▋</span>
+      </div>
+    </div>
+    """
+  end
+
   attr :tool_name, :string, required: true
   attr :params_json, :string, required: true, doc: "pretty-printed JSON params"
   attr :time, :string, default: ""
@@ -497,6 +553,40 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     """
   end
 
+  attr :active?, :boolean, default: false
+  attr :variant, :atom, default: :agent, values: [:agent, :orchestrator, :adw]
+  attr :color, :string, default: nil, doc: "agent hex; falls back to the variant token"
+  attr :title, :string, default: "working"
+
+  @doc """
+  Continuous "processing" indicator: a pulsing core ringed by orbiting dots, pure
+  CSS. Renders nothing when `active?` is false. Reused harness-blind across the
+  agent rail, the orchestrator panel, and ADW swimlanes; tied to lifecycle status,
+  not per-event blips — it composes with the momentary `cns-agent-card--pulse` flash.
+  """
+  @spec activity_orb(map()) :: Phoenix.LiveView.Rendered.t()
+  def activity_orb(assigns) do
+    ~H"""
+    <span
+      :if={@active?}
+      data-orb
+      data-active="true"
+      class={["cns-orb", "cns-orb--#{@variant}"]}
+      style={@color && "--orb-color: #{@color}"}
+      title={@title}
+      aria-label={@title}
+    >
+      <span class="cns-orb__core" />
+      <span class="cns-orb__ring">
+        <span class="cns-orb__dot" /><span class="cns-orb__dot" />
+      </span>
+      <span class="cns-orb__ring cns-orb__ring--rev">
+        <span class="cns-orb__dot" />
+      </span>
+    </span>
+    """
+  end
+
   @doc "Three-dot typing indicator."
   @spec typing_indicator(map()) :: Phoenix.LiveView.Rendered.t()
   def typing_indicator(assigns) do
@@ -512,6 +602,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   attr :chat_width, :atom, default: :sm, values: [:sm, :md, :lg]
   attr :cost, :any, default: nil
   attr :typing?, :boolean, default: false
+  attr :auto_follow?, :boolean, default: true
   slot :messages, doc: "rendered chat bubbles"
 
   @doc "Right chat/command panel: chat header (width toggle + cost) + the orchestrator text stream. Input is the ⌘K command modal."
@@ -523,7 +614,9 @@ defmodule RepoBuilderWeb.ConsoleComponents do
         class="flex items-center justify-between border-b pb-2"
         style="border-color: var(--cns-border)"
       >
-        <span class="text-xs font-semibold" style="color: var(--cns-cyan)">ORCHESTRATOR</span>
+        <span class="flex items-center gap-1.5 text-xs font-semibold" style="color: var(--cns-cyan)">
+          ORCHESTRATOR <.activity_orb variant={:orchestrator} active?={@typing?} />
+        </span>
         <div class="flex items-center gap-2">
           <.cost_badge cost={@cost} />
           <div class="cns-toggle">
@@ -544,6 +637,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
       <div
         id="chat-log"
         phx-hook="AutoScroll"
+        data-auto-follow={to_string(@auto_follow?)}
         class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-1"
       >
         {render_slot(@messages)}
@@ -580,6 +674,167 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   @doc "Close the agent-models modal (client-side)."
   @spec hide_agent_models(JS.t()) :: JS.t()
   def hide_agent_models(js \\ %JS{}), do: JS.hide(js, to: "#agent-models-modal")
+
+  @doc "Open the settings modal (client-side; always in the DOM, just hidden)."
+  @spec show_settings(JS.t()) :: JS.t()
+  def show_settings(js \\ %JS{}), do: JS.show(js, to: "#settings-modal", display: "flex")
+
+  @doc "Close the settings modal (client-side)."
+  @spec hide_settings(JS.t()) :: JS.t()
+  def hide_settings(js \\ %JS{}), do: JS.hide(js, to: "#settings-modal")
+
+  attr :settings_tab, :atom, default: :general, values: [:general, :appearance, :about]
+  attr :view_mode, :atom, default: :logs
+  attr :chat_width, :atom, default: :sm
+  attr :auto_follow?, :boolean, default: true
+  attr :show_thinking?, :boolean, default: true
+  attr :harnesses, :list, default: []
+
+  @doc """
+  Settings modal with a vertical tab rail (General / Appearance / About). Shown and
+  hidden client-side like the other modals; the active tab is server-driven via the
+  `select_settings_tab` event. Controls reuse the existing toggle events (new element
+  ids) so there is no duplicate-id conflict with the header controls.
+  """
+  @spec settings_modal(map()) :: Phoenix.LiveView.Rendered.t()
+  def settings_modal(assigns) do
+    ~H"""
+    <div
+      id="settings-modal"
+      class="cns-cmd-overlay"
+      style="display:none"
+      phx-window-keydown={hide_settings()}
+      phx-key="Escape"
+    >
+      <div class="cns-cmd-panel" style="max-width: 44rem">
+        <div class="mb-3 flex items-center justify-between">
+          <span class="text-xs font-semibold" style="color: var(--cns-cyan)">SETTINGS</span>
+          <button type="button" phx-click={hide_settings()} class="cns-chip">Done</button>
+        </div>
+
+        <div class="flex gap-4" style="min-height: 16rem">
+          <nav
+            class="flex w-36 shrink-0 flex-col gap-1 border-r pr-2"
+            style="border-color: var(--cns-border)"
+          >
+            <.settings_tab_button tab={:general} active={@settings_tab} label="General" />
+            <.settings_tab_button tab={:appearance} active={@settings_tab} label="Appearance" />
+            <.settings_tab_button tab={:about} active={@settings_tab} label="About" />
+          </nav>
+
+          <div class="min-w-0 flex-1">
+            <div :if={@settings_tab == :general} class="flex flex-col gap-4">
+              <.settings_field label="View mode">
+                <div id="settings-view-toggle" class="cns-toggle" phx-click="toggle_view">
+                  <span class={["cns-toggle__seg", @view_mode == :logs && "cns-toggle__seg--active"]}>
+                    LOGS
+                  </span>
+                  <span class={["cns-toggle__seg", @view_mode == :adws && "cns-toggle__seg--active"]}>
+                    ADWS
+                  </span>
+                </div>
+              </.settings_field>
+
+              <.settings_field label="Auto-follow chat & stream">
+                <button
+                  id="settings-auto-follow"
+                  type="button"
+                  phx-click="toggle_auto_follow"
+                  class={["cns-chip", @auto_follow? && "cns-chip--active cns-chip--hook"]}
+                >
+                  {if @auto_follow?, do: "ON", else: "OFF"}
+                </button>
+              </.settings_field>
+
+              <.settings_field label="Show orchestrator thinking">
+                <button
+                  id="settings-thinking"
+                  type="button"
+                  phx-click="toggle_thinking"
+                  class={["cns-chip", @show_thinking? && "cns-chip--active cns-chip--hook"]}
+                >
+                  {if @show_thinking?, do: "ON", else: "OFF"}
+                </button>
+              </.settings_field>
+            </div>
+
+            <div :if={@settings_tab == :appearance} class="flex flex-col gap-4">
+              <.settings_field label="Chat width">
+                <div class="cns-toggle">
+                  <button
+                    :for={w <- [:sm, :md, :lg]}
+                    type="button"
+                    id={"settings-chat-width-#{w}"}
+                    phx-click="set_chat_width"
+                    phx-value-width={w}
+                    class={["cns-toggle__seg", @chat_width == w && "cns-toggle__seg--active"]}
+                  >
+                    {w |> Atom.to_string() |> String.upcase()}
+                  </button>
+                </div>
+              </.settings_field>
+
+              <p class="text-[0.625rem]" style="color: var(--cns-text-2)">
+                Theme can be switched with the toggle at the bottom-right of the console.
+              </p>
+            </div>
+
+            <div :if={@settings_tab == :about} class="flex flex-col gap-2 text-xs">
+              <div
+                class="text-[0.625rem] font-semibold uppercase"
+                style="color: var(--cns-text-2)"
+              >
+                Registered harnesses
+              </div>
+              <div class="flex flex-wrap gap-1">
+                <span :for={h <- @harnesses} class="cns-chip">{h}</span>
+              </div>
+              <p class="mt-2 text-[0.625rem]" style="color: var(--cns-text-2)">
+                Orchestration Console — repo_builder. Deterministic orchestration of
+                supervised AI harness CLIs.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  attr :tab, :atom, required: true
+  attr :active, :atom, required: true
+  attr :label, :string, required: true
+
+  @doc "One button in the settings vertical tab rail."
+  @spec settings_tab_button(map()) :: Phoenix.LiveView.Rendered.t()
+  def settings_tab_button(assigns) do
+    ~H"""
+    <button
+      type="button"
+      phx-click="select_settings_tab"
+      phx-value-tab={@tab}
+      class={["cns-chip text-left", @tab == @active && "cns-chip--active cns-chip--hook"]}
+    >
+      {@label}
+    </button>
+    """
+  end
+
+  attr :label, :string, required: true
+  slot :inner_block, required: true
+
+  @doc "A labeled settings row (label above its control)."
+  @spec settings_field(map()) :: Phoenix.LiveView.Rendered.t()
+  def settings_field(assigns) do
+    ~H"""
+    <div class="flex flex-col gap-1">
+      <div class="text-[0.625rem] font-semibold uppercase" style="color: var(--cns-text-2)">
+        {@label}
+      </div>
+      {render_slot(@inner_block)}
+    </div>
+    """
+  end
 
   attr :rows, :list,
     default: [],

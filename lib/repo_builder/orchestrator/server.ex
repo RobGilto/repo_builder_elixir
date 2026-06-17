@@ -103,10 +103,9 @@ defmodule RepoBuilder.Orchestrator.Server do
     {:error, :no_model_selected}
   end
 
-  @spec blank?(term()) :: boolean()
+  @spec blank?(String.t() | nil) :: boolean()
   defp blank?(nil), do: true
   defp blank?(value) when is_binary(value), do: String.trim(value) == ""
-  defp blank?(_value), do: false
 
   @spec start_turn(RepoBuilder.Orchestrator.Orchestrator.t(), String.t()) ::
           {:ok, String.t()} | {:error, term()}

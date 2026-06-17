@@ -240,6 +240,245 @@ defmodule RepoBuilder.Orchestrator.ToolsTest do
     end
   end
 
+  describe "update_agent" do
+    test "updates model/system_prompt/harness on a created worker" do
+      orch = orchestrator()
+      name = "upd-#{uniq()}"
+      {:ok, _} = Tools.call("create_agent", orch.id, %{"name" => name, "harness" => "fake"})
+
+      assert {:ok, result} =
+               Tools.call("update_agent", orch.id, %{
+                 "name" => name,
+                 "model" => "fake-model-9",
+                 "system_prompt" => "be terse",
+                 "harness" => "fake"
+               })
+
+      assert result["model"] == "fake-model-9"
+
+      assert {:ok, worker} = Agents.get_by_name_for_orchestrator(orch.id, name)
+      assert worker.model == "fake-model-9"
+      assert worker.system_prompt == "be terse"
+    end
+
+    test "unknown worker is {:error, :not_found}" do
+      orch = orchestrator()
+
+      assert {:error, :not_found} =
+               Tools.call("update_agent", orch.id, %{"name" => "ghost", "model" => "x"})
+    end
+
+    test "no updatable fields is an error and writes nothing" do
+      orch = orchestrator()
+      name = "noop-#{uniq()}"
+      {:ok, _} = Tools.call("create_agent", orch.id, %{"name" => name, "harness" => "fake"})
+
+      assert {:error, reason} = Tools.call("update_agent", orch.id, %{"name" => name})
+      assert reason =~ "no updatable fields"
+    end
+
+    test "an unregistered harness is rejected" do
+      orch = orchestrator()
+      name = "badh-#{uniq()}"
+      {:ok, _} = Tools.call("create_agent", orch.id, %{"name" => name, "harness" => "fake"})
+
+      assert {:error, _reason} =
+               Tools.call("update_agent", orch.id, %{"name" => name, "harness" => "nope"})
+    end
+  end
+
+  describe "delete_agent" do
+    test "deletes a created worker and broadcasts agent_deleted" do
+      :ok = RepoBuilder.Dashboard.subscribe_events()
+      orch = orchestrator()
+      name = "del-#{uniq()}"
+      {:ok, _} = Tools.call("create_agent", orch.id, %{"name" => name, "harness" => "fake"})
+
+      assert {:ok, %{"status" => "deleted", "name" => ^name}} =
+               Tools.call("delete_agent", orch.id, %{"name" => name})
+
+      assert {:error, :not_found} = Agents.get_by_name_for_orchestrator(orch.id, name)
+      assert_receive {:agent_deleted, %{name: ^name}}
+    end
+
+    test "unknown worker is {:error, :not_found}" do
+      orch = orchestrator()
+      assert {:error, :not_found} = Tools.call("delete_agent", orch.id, %{"name" => "ghost"})
+    end
+  end
+
+  describe "read_system_logs" do
+    test "returns paged summaries after a tool call has logged" do
+      orch = orchestrator()
+      # Any tool call writes a system_logs row via log_invocation/4.
+      {:ok, _} = Tools.call("list_agents", orch.id, %{})
+
+      assert {:ok, %{"logs" => logs, "count" => count}} =
+               Tools.call("read_system_logs", orch.id, %{})
+
+      assert is_list(logs)
+      assert count == length(logs)
+    end
+
+    test "message_contains narrows results" do
+      orch = orchestrator()
+      {:ok, _} = Tools.call("list_agents", orch.id, %{})
+
+      assert {:ok, %{"logs" => logs}} =
+               Tools.call("read_system_logs", orch.id, %{"message_contains" => "list_agents"})
+
+      assert Enum.any?(logs)
+      assert Enum.all?(logs, &(&1["message"] =~ "list_agents"))
+    end
+
+    test "level filter narrows and a blank/invalid level is ignored" do
+      orch = orchestrator()
+      {:ok, _} = Tools.call("list_agents", orch.id, %{})
+
+      assert {:ok, %{"logs" => info_logs}} =
+               Tools.call("read_system_logs", orch.id, %{"level" => "info"})
+
+      assert Enum.all?(info_logs, &(&1["level"] == "info"))
+
+      assert {:ok, %{"logs" => _}} =
+               Tools.call("read_system_logs", orch.id, %{"level" => "bogus"})
+    end
+  end
+
+  describe "check_adw" do
+    test "returns the run status for a valid run id" do
+      orch = orchestrator()
+
+      assert {:ok, %{"run_id" => run_id}} =
+               Tools.call("start_adw", orch.id, %{"input" => "ship it", "harness" => "fake"})
+
+      assert {:ok, %{"status" => status}} =
+               Tools.call("check_adw", orch.id, %{"run_id" => run_id})
+
+      assert is_binary(status)
+      assert_run_terminal(run_id)
+    end
+
+    test "unknown UUID is {:error, :not_found}" do
+      orch = orchestrator()
+
+      assert {:error, :not_found} =
+               Tools.call("check_adw", orch.id, %{"run_id" => Ecto.UUID.generate()})
+    end
+
+    test "a non-UUID run_id is {:error, \"invalid run_id\"}" do
+      orch = orchestrator()
+      assert {:error, "invalid run_id"} = Tools.call("check_adw", orch.id, %{"run_id" => "nope"})
+    end
+  end
+
+  describe "get_config" do
+    test "returns the orchestrator config, tier roster, and registered harnesses" do
+      orch = orchestrator()
+
+      assert {:ok, cfg} = Tools.call("get_config", orch.id, %{})
+      assert %{"harness" => "fake"} = cfg["orchestrator"]
+      assert "fake" in cfg["harnesses"]
+      assert is_map(cfg["available_models"])
+
+      # Every tier is unassigned before any model is set.
+      assert cfg["tiers"]["heavy"]["assigned"] == false
+      assert cfg["tiers"]["fast"]["assigned"] == false
+    end
+
+    test "a tier flips to assigned: true after set_agent_model/3" do
+      orch = orchestrator()
+
+      {:ok, _} =
+        Orchestrators.set_agent_model(orch.id, "heavy", %{
+          "harness" => "fake",
+          "model" => "big-model"
+        })
+
+      assert {:ok, cfg} = Tools.call("get_config", orch.id, %{})
+      assert cfg["tiers"]["heavy"]["assigned"] == true
+      assert cfg["tiers"]["heavy"]["model"] == "big-model"
+    end
+
+    test "logs an ok system_log for the happy path" do
+      orch = orchestrator()
+      {:ok, _} = Tools.call("get_config", orch.id, %{})
+
+      logs = RepoBuilder.Logs.query_system_logs(message_contains: "get_config")
+      assert Enum.any?(logs, &(&1.message =~ "ok"))
+    end
+
+    test "unknown orchestrator id is {:error, :orchestrator_not_found}" do
+      assert {:error, :orchestrator_not_found} =
+               Tools.call("get_config", Ecto.UUID.generate(), %{})
+    end
+  end
+
+  describe "configure_tier" do
+    test "assigns a tier and a subsequent create_agent by category succeeds" do
+      orch = orchestrator()
+
+      assert {:ok, %{"status" => "configured", "category" => "fast"}} =
+               Tools.call("configure_tier", orch.id, %{
+                 "category" => "fast",
+                 "model" => "m",
+                 "harness" => "fake",
+                 "provider" => "minimax"
+               })
+
+      name = "worker-#{uniq()}"
+
+      assert {:ok, %{"name" => ^name, "model" => "m"}} =
+               Tools.call("create_agent", orch.id, %{"name" => name, "category" => "fast"})
+
+      assert {:ok, _worker} = Agents.get_by_name_for_orchestrator(orch.id, name)
+    end
+
+    test "missing model is {:error, _}" do
+      orch = orchestrator()
+
+      assert {:error, _} =
+               Tools.call("configure_tier", orch.id, %{"category" => "fast"})
+    end
+
+    test "an invalid category is {:error, _}" do
+      orch = orchestrator()
+
+      assert {:error, reason} =
+               Tools.call("configure_tier", orch.id, %{"category" => "bogus", "model" => "m"})
+
+      assert reason =~ "invalid category"
+    end
+  end
+
+  describe "set_orchestrator_config" do
+    test "setting a model persists across a re-fetch" do
+      orch = orchestrator()
+
+      assert {:ok, %{"model" => "x"}} =
+               Tools.call("set_orchestrator_config", orch.id, %{"model" => "x"})
+
+      assert {:ok, %{model: "x"}} = Orchestrators.fetch(orch.id)
+    end
+
+    test "empty args is {:error, \"no config fields provided\"}" do
+      orch = orchestrator()
+
+      assert {:error, "no config fields provided"} =
+               Tools.call("set_orchestrator_config", orch.id, %{})
+    end
+
+    test "an unregistered harness is rejected and leaves the row unchanged" do
+      orch = orchestrator()
+
+      assert {:error, reason} =
+               Tools.call("set_orchestrator_config", orch.id, %{"harness" => "nope"})
+
+      assert reason =~ "not a registered harness"
+      assert {:ok, %{harness: "fake"}} = Orchestrators.fetch(orch.id)
+    end
+  end
+
   describe "dispatch" do
     test "unknown tool is {:error, :unknown_tool}" do
       orch = orchestrator()

@@ -44,6 +44,19 @@ defmodule RepoBuilder.Agents do
   def delete_agent(%Agent{} = agent), do: Repo.delete(agent)
 
   @doc """
+  Update an orchestrator-owned worker's `model`/`system_prompt`/`harness` via
+  `Agent.worker_changeset/2` (the plain `changeset/2` does NOT cast those fields
+  and requires `:provider`). The changeset's `validate_required([:name, :harness,
+  :orchestrator_id])` is satisfied by the persisted struct's existing values.
+  """
+  @spec update_worker(Agent.t(), map()) :: {:ok, Agent.t()} | {:error, Ecto.Changeset.t()}
+  def update_worker(%Agent{} = agent, params) do
+    agent
+    |> Agent.worker_changeset(stringify_keys(params))
+    |> Repo.update()
+  end
+
+  @doc """
   Create an orchestrator-owned worker. `orchestrator_id` scopes the worker; `params`
   carries at least `:name` and `:harness`. A missing `:provider` is defaulted from
   the harness so the non-null column is satisfied.

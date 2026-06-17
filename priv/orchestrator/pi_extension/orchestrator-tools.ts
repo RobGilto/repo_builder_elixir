@@ -131,6 +131,109 @@ const tools = [
       required: ["input"],
     },
   },
+  {
+    name: "update_agent",
+    description:
+      "Update a worker by name. At least one of system_prompt, model, or harness must be provided; harness is validated against the registry.",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Target worker name." },
+        system_prompt: { type: "string", description: "New worker system prompt." },
+        model: { type: "string", description: "New model." },
+        harness: { type: "string", description: "New registered harness (e.g. claude, pi)." },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "delete_agent",
+    description: "Delete a worker by name. Any live session is stopped first.",
+    parameters: {
+      type: "object",
+      properties: { name: { type: "string", description: "Target worker name." } },
+      required: ["name"],
+    },
+  },
+  {
+    name: "read_system_logs",
+    description:
+      "Page through recent system logs (newest first). Optional level and message_contains filters.",
+    parameters: {
+      type: "object",
+      properties: {
+        limit: { type: "integer", description: "Page size (default 50, max 200)." },
+        offset: { type: "integer", description: "Rows to skip (default 0)." },
+        level: {
+          type: "string",
+          enum: ["debug", "info", "warn", "error"],
+          description: "Filter by log level.",
+        },
+        message_contains: {
+          type: "string",
+          description: "Case-insensitive substring match on the message.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "check_adw",
+    description:
+      "Inspect an ADW run by id: status, current step, cost, and artifacts. Pairs with start_adw.",
+    parameters: {
+      type: "object",
+      properties: {
+        run_id: { type: "string", description: "The workflow run id from start_adw." },
+      },
+      required: ["run_id"],
+    },
+  },
+  {
+    name: "get_config",
+    description:
+      "Read this orchestrator's current configuration: its own harness/provider/model, the worker-tier roster (fast/main/heavy/leader with each tier's harness/provider/model or 'unassigned'), the registered harnesses, and the available models per harness/provider. Use this first when a spawn fails with 'no model selected'.",
+    parameters: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "configure_tier",
+    description:
+      "Assign a harness/provider/model to a worker tier (fast/main/heavy/leader) so create_agent with that category can spawn. model is required; harness defaults to the orchestrator's harness; provider is optional.",
+    parameters: {
+      type: "object",
+      properties: {
+        category: {
+          type: "string",
+          enum: ["fast", "main", "heavy", "leader"],
+          description: "Worker tier to configure.",
+        },
+        harness: {
+          type: "string",
+          description: "Registered harness for the tier (default: orchestrator's harness).",
+        },
+        provider: { type: "string", description: "Optional provider (open identity)." },
+        model: { type: "string", description: "Model to assign to the tier." },
+      },
+      required: ["category", "model"],
+    },
+  },
+  {
+    name: "set_orchestrator_config",
+    description:
+      "Update this orchestrator's own configuration. Provide any of harness (validated against the registry; switching resets provider/model to that harness's defaults), provider (resets model), and model. At least one is required.",
+    parameters: {
+      type: "object",
+      properties: {
+        harness: {
+          type: "string",
+          description: "New registered harness (resets provider/model to its defaults).",
+        },
+        provider: { type: "string", description: "New provider (resets model)." },
+        model: { type: "string", description: "New model." },
+      },
+      required: [],
+    },
+  },
 ];
 
 // pi ≥ 0.75 injects the host API as the default export's argument; tools register

@@ -21,6 +21,11 @@ defmodule RepoBuilderWeb.TestOrchestratorAgentTest do
     {:ok, view, _html} = live(conn, "/")
     :ok = Dashboard.subscribe_events()
 
+    # The default orchestrator is created model-less (operator picks one); give it a
+    # model so the turn clears the `:no_model_selected` gate.
+    {:ok, orch} = RepoBuilder.Orchestrators.get_or_create_default()
+    {:ok, _} = RepoBuilder.Orchestrators.set_model(orch.id, "fake-model")
+
     html = run_via_command(view, "build me a thing")
 
     # (a) The hard gate is gone — no "select an agent" flash.

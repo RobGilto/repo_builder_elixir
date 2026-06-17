@@ -28,11 +28,13 @@ defmodule RepoBuilder.Harness.PiNormalizeTest do
     assert Pi.normalize(Enum.at(frames, 3), @ctx) == :skip
   end
 
-  test "message_update discriminates text_delta vs thinking_delta", %{frames: frames} do
-    assert {:ok, [%Event.TextDelta{text: "Hi ", thinking?: false}]} =
+  test "message_update discriminates text_delta vs thinking_delta (both partial)", %{
+    frames: frames
+  } do
+    assert {:ok, [%Event.TextDelta{text: "Hi ", thinking?: false, partial?: true}]} =
              Pi.normalize(Enum.at(frames, 4), @ctx)
 
-    assert {:ok, [%Event.TextDelta{text: "pondering", thinking?: true}]} =
+    assert {:ok, [%Event.TextDelta{text: "pondering", thinking?: true, partial?: true}]} =
              Pi.normalize(Enum.at(frames, 5), @ctx)
   end
 
@@ -47,7 +49,7 @@ defmodule RepoBuilder.Harness.PiNormalizeTest do
   test "message_end with text + Anthropic-shaped usage -> [TextDelta, Usage]", %{frames: frames} do
     assert {:ok,
             [
-              %Event.TextDelta{thinking?: false, text: text},
+              %Event.TextDelta{thinking?: false, partial?: false, text: text},
               %Event.Usage{input_tokens: 100, output_tokens: 50, cost_usd: nil}
             ]} =
              Pi.normalize(Enum.at(frames, 8), @ctx)
@@ -121,5 +123,15 @@ defmodule RepoBuilder.Harness.PiNormalizeTest do
     {:ok, events} = Pi.normalize(Enum.at(frames, 8), @ctx)
     usage = Enum.find(events, &match?(%Event.Usage{}, &1))
     assert usage.cost_usd == nil
+  end
+
+  test "zai/GLM stream: partial delta is partial?, message_end finalized is not" do
+    zai = HarnessFixtures.frames("pi_zai_stream.jsonl")
+
+    assert {:ok, [%Event.TextDelta{text: "GLM output", partial?: true}]} =
+             Pi.normalize(Enum.at(zai, 1), @ctx)
+
+    assert {:ok, [%Event.TextDelta{text: "GLM final", partial?: false} | _usage]} =
+             Pi.normalize(Enum.at(zai, 2), @ctx)
   end
 end

@@ -29,6 +29,11 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     - Dispatch work with `command_agent`; check progress with `check_agent_status`;
       stop a runaway worker with `interrupt_agent`.
     - For a full plan→build→review→fix cycle, use `start_adw`.
+    - If a tier shows `(unassigned — cannot spawn here)` or a spawn fails with "no
+      model selected", call `get_config` to inspect the available harnesses/models,
+      then `configure_tier` to assign one — do NOT stop and ask the operator unless
+      no model is available at all.
+    - Use `set_orchestrator_config` to change your own harness/provider/model when needed.
     - Always name workers descriptively and keep the operator informed in plain text.
 
     Worker model tiers:

@@ -31,7 +31,9 @@ defmodule RepoBuilder.Orchestrator.ServerTest do
 
   test "a Fake orchestrator turn creates and commands a worker, streaming to console:events" do
     :ok = Dashboard.subscribe_events()
-    {:ok, orch} = Orchestrators.create(%{name: "orch-#{uniq()}", harness: "fake"})
+
+    {:ok, orch} =
+      Orchestrators.create(%{name: "orch-#{uniq()}", harness: "fake", model: "fake-model"})
 
     assert {:ok, agent_id} = Server.run_turn(orch.id, "build me a thing")
     assert is_binary(agent_id)
@@ -55,7 +57,9 @@ defmodule RepoBuilder.Orchestrator.ServerTest do
   end
 
   test "captures the resumable session id and settles status to idle" do
-    {:ok, orch} = Orchestrators.create(%{name: "orch-#{uniq()}", harness: "fake"})
+    {:ok, orch} =
+      Orchestrators.create(%{name: "orch-#{uniq()}", harness: "fake", model: "fake-model"})
+
     assert {:ok, _agent_id} = Server.run_turn(orch.id, "hello")
 
     # Give the turn time to run the canned sequence to its Done frame.
@@ -71,7 +75,9 @@ defmodule RepoBuilder.Orchestrator.ServerTest do
   end
 
   test "a Fake orchestrator turn persists at least one agent_logs row under orchestrator_id" do
-    {:ok, orch} = Orchestrators.create(%{name: "orch-#{uniq()}", harness: "fake"})
+    {:ok, orch} =
+      Orchestrators.create(%{name: "orch-#{uniq()}", harness: "fake", model: "fake-model"})
+
     assert {:ok, _agent_id} = Server.run_turn(orch.id, "persist me")
 
     # The orchestrator session carries orchestrator_db_id, so its canonical events

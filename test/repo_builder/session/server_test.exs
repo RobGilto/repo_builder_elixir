@@ -209,13 +209,70 @@ defmodule RepoBuilder.Session.ServerTest do
 
       logs = Logs.list_recent(agent.id)
       text_log = Enum.find(logs, &(&1.event_type == :text_delta))
-      assert text_log.payload["t"] == "hi"
-      assert text_log.payload["api_key"] == "[REDACTED]", "persisted payload is scrubbed"
+      # TextDelta persists the canonical text (+ thinking flag), not the raw frame, so
+      # the secret-bearing raw never reaches the payload at all.
+      assert text_log.payload["text"] == "hi"
+      refute Map.has_key?(text_log.payload, "api_key"), "raw secrets never persisted"
 
       # A clean exit with output and no terminal event synthesizes a persisted Done.
       assert Enum.any?(logs, &(&1.event_type == :done))
       # Agent status reflects the terminal Done(ok: true).
       assert Agents.get_agent(agent.id).status == :idle
+    end
+
+    test "broadcasts partial text deltas live but does NOT persist them (lean agent_logs)" do
+      register_harness("mock", @mock)
+
+      {:ok, agent} =
+        Agents.create_agent(%{
+          name: "gate-#{System.unique_integer([:positive])}",
+          harness: "mock",
+          provider: :anthropic
+        })
+
+      subscribe(agent.id)
+
+      # Two partial token deltas followed by one finalized block.
+      stub(@mock, :command, fn _ ->
+        {"printf",
+         [
+           "%s\n",
+           ~s({"k":"partial","t":"Hel"}\n{"k":"partial","t":"lo"}\n{"k":"final","t":"Hello"})
+         ], [], %{harness: :mock}}
+      end)
+
+      stub(@mock, :normalize, fn
+        %{"k" => "partial", "t" => text} = raw, _ ->
+          {:ok, [%Event.TextDelta{harness: :mock, text: text, partial?: true, raw: raw}]}
+
+        %{"k" => "final", "t" => text} = raw, _ ->
+          {:ok, [%Event.TextDelta{harness: :mock, text: text, partial?: false, raw: raw}]}
+
+        _, _ ->
+          :skip
+      end)
+
+      {:ok, pid} =
+        Supervisor.start_session(
+          agent_id: agent.id,
+          agent_db_id: agent.id,
+          harness: "mock",
+          prompt: "x"
+        )
+
+      ref = Process.monitor(pid)
+
+      # All three deltas (2 partial + 1 finalized) are broadcast to the live UI.
+      assert_receive {:harness_event, %Event.TextDelta{text: "Hel", partial?: true}}, 2_000
+      assert_receive {:harness_event, %Event.TextDelta{text: "lo", partial?: true}}, 2_000
+      assert_receive {:harness_event, %Event.TextDelta{text: "Hello", partial?: false}}, 2_000
+      assert_receive {:DOWN, ^ref, :process, _, _}, 2_000
+
+      # Only the finalized text delta is persisted — partials write no rows.
+      text_logs =
+        agent.id |> Logs.list_recent() |> Enum.filter(&(&1.event_type == :text_delta))
+
+      assert [%{payload: %{"text" => "Hello"}}] = text_logs
     end
   end
 end

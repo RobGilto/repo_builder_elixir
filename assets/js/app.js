@@ -27,13 +27,27 @@ import topbar from "../vendor/topbar"
 
 // --- Orchestration console hooks (BUILD_PROMPT.md §9) ---
 
-// Keep a scroll container pinned to the bottom on update, unless auto-follow is off
-// (the element opts out via data-auto-follow="false").
+// Keep a scroll container pinned to the bottom on update. Two gates: the server
+// AUTO-FOLLOW toggle (data-auto-follow="false") is the master off-switch, and a
+// local check pauses follow when the user scrolls up, resuming once they return
+// to the bottom — so live updates never yank you away from scrollback.
 const AutoScroll = {
-  mounted() { this.scrollToBottom() },
+  mounted() {
+    this.userAtBottom = true
+    this.el.addEventListener(
+      "scroll",
+      () => {
+        const { scrollTop, scrollHeight, clientHeight } = this.el
+        this.userAtBottom = scrollHeight - scrollTop - clientHeight < 40
+      },
+      { passive: true },
+    )
+    this.scrollToBottom()
+  },
   updated() { this.scrollToBottom() },
   scrollToBottom() {
     if (this.el.dataset.autoFollow === "false") return
+    if (this.userAtBottom === false) return
     this.el.scrollTop = this.el.scrollHeight
   },
 }

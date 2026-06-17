@@ -7,7 +7,7 @@ defmodule RepoBuilder.Logs do
   maps the variant to an `event_type`, rolls usage into the embedded `Usage` value
   object (float→Decimal boundary), and inserts one `agent_logs` row.
   """
-  import Ecto.Query, only: [from: 2, where: 3, order_by: 3, limit: 2]
+  import Ecto.Query, only: [from: 2, where: 3, order_by: 3, limit: 2, offset: 2]
 
   alias RepoBuilder.Harness.{Event, Redact}
   alias RepoBuilder.Logs.{AgentLog, SystemLog, Usage}
@@ -137,7 +137,62 @@ defmodule RepoBuilder.Logs do
     Repo.all(from(l in SystemLog, order_by: [desc: l.inserted_at], limit: ^limit))
   end
 
+  # Highest `:limit` a single `query_system_logs/1` page may request.
+  @max_system_log_limit 200
+
+  # The ONLY accepted `:level` values, mapped from wire strings to the enum atoms.
+  # An unknown/blank level is ignored (no filter) — never `String.to_atom/1` on
+  # input (AGENTS.md).
+  @system_log_levels %{"debug" => :debug, "info" => :info, "warn" => :warn, "error" => :error}
+
+  @doc """
+  Filtered, paginated read of `system_logs`, newest-first. Drives the
+  orchestrator's `read_system_logs` tool.
+
+  Options:
+    * `:limit` — page size (default 50, clamped to #{@max_system_log_limit})
+    * `:offset` — rows to skip (default 0)
+    * `:level` — one of `"debug"`/`"info"`/`"warn"`/`"error"`; anything else is ignored
+    * `:message_contains` — case-insensitive substring match on `message`
+  """
+  @spec query_system_logs(keyword()) :: [SystemLog.t()]
+  def query_system_logs(opts \\ []) do
+    limit = opts |> Keyword.get(:limit, 50) |> clamp_limit()
+    offset = opts |> Keyword.get(:offset, 0) |> max(0)
+
+    SystemLog
+    |> order_by([l], desc: l.inserted_at, desc: l.id)
+    |> maybe_level(Keyword.get(opts, :level))
+    |> maybe_contains(Keyword.get(opts, :message_contains))
+    |> limit(^limit)
+    |> offset(^offset)
+    |> Repo.all()
+  end
+
   # --- private ---
+
+  @spec clamp_limit(integer()) :: pos_integer()
+  defp clamp_limit(limit) when is_integer(limit) and limit > 0,
+    do: min(limit, @max_system_log_limit)
+
+  defp clamp_limit(_limit), do: 50
+
+  @spec maybe_level(Ecto.Queryable.t(), String.t() | nil) :: Ecto.Queryable.t()
+  defp maybe_level(query, level) when is_binary(level) do
+    case Map.fetch(@system_log_levels, level) do
+      {:ok, atom} -> where(query, [l], l.level == ^atom)
+      :error -> query
+    end
+  end
+
+  defp maybe_level(query, _level), do: query
+
+  @spec maybe_contains(Ecto.Queryable.t(), String.t() | nil) :: Ecto.Queryable.t()
+  defp maybe_contains(query, term) when is_binary(term) and term != "" do
+    where(query, [l], ilike(l.message, ^"%#{term}%"))
+  end
+
+  defp maybe_contains(query, _term), do: query
 
   @spec add_cost(Decimal.t(), Usage.t() | nil) :: Decimal.t()
   defp add_cost(acc, %Usage{cost_usd: %Decimal{} = cost}), do: Decimal.add(acc, cost)

@@ -64,8 +64,10 @@ defmodule RepoBuilderWeb.TestOrchestratorHarnessProviderTest do
   } do
     {:ok, view, _html} = live(conn, "/")
     {:ok, orch} = Orchestrators.get_or_create_default()
-    # Default test orchestrator is fake (keyless) — run a turn straight away.
+    # Default test orchestrator is fake (keyless); give it a model so the turn clears
+    # the `:no_model_selected` gate.
     assert orch.harness == "fake"
+    {:ok, _} = Orchestrators.set_model(orch.id, "fake-model")
 
     :ok = Dashboard.subscribe_events()
 

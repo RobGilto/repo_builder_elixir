@@ -75,6 +75,18 @@ defmodule RepoBuilder.Dashboard do
     :ok
   end
 
+  @doc """
+  Announce that an orchestrator-owned worker was deleted so the roster drops it
+  live. Subscribers receive `{:agent_deleted, agent}`. Additive seam (§9) — NOT a
+  canonical `Event` variant, so the core event sum type is untouched. Mirrors
+  `broadcast_agent_created/1`.
+  """
+  @spec broadcast_agent_deleted(RepoBuilder.Agents.Agent.t()) :: :ok
+  def broadcast_agent_deleted(agent) do
+    _ = Phoenix.PubSub.broadcast(RepoBuilder.PubSub, @events_topic, {:agent_deleted, agent})
+    :ok
+  end
+
   @doc "Topic for one workflow run's transition stream (per-workflow view)."
   @spec workflow_topic(Ecto.UUID.t()) :: String.t()
   def workflow_topic(run_id), do: "workflow:#{run_id}:events"

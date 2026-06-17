@@ -65,20 +65,22 @@ defmodule RepoBuilder.PersistenceTest do
     test "scrubs secrets in the persisted payload while leaving the input event untouched" do
       agent = agent_fixture()
 
+      # An event whose payload persists the scrubbed raw frame (TextDelta persists only
+      # canonical text, so use SessionStarted to exercise the raw-redaction path).
       raw = %{
-        "type" => "text_delta",
-        "text" => "hi",
+        "type" => "system",
+        "model" => "claude-sonnet-4-6",
         "api_key" => "sk-secret",
         "nested" => %{"authorization" => "Bearer x"}
       }
 
-      event = %Event.TextDelta{harness: :claude, text: "hi", raw: raw}
+      event = %Event.SessionStarted{harness: :claude, session_id: "s", raw: raw}
 
       {:ok, log} = Logs.persist_event(event, %{agent_id: agent.id, session_id: "s1"})
 
       assert log.payload["api_key"] == "[REDACTED]"
       assert log.payload["nested"]["authorization"] == "[REDACTED]"
-      assert log.payload["text"] == "hi"
+      assert log.payload["model"] == "claude-sonnet-4-6"
       # The in-flight event keeps full detail.
       assert event.raw["api_key"] == "sk-secret"
     end

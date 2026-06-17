@@ -45,21 +45,22 @@ defmodule RepoBuilder.Harness.ClaudeNormalizeTest do
   end
 
   test "stream_event nested delta -> partial TextDelta", %{frames: frames} do
-    assert {:ok, [%Event.TextDelta{text: "Hel", thinking?: false}]} =
+    assert {:ok, [%Event.TextDelta{text: "Hel", thinking?: false, partial?: true}]} =
              Claude.normalize(Enum.at(frames, 1), @ctx)
   end
 
-  test "assistant text block -> TextDelta + per-message Usage", %{frames: frames} do
+  test "assistant text block -> finalized TextDelta + per-message Usage", %{frames: frames} do
     assert {:ok,
             [
-              %Event.TextDelta{text: "Hello, world", thinking?: false},
+              %Event.TextDelta{text: "Hello, world", thinking?: false, partial?: false},
               %Event.Usage{input_tokens: 12, output_tokens: 3}
             ]} =
              Claude.normalize(Enum.at(frames, 2), @ctx)
   end
 
-  test "assistant thinking block -> thinking TextDelta", %{frames: frames} do
-    assert {:ok, [%Event.TextDelta{text: "Let me think about this.", thinking?: true}]} =
+  test "assistant thinking block -> finalized thinking TextDelta", %{frames: frames} do
+    assert {:ok,
+            [%Event.TextDelta{text: "Let me think about this.", thinking?: true, partial?: false}]} =
              Claude.normalize(Enum.at(frames, 3), @ctx)
   end
 

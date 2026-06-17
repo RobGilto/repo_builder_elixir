@@ -384,7 +384,7 @@ defmodule RepoBuilder.Session.Server do
     # event for the live UI (§4.1). Persistence only applies when the session is tied
     # to a durable agent row.
     if state.agent_db_id do
-      persist_quietly(event, state)
+      if persist?(event), do: persist_quietly(event, state)
       update_status_quietly(event, state)
     end
 
@@ -392,7 +392,7 @@ defmodule RepoBuilder.Session.Server do
     # carries `orchestrator_db_id` (never `agent_db_id`), so its events persist to
     # `agent_logs` keyed by `orchestrator_id` — observability parity with workers,
     # with the worker path above untouched.
-    if state.orchestrator_db_id do
+    if state.orchestrator_db_id && persist?(event) do
       persist_orchestrator_quietly(event, state)
     end
 
@@ -428,6 +428,13 @@ defmodule RepoBuilder.Session.Server do
       harness: to_string(state.harness)
     })
   end
+
+  # Token-level partial text deltas are broadcast for the live UI but never written
+  # to `agent_logs` (§4) — so an N-token turn persists exactly one finalized row and
+  # reconnect backfill renders one clean message instead of replaying token shards.
+  @spec persist?(Event.t()) :: boolean()
+  defp persist?(%Event.TextDelta{partial?: true}), do: false
+  defp persist?(_event), do: true
 
   @spec persist_quietly(Event.t(), State.t()) :: :ok
   defp persist_quietly(event, %State{} = state) do

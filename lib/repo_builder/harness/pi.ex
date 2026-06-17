@@ -115,7 +115,8 @@ defmodule RepoBuilder.Harness.Pi do
       ) do
     case Map.get(event, "text") do
       text when is_binary(text) ->
-        {:ok, [%Event.TextDelta{harness: :pi, text: text, thinking?: false, raw: raw}]}
+        {:ok,
+         [%Event.TextDelta{harness: :pi, text: text, thinking?: false, partial?: true, raw: raw}]}
 
       _ ->
         :skip
@@ -131,7 +132,8 @@ defmodule RepoBuilder.Harness.Pi do
       ) do
     case Map.get(event, "text") || Map.get(event, "thinking") do
       text when is_binary(text) ->
-        {:ok, [%Event.TextDelta{harness: :pi, text: text, thinking?: true, raw: raw}]}
+        {:ok,
+         [%Event.TextDelta{harness: :pi, text: text, thinking?: true, partial?: true, raw: raw}]}
 
       _ ->
         :skip

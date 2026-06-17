@@ -40,6 +40,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
   @categories [:response, :tool, :thinking, :hook]
   @buffer_limit 500
   @messages_limit 100
+  # Throttle the live streaming assign to ≤ one render per tick (~20 fps) so a fast
+  # provider streaming thousands of token deltas/sec can't flood the WebSocket.
+  @stream_flush_ms 50
 
   # --- mount / streams / subscriptions ---
 
@@ -66,10 +69,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
         recent_models: [],
         agent_model_rows: [],
         view_mode: :logs,
-        show_new_agent?: false,
         rail_collapsed?: false,
         chat_width: :sm,
         auto_follow?: true,
+        show_thinking?: true,
+        settings_tab: :general,
         regex?: false,
         search: "",
         active_categories: MapSet.new(@categories),
@@ -78,6 +82,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
         counters: %{},
         context_tokens: %{},
         messages: [],
+        # Live token-by-token streaming buffers (per agent_id), kept out of the
+        # `@messages` list and the center stream until finalized (§ streaming).
+        streaming: %{},
+        stream_pending: %{},
+        stream_flush_ref: nil,
         event_buffer: [],
         selected_event: nil,
         pulsed_id: nil,
@@ -89,8 +98,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
         # "—" until a priced amount arrives (§ edge cases).
         cost: nil,
         connected?: connected?(socket),
-        harness_options: HarnessRegistry.known(),
-        agent_form: new_agent_form()
+        harness_options: HarnessRegistry.known()
       )
 
     socket =
@@ -256,6 +264,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
     socket
     |> assign(event_buffer: rows, messages: Enum.take(messages, -@messages_limit), seq: seq)
+    # A reconnect starts from persisted finalized history only — drop any stale
+    # in-flight streaming buffer so no token shards survive the reconnect (§9).
+    |> assign(streaming: %{}, stream_pending: %{}, stream_flush_ref: nil)
     |> stream(:events, rows, reset: true)
   end
 
@@ -338,41 +349,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
   def handle_event("set_chat_width", %{"width" => width}, socket),
     do: {:noreply, assign(socket, :chat_width, to_chat_width(width))}
 
-  def handle_event("show_new_agent", _params, socket),
-    do: {:noreply, assign(socket, :show_new_agent?, true)}
-
-  def handle_event("cancel_new_agent", _params, socket),
-    do: {:noreply, assign(socket, show_new_agent?: false, agent_form: new_agent_form())}
-
   def handle_event("select_agent", %{"id" => id}, socket) do
     {:noreply, assign(socket, :selected_agent_id, id)}
-  end
-
-  def handle_event("validate_agent", %{"agent" => params}, socket) do
-    form =
-      %Agent{}
-      |> Agent.changeset(params)
-      |> to_form(action: :validate)
-
-    {:noreply, assign(socket, :agent_form, form)}
-  end
-
-  def handle_event("create_agent", %{"agent" => params}, socket) do
-    case Agents.create_agent(params) do
-      {:ok, agent} ->
-        {:noreply,
-         socket
-         |> load_agents()
-         |> seed_agent_costs()
-         |> reseed_agent_lanes()
-         |> assign(:selected_agent_id, agent.id)
-         |> assign(:agent_form, new_agent_form())
-         |> assign(:show_new_agent?, false)
-         |> put_flash(:info, "Created agent #{agent.name}")}
-
-      {:error, %Ecto.Changeset{} = changeset} ->
-        {:noreply, assign(socket, :agent_form, to_form(changeset))}
-    end
   end
 
   # The ⌘K command modal is the sole prompt input: it routes to the orchestrator
@@ -412,6 +390,12 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   def handle_event("toggle_auto_follow", _params, socket),
     do: {:noreply, assign(socket, :auto_follow?, not socket.assigns.auto_follow?)}
+
+  def handle_event("toggle_thinking", _params, socket),
+    do: {:noreply, assign(socket, :show_thinking?, not socket.assigns.show_thinking?)}
+
+  def handle_event("select_settings_tab", %{"tab" => tab}, socket),
+    do: {:noreply, assign(socket, :settings_tab, settings_tab(tab))}
 
   def handle_event("clear_filters", _params, socket) do
     {:noreply,
@@ -576,11 +560,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
     end
   end
 
-  @spec reseed_agent_lanes(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  defp reseed_agent_lanes(socket) do
-    Enum.reduce(agent_lanes(socket.assigns.agents), socket, &stream_insert(&2, :lanes, &1))
-  end
-
   @spec toggle_view(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp toggle_view(socket) do
     assign(socket, :view_mode, if(socket.assigns.view_mode == :logs, do: :adws, else: :logs))
@@ -601,7 +580,17 @@ defmodule RepoBuilderWeb.ConsoleLive do
      })}
   end
 
+  # Incremental token delta — coalesce into the per-agent streaming buffer (no
+  # center-log row, no per-token counter); a throttled flush commits it to render.
+  def handle_info({:agent_event, agent_id, %Event.TextDelta{partial?: true} = event}, socket) do
+    {:noreply, accumulate_partial(socket, agent_id, channel(event.thinking?), event.text)}
+  end
+
+  # Finalized thinking block — clear the in-flight thinking buffer, then record the
+  # one permanent thinking message + center row.
   def handle_info({:agent_event, agent_id, %Event.TextDelta{thinking?: true} = event}, socket) do
+    socket = finalize_stream_channel(socket, agent_id, :thinking)
+
     {:noreply,
      record_event(socket, agent_id, %{
        category: :thinking,
@@ -613,7 +602,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
      })}
   end
 
+  # Finalized text block — clear the in-flight text buffer, then record the one
+  # permanent orchestrator message + center row.
   def handle_info({:agent_event, agent_id, %Event.TextDelta{} = event}, socket) do
+    socket = finalize_stream_channel(socket, agent_id, :text)
+
     {:noreply,
      record_event(socket, agent_id, %{
        category: :response,
@@ -628,6 +621,14 @@ defmodule RepoBuilderWeb.ConsoleLive do
          params_json: nil
        }
      })}
+  end
+
+  # Throttled flush tick: commit accumulated partials into the rendered streaming
+  # map (one render), drain pending, and clear the timer so the next partial reschedules.
+  def handle_info(:flush_stream, socket) do
+    streaming = merge_pending(socket.assigns.streaming, socket.assigns.stream_pending)
+
+    {:noreply, assign(socket, streaming: streaming, stream_pending: %{}, stream_flush_ref: nil)}
   end
 
   def handle_info({:agent_event, agent_id, %Event.ToolCall{} = event}, socket) do
@@ -687,6 +688,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
     {:noreply,
      socket
+     |> flush_streaming_agent(agent_id)
      |> set_status(agent_id, status)
      |> add_cost(event.cost_usd)
      |> add_agent_cost(agent_id, event.cost_usd)
@@ -701,6 +703,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
   def handle_info({:agent_event, agent_id, %Event.Error{} = event}, socket) do
     {:noreply,
      socket
+     |> flush_streaming_agent(agent_id)
      |> set_status(agent_id, :error)
      |> record_event(agent_id, %{
        category: :system,
@@ -731,6 +734,17 @@ defmodule RepoBuilderWeb.ConsoleLive do
        |> assign(:statuses, Map.put(socket.assigns.statuses, agent.id, agent.status))
        |> stream_insert(:lanes, lane)}
     end
+  end
+
+  # A worker the orchestrator just deleted (issue agent-CRUD): drop it from the
+  # rail roster + the swimlane stream live. Idempotent for an already-absent worker.
+  def handle_info({:agent_deleted, %Agent{} = agent}, socket) do
+    {:noreply,
+     socket
+     |> assign(:agents, Enum.reject(socket.assigns.agents, &(&1.id == agent.id)))
+     |> assign(:agent_names, Map.delete(socket.assigns.agent_names, agent.id))
+     |> assign(:statuses, Map.delete(socket.assigns.statuses, agent.id))
+     |> stream_delete(:lanes, %{id: "agent:#{agent.id}"})}
   end
 
   def handle_info({:lane, lane}, socket) do
@@ -800,6 +814,132 @@ defmodule RepoBuilderWeb.ConsoleLive do
     entry = Map.merge(chat, %{id: seq, time: now_hm()})
     Enum.take(messages ++ [entry], -@messages_limit)
   end
+
+  # --- live streaming buffer (partials coalesced per agent + channel) -------
+
+  @spec channel(boolean()) :: :text | :thinking
+  defp channel(true), do: :thinking
+  defp channel(false), do: :text
+
+  # Append an incremental token to the agent's pending buffer for `channel` and
+  # ensure a flush tick is scheduled.
+  @spec accumulate_partial(
+          Phoenix.LiveView.Socket.t(),
+          String.t(),
+          :text | :thinking,
+          String.t()
+        ) :: Phoenix.LiveView.Socket.t()
+  defp accumulate_partial(socket, agent_id, channel, text) do
+    pending = socket.assigns.stream_pending
+    agent = Map.get(pending, agent_id, %{text: "", thinking: ""})
+    agent = Map.update!(agent, channel, &(&1 <> text))
+
+    socket
+    |> assign(:stream_pending, Map.put(pending, agent_id, agent))
+    |> schedule_flush()
+  end
+
+  @spec schedule_flush(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp schedule_flush(socket) do
+    if socket.assigns.stream_flush_ref do
+      socket
+    else
+      ref = Process.send_after(self(), :flush_stream, @stream_flush_ms)
+      assign(socket, :stream_flush_ref, ref)
+    end
+  end
+
+  # Fold each agent's pending text/thinking onto the already-rendered streaming map.
+  @spec merge_pending(map(), map()) :: map()
+  defp merge_pending(streaming, pending) do
+    Enum.reduce(pending, streaming, fn {agent_id, p}, acc ->
+      cur = Map.get(acc, agent_id, %{text: "", thinking: ""})
+      Map.put(acc, agent_id, %{text: cur.text <> p.text, thinking: cur.thinking <> p.thinking})
+    end)
+  end
+
+  # The finalized block for a channel arrived: drop that channel from both the
+  # rendered and pending buffers (removing the agent entirely once both are empty),
+  # so the live bubble vanishes and only the finalized message remains.
+  @spec finalize_stream_channel(Phoenix.LiveView.Socket.t(), String.t(), :text | :thinking) ::
+          Phoenix.LiveView.Socket.t()
+  defp finalize_stream_channel(socket, agent_id, channel) do
+    socket
+    |> clear_stream_channel(:streaming, agent_id, channel)
+    |> clear_stream_channel(:stream_pending, agent_id, channel)
+  end
+
+  @spec clear_stream_channel(
+          Phoenix.LiveView.Socket.t(),
+          :streaming | :stream_pending,
+          String.t(),
+          :text | :thinking
+        ) :: Phoenix.LiveView.Socket.t()
+  defp clear_stream_channel(socket, key, agent_id, channel) do
+    map = Map.fetch!(socket.assigns, key)
+
+    case Map.get(map, agent_id) do
+      nil ->
+        socket
+
+      agent ->
+        cleared = Map.put(agent, channel, "")
+
+        map =
+          if cleared.text == "" and cleared.thinking == "",
+            do: Map.delete(map, agent_id),
+            else: Map.put(map, agent_id, cleared)
+
+        assign(socket, key, map)
+    end
+  end
+
+  # Safety net for a partial-only stream (no finalizing block): on Done/Error,
+  # promote any leftover buffered text/thinking into `@messages` once, then clear
+  # the agent's buffers so no orphan streaming bubble lingers.
+  @spec flush_streaming_agent(Phoenix.LiveView.Socket.t(), String.t()) ::
+          Phoenix.LiveView.Socket.t()
+  defp flush_streaming_agent(socket, agent_id) do
+    s = Map.get(socket.assigns.streaming, agent_id, %{text: "", thinking: ""})
+    p = Map.get(socket.assigns.stream_pending, agent_id, %{text: "", thinking: ""})
+    leftover = %{text: s.text <> p.text, thinking: s.thinking <> p.thinking}
+
+    {messages, seq} =
+      {socket.assigns.messages, socket.assigns.seq}
+      |> promote_channel(leftover.text, :text)
+      |> promote_channel(leftover.thinking, :thinking)
+
+    socket
+    |> assign(:messages, messages)
+    |> assign(:seq, seq)
+    |> assign(:streaming, Map.delete(socket.assigns.streaming, agent_id))
+    |> assign(:stream_pending, Map.delete(socket.assigns.stream_pending, agent_id))
+  end
+
+  @spec promote_channel({[map()], non_neg_integer()}, String.t(), :text | :thinking) ::
+          {[map()], non_neg_integer()}
+  defp promote_channel({messages, seq}, text, channel) do
+    if String.trim(text) == "" do
+      {messages, seq}
+    else
+      seq = seq + 1
+      {append_chat(messages, stream_chat(channel, text), seq), seq}
+    end
+  end
+
+  # Inference-only spec — the fixed-shape chat map narrows below a hand-written
+  # `map()` spec, which Dialyzer rejects as a supertype under :underspecs.
+  defp stream_chat(:text, text),
+    do: %{
+      role: :orchestrator,
+      label: "ORCHESTRATOR",
+      content: text,
+      tool_name: nil,
+      params_json: nil
+    }
+
+  defp stream_chat(:thinking, text),
+    do: %{role: :thinking, label: nil, content: text, tool_name: nil, params_json: nil}
 
   @spec restream(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp restream(socket) do
@@ -933,9 +1073,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
               Agents · {length(@agents)}
             </span>
             <div class="flex items-center gap-1">
-              <button id="show-new-agent" type="button" phx-click="show_new_agent" class="cns-chip">
-                + New
-              </button>
               <button
                 id="toggle-rail"
                 type="button"
@@ -958,6 +1095,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
                   color={AgentColors.hex(agent.id)}
                   selected?={@selected_agent_id == agent.id}
                   pulse?={@pulsed_id == agent.id}
+                  active?={Map.get(@statuses, agent.id, agent.status) == :running}
                 />
               <% else %>
                 <.agent_card
@@ -969,6 +1107,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
                   color={AgentColors.hex(agent.id)}
                   selected?={@selected_agent_id == agent.id}
                   pulse?={@pulsed_id == agent.id}
+                  active?={Map.get(@statuses, agent.id, agent.status) == :running}
                   context_tokens={Map.get(@context_tokens, agent.id, 0)}
                   responses={counter(@counters, agent.id, :responses)}
                   tools={counter(@counters, agent.id, :tools)}
@@ -980,34 +1119,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
             <p :if={@agents == []} class="px-1 py-1 text-xs" style="color: var(--cns-text-3)">
               No agents yet.
             </p>
-          </div>
-
-          <div :if={@show_new_agent?} class="mt-2 cns-panel rounded p-2">
-            <.form
-              for={@agent_form}
-              id="new-agent-form"
-              phx-submit="create_agent"
-              phx-change="validate_agent"
-              class="space-y-1"
-            >
-              <.input field={@agent_form[:name]} type="text" label="Name" />
-              <.input
-                field={@agent_form[:harness]}
-                type="select"
-                label="Harness"
-                options={@harness_options}
-              />
-              <.input
-                field={@agent_form[:provider]}
-                type="select"
-                label="Provider"
-                options={provider_options()}
-              />
-              <div class="flex gap-2">
-                <button type="submit" class="btn btn-primary btn-xs flex-1">Create</button>
-                <button type="button" phx-click="cancel_new_agent" class="btn btn-ghost btn-xs">Cancel</button>
-              </div>
-            </.form>
           </div>
         </aside>
 
@@ -1091,10 +1202,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
           <.command_panel
             chat_width={@chat_width}
             cost={@cost}
-            typing?={@typing?}
+            typing?={@typing? || Map.get(@statuses, @orchestrator_id) == :running}
+            auto_follow?={@auto_follow?}
           >
             <:messages>
-              <%= for msg <- @messages do %>
+              <%= for msg <- @messages, msg.role != :thinking or @show_thinking? do %>
                 <%= case msg.role do %>
                   <% :thinking -> %>
                     <.thinking_bubble content={msg.content} time={msg.time} />
@@ -1113,6 +1225,22 @@ defmodule RepoBuilderWeb.ConsoleLive do
                     />
                 <% end %>
               <% end %>
+              <%!-- In-flight streaming buffers: one growing bubble per agent/channel,
+              rendered after the finalized history; replaced by a finalized message
+              once the authoritative block (or Done/Error flush) arrives. --%>
+              <%= for {agent_id, buf} <- @streaming do %>
+                <.streaming_bubble
+                  :if={buf.text != ""}
+                  id={"streaming-text-#{agent_id}"}
+                  content={buf.text}
+                />
+                <.streaming_bubble
+                  :if={@show_thinking? and buf.thinking != ""}
+                  id={"streaming-think-#{agent_id}"}
+                  thinking?={true}
+                  content={buf.thinking}
+                />
+              <% end %>
             </:messages>
           </.command_panel>
         </aside>
@@ -1124,6 +1252,15 @@ defmodule RepoBuilderWeb.ConsoleLive do
       />
 
       <.agent_models_modal rows={@agent_model_rows} />
+
+      <.settings_modal
+        settings_tab={@settings_tab}
+        view_mode={@view_mode}
+        chat_width={@chat_width}
+        auto_follow?={@auto_follow?}
+        show_thinking?={@show_thinking?}
+        harnesses={@harness_options}
+      />
 
       <div class="fixed bottom-3 right-3 z-50">
         <Layouts.theme_toggle />
@@ -1234,9 +1371,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   defp chat_for_row(_row), do: nil
 
-  @spec new_agent_form() :: Phoenix.HTML.Form.t()
-  defp new_agent_form, do: to_form(Agent.changeset(%Agent{}, %{}))
-
   @spec default_harness() :: String.t() | nil
   defp default_harness do
     known = HarnessRegistry.known()
@@ -1249,10 +1383,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
   defp orchestrator_harness_options,
     do: Enum.reject(HarnessRegistry.orchestrating_harnesses(), &(&1 == "fake"))
 
-  @spec provider_options() :: [{String.t(), String.t()}]
-  defp provider_options,
-    do: [{"Anthropic", "anthropic"}, {"OpenAI", "openai"}, {"Local", "local"}]
-
   @spec to_category(String.t()) :: atom() | nil
   defp to_category("response"), do: :response
   defp to_category("tool"), do: :tool
@@ -1264,6 +1394,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
   defp to_chat_width("md"), do: :md
   defp to_chat_width("lg"), do: :lg
   defp to_chat_width(_other), do: :sm
+
+  @spec settings_tab(String.t()) :: :general | :appearance | :about
+  defp settings_tab("appearance"), do: :appearance
+  defp settings_tab("about"), do: :about
+  defp settings_tab(_other), do: :general
 
   # Inference-only spec — a `term()` member would be a supertype under :underspecs.
   defp toggle_member(set, member) do

@@ -50,7 +50,7 @@ defmodule RepoBuilder.Harness.Pi.Models do
   @doc "Refresh the cache in the background (non-blocking, unlinked)."
   @spec refresh_async() :: :ok
   def refresh_async do
-    if enabled?(), do: Task.start(fn -> refresh() end)
+    _ = if enabled?(), do: Task.start(fn -> refresh() end)
     :ok
   end
 

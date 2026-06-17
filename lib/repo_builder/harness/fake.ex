@@ -153,7 +153,9 @@ defmodule RepoBuilder.Harness.Fake do
         "type" => "tool_call",
         "id" => "orch_call_1",
         "name" => "create_agent",
-        "input" => %{"name" => worker_name, "harness" => "fake"}
+        # A model is required for the worker to be commandable (the orchestrator's
+        # `ensure_worker_model` gate); the keyless Fake worker uses a stub model.
+        "input" => %{"name" => worker_name, "harness" => "fake", "model" => "fake-model"}
       },
       %{
         "type" => "tool_call",

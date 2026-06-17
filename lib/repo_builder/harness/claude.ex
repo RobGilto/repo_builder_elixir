@@ -172,7 +172,7 @@ defmodule RepoBuilder.Harness.Claude do
         _ctx
       )
       when is_binary(text) do
-    {:ok, [%Event.TextDelta{harness: :claude, text: text, raw: raw}]}
+    {:ok, [%Event.TextDelta{harness: :claude, text: text, partial?: true, raw: raw}]}
   end
 
   def normalize(%{"type" => "stream_event"}, _ctx), do: :skip

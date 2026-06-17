@@ -39,7 +39,8 @@ defmodule RepoBuilder.LogsOrchestratorTest do
     assert log.agent_id == nil
     assert log.event_type == :text_delta
     assert log.harness == "claude"
-    assert log.payload == %{"type" => "text_delta", "text" => "hi"}
+    # TextDelta persists the canonical text (+ thinking flag), not the raw frame.
+    assert log.payload == %{"text" => "hi", "thinking" => false}
   end
 
   test "the persisted payload is secret-redacted while the input event keeps full raw" do

@@ -19,14 +19,13 @@ defmodule RepoBuilderWeb.TestOrchestrationConsoleUiTest do
 
   defp uniq_name, do: "ui-agent-#{System.unique_integer([:positive])}"
 
+  # Seed an agent the way the orchestrator will at runtime: persist it, then announce
+  # it on the console's `agent_created` seam so the LiveView adds it to the rail live.
   defp create_agent(view, name) do
-    view |> element("#show-new-agent") |> render_click()
-
-    view
-    |> form("#new-agent-form", agent: %{name: name, harness: "fake", provider: "anthropic"})
-    |> render_submit()
-
-    Enum.find(Agents.list_agents(), &(&1.name == name))
+    {:ok, agent} = Agents.create_agent(%{name: name, harness: "fake", provider: "anthropic"})
+    send(view.pid, {:agent_created, agent})
+    _ = render(view)
+    agent
   end
 
   test "renders the header with all status pills + view/prompt toggles", %{conn: conn} do

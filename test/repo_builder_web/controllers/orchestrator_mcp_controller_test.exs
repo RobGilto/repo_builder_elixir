@@ -51,6 +51,13 @@ defmodule RepoBuilderWeb.OrchestratorMCPControllerTest do
       names = Enum.map(resp["result"]["tools"], & &1["name"])
       assert "create_agent" in names
       assert "command_agent" in names
+      assert "update_agent" in names
+      assert "delete_agent" in names
+      assert "read_system_logs" in names
+      assert "check_adw" in names
+      assert "get_config" in names
+      assert "configure_tier" in names
+      assert "set_orchestrator_config" in names
       assert Enum.all?(resp["result"]["tools"], &Map.has_key?(&1, "inputSchema"))
     end
   end
@@ -77,6 +84,27 @@ defmodule RepoBuilderWeb.OrchestratorMCPControllerTest do
       assert [%{"type" => "text", "text" => text}] = resp["result"]["content"]
       assert text =~ name
       assert {:ok, _worker} = Agents.get_by_name_for_orchestrator(orch.id, name)
+    end
+
+    test "delete_agent removes the worker row and returns an ok envelope", %{conn: conn} do
+      {orch, token} = setup_orchestrator()
+      name = "del-#{uniq()}"
+
+      {:ok, _worker} =
+        Agents.create_worker(orch.id, %{"name" => name, "harness" => "fake"})
+
+      resp =
+        conn
+        |> post_rpc(orch.id, token, %{
+          "jsonrpc" => "2.0",
+          "id" => 8,
+          "method" => "tools/call",
+          "params" => %{"name" => "delete_agent", "arguments" => %{"name" => name}}
+        })
+        |> json_response(200)
+
+      assert resp["result"]["isError"] == false
+      assert {:error, :not_found} = Agents.get_by_name_for_orchestrator(orch.id, name)
     end
 
     test "a tool error is wrapped as isError: true, not a JSON-RPC error", %{conn: conn} do

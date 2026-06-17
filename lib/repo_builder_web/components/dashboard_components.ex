@@ -39,7 +39,10 @@ defmodule RepoBuilderWeb.DashboardComponents do
         <span class="font-medium">{@label}</span>
         <span :if={@harness} class="text-xs text-base-content/60">{@harness}</span>
       </div>
-      <span class={["badge", status_class(@status)]}>{@status}</span>
+      <span class="flex items-center gap-1.5">
+        <.adw_orb active?={@status == :running} />
+        <span class={["badge", status_class(@status)]}>{@status}</span>
+      </span>
     </div>
     """
   end
@@ -66,7 +69,10 @@ defmodule RepoBuilderWeb.DashboardComponents do
           <span :if={@harness} class="text-[0.625rem]" style="color: var(--cns-text-2)">{@harness}</span>
           <span :if={@duration} class="text-[0.625rem]" style="color: var(--cns-text-2)">{@duration}</span>
         </div>
-        <span class={["badge", status_class(@status)]}>{@status}</span>
+        <span class="flex items-center gap-1.5">
+          <.adw_orb active?={@status == :running} />
+          <span class={["badge", status_class(@status)]}>{@status}</span>
+        </span>
       </div>
       <div class="mt-2 flex gap-3 overflow-x-auto pb-1">
         {render_slot(@inner_block)}
@@ -139,6 +145,27 @@ defmodule RepoBuilderWeb.DashboardComponents do
     ~H"""
     <span class="badge badge-outline">
       {if @cost, do: "$" <> Decimal.to_string(@cost), else: "—"}
+    </span>
+    """
+  end
+
+  attr :active?, :boolean, default: false
+
+  # Self-contained `:adw`-variant activity orb. Mirrors the canonical
+  # `ConsoleComponents.activity_orb/1` markup (and shares its `cns-orb*` CSS), but is
+  # inlined here to avoid a compile-time import cycle: `ConsoleComponents` already
+  # imports `cost_badge/1` from this module, so importing back would deadlock.
+  @spec adw_orb(map()) :: Phoenix.LiveView.Rendered.t()
+  defp adw_orb(assigns) do
+    ~H"""
+    <span :if={@active?} data-orb data-active="true" class="cns-orb cns-orb--adw" title="running">
+      <span class="cns-orb__core" />
+      <span class="cns-orb__ring">
+        <span class="cns-orb__dot" /><span class="cns-orb__dot" />
+      </span>
+      <span class="cns-orb__ring cns-orb__ring--rev">
+        <span class="cns-orb__dot" />
+      </span>
     </span>
     """
   end

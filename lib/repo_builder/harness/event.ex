@@ -50,7 +50,15 @@ defmodule RepoBuilder.Harness.Event do
   end
 
   defmodule TextDelta do
-    @moduledoc "Incremental or finalized assistant text. `thinking?: true` routes to the reasoning pane."
+    @moduledoc """
+    Incremental or finalized assistant text. `thinking?: true` routes to the
+    reasoning pane.
+
+    `partial?` is `true` for an incremental token delta and `false` for a
+    finalized/whole block — consumers coalesce partials into one in-progress
+    bubble and finalize on the non-partial block. Partials are broadcast for the
+    live UI but NOT persisted, so `agent_logs` keeps one row per finalized turn.
+    """
     use TypedStruct
 
     typedstruct enforce: true do
@@ -58,6 +66,7 @@ defmodule RepoBuilder.Harness.Event do
       field :harness, atom()
       field :text, String.t()
       field :thinking?, boolean(), default: false
+      field :partial?, boolean(), default: false
       field :raw, map(), default: %{}
     end
   end
@@ -158,7 +167,12 @@ defmodule RepoBuilder.Harness.Event do
       field :message, String.t()
 
       field :reason,
-            :provider_error | :auto_retry_exhausted | :idle_timeout | :spawn_failed | :unknown,
+            :provider_error
+            | :auto_retry_exhausted
+            | :idle_timeout
+            | :spawn_failed
+            | :no_model_selected
+            | :unknown,
             default: :unknown
 
       field :retryable, boolean(), default: false

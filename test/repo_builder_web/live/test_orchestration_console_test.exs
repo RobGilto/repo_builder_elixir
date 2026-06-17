@@ -19,16 +19,13 @@ defmodule RepoBuilderWeb.TestOrchestrationConsoleTest do
 
   defp uniq_name, do: "console-agent-#{System.unique_integer([:positive])}"
 
-  # Open the inline "New agent" form, submit it for `name` on the `fake` harness,
-  # and return the persisted agent (now also present in the LiveView's rail).
+  # Seed an agent the way the orchestrator will at runtime: persist it, then announce
+  # it on the console's `agent_created` seam so the LiveView adds it to the rail live.
   defp create_agent(view, name) do
-    view |> element("#show-new-agent") |> render_click()
-
-    view
-    |> form("#new-agent-form", agent: %{name: name, harness: "fake", provider: "anthropic"})
-    |> render_submit()
-
-    Enum.find(Agents.list_agents(), &(&1.name == name))
+    {:ok, agent} = Agents.create_agent(%{name: name, harness: "fake", provider: "anthropic"})
+    send(view.pid, {:agent_created, agent})
+    _ = render(view)
+    agent
   end
 
   # The ⌘K command modal is the sole prompt input. Open it, then submit `text`
@@ -49,7 +46,7 @@ defmodule RepoBuilderWeb.TestOrchestrationConsoleTest do
     assert html =~ ~s(id="event-stream")
   end
 
-  test "creating an agent via the inline form adds a selectable rail item", %{conn: conn} do
+  test "an agent_created broadcast adds a selectable rail item", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/")
 
     name = uniq_name()
@@ -164,23 +161,5 @@ defmodule RepoBuilderWeb.TestOrchestrationConsoleTest do
     refute html =~ "Select an agent before running"
     # The prompt is echoed into the chat as the operator's message.
     assert html =~ "YOU"
-  end
-
-  test "creating an agent with a harness not in the registry surfaces a changeset error", %{
-    conn: conn
-  } do
-    {:ok, view, _html} = live(conn, ~p"/")
-
-    view |> element("#show-new-agent") |> render_click()
-
-    # "nope" is not a registered harness → validate_inclusion error, no insert.
-    html =
-      view
-      |> form("#new-agent-form",
-        agent: %{name: uniq_name(), harness: "fake", provider: "anthropic"}
-      )
-      |> render_change(agent: %{name: "x", harness: "nope", provider: "anthropic"})
-
-    assert html =~ "is not a registered harness"
   end
 end
