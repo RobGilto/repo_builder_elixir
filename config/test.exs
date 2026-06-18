@@ -91,6 +91,16 @@ config :repo_builder, :harnesses, %{
     default_model: nil,
     price_table: %{},
     orchestrating: true
+  },
+  # ADW harness (issue-the-adw-gap): the shell-out workflow runner. In tests the
+  # actual spawn is driven by a canned-event fixture script (config["adw_runner"] +
+  # config["adw_script"]) so no `uv`/Python is required.
+  "adw" => %{
+    module: RepoBuilder.Harness.Adw,
+    exe: "uv",
+    default_model: "claude-sonnet-4-6",
+    price_table: %{},
+    autonomous: true
   }
 }
 

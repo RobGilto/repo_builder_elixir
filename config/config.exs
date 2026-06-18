@@ -197,6 +197,19 @@ harnesses = %{
     exe: "cursor-agent",
     default_model: nil,
     price_table: %{}
+  },
+  # ADW harness (issue-the-adw-gap): shells out to a portable Python AI Developer
+  # Workflow via `uv run`, mapping its neutral stdout-JSON events onto canonical
+  # events. NOT an orchestrator brain (`orchestrating` omitted) — it is a workflow
+  # RUNNER the orchestrator launches via `start_adw` (harness "adw"). `autonomous`
+  # so the underlying Claude SDK runs unattended. The ADW reports Claude's USD cost
+  # directly in its `usage` events, so no price table is needed.
+  "adw" => %{
+    module: RepoBuilder.Harness.Adw,
+    exe: "uv",
+    default_model: "claude-sonnet-4-6",
+    price_table: %{},
+    autonomous: true
   }
 }
 

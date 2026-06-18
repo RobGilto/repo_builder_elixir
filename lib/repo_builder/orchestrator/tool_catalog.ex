@@ -99,20 +99,20 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       %{
         name: "start_adw",
         description:
-          "Launch a named AI Developer Workflow on a harness. Choose `workflow_type` from the catalog (see the AVAILABLE ADW TYPES in your system prompt); defaults to `#{Catalog.default_type()}` (plan→build→review→fix). Returns the workflow run id (use `check_adw` to watch per-step progress).",
+          "Launch an AI Developer Workflow. Two modes by `harness`: with `harness:\"adw\"` it runs a REAL portable Python ADW (the full /plan→/build→/review→/fix slash-command logic, plus scout/parallel variants) — pass a `workflow_type` from the discovered ADWS list in your system prompt. With any other harness it runs the lightweight in-app catalog workflow (`#{Catalog.default_type()}` by default). Pick by complexity: trivial→`plan_build`, standard→`plan_build_review_fix`, non-trivial→full SDLC, large/exploratory→a scout/parallel ADW; decompose a big project into several `start_adw` runs you track with `check_adw`. Returns the run id (use `check_adw` to watch per-step progress).",
         input_schema: %{
           "type" => "object",
           "properties" => %{
             "input" => %{"type" => "string", "description" => "The work item / task description."},
             "workflow_type" => %{
               "type" => "string",
-              "enum" => Enum.map(Catalog.types(), & &1.slug),
               "description" =>
-                "Which catalog workflow type to run (default: #{Catalog.default_type()})."
+                "Which workflow to run. For `harness:\"adw\"` a discovered ADW slug (see your system prompt's ADWS list); otherwise an in-app catalog type (#{Enum.map_join(Catalog.types(), ", ", & &1.slug)}, default #{Catalog.default_type()})."
             },
             "harness" => %{
               "type" => "string",
-              "description" => "Harness for the workflow steps (default: orchestrator's harness)."
+              "description" =>
+                "Harness for the workflow. Use `adw` to run the real portable Python ADWs; omit to use the orchestrator's harness (in-app catalog workflow)."
             }
           },
           "required" => ["input"]
@@ -173,7 +173,7 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       %{
         name: "check_adw",
         description:
-          "Inspect an ADW run by id: status, current step, cost, artifacts, plus completed/total progress, a per-step status+cost list, and a recent per-step activity tail. Pairs with `start_adw`.",
+          "Inspect an ADW run by the id `start_adw` returned: status, cost, completed/total progress, a per-step status+cost list, and a recent activity tail. Works for both modes — in-app catalog runs and real portable `adw`-harness runs (whose per-step status/cost come from the canonical event log). Pairs with `start_adw`.",
         input_schema: %{
           "type" => "object",
           "properties" => %{

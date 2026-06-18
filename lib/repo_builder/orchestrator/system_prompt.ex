@@ -6,6 +6,7 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
   tells the LLM it is a meta-agent that creates/commands worker agents via its
   tools rather than doing the work itself.
   """
+  alias RepoBuilder.Definitions
   alias RepoBuilder.Harness.Registry
   alias RepoBuilder.Orchestrator.{Orchestrator, Templates, ToolCatalog}
   alias RepoBuilder.Orchestrators
@@ -36,9 +37,19 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     - If the operator gives a custom `/slash-command`, place it in the `command_agent`
       command field at the SAME position they wrote it (start, middle, or end) — that
       kicks off the worker's slash command exactly where intended.
-    - To run a multi-step AI Developer Workflow, use `start_adw` and pick a
-      `workflow_type` from the AVAILABLE ADW TYPES below (it defaults to the full
-      plan→build→review→fix cycle). Watch its per-step progress with `check_adw`.
+    - To run a multi-step AI Developer Workflow, use `start_adw`. For REAL substantive
+      work pass `harness: "adw"` and a `workflow_type` from the AVAILABLE ADW TYPES
+      below — that shells out to the portable Python ADW (the real /plan→/build→
+      /review→/fix logic, plus scout/parallel variants). Pick by complexity:
+        * trivial change → `plan_build`
+        * standard feature → `plan_build_review_fix`
+        * non-trivial / multi-area → the full SDLC ADW
+        * large or exploratory → a scout/parallel ADW (`plan_w_scouts…` / `build_in_parallel`)
+      For a complicated project, DECOMPOSE it into several `start_adw` runs (one per
+      coherent slice) and track each with `check_adw` by its returned run id; report
+      progress to the operator in plain text. Omitting `harness` runs the lightweight
+      in-app catalog workflow instead (handy for demos/tests). Watch per-step progress
+      with `check_adw`.
     - If a tier shows `(unassigned — cannot spawn here)` or a spawn fails with "no
       model selected", call `get_config` to inspect the available harnesses/models,
       then `configure_tier` to assign one — do NOT stop and ask the operator unless
@@ -53,7 +64,7 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     #{subagent_map_block()}
 
     Available ADW types (pass as `start_adw`'s `workflow_type`):
-    #{available_adw_types_block()}
+    #{available_adw_types_block(orchestrator)}
 
     Context management:
     #{context_management_block()}
@@ -174,14 +185,48 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     end
   end
 
-  # The `{{AVAILABLE_ADW_TYPES}}` equivalent: a markdown list of the catalog's
-  # workflow types the orchestrator can launch via `start_adw`, with an empty-state
-  # fallback. Mirrors `subagent_map_block/0`/`tools_block/0`.
-  @spec available_adw_types_block() :: String.t()
-  defp available_adw_types_block do
-    # `Catalog.types()` is statically non-empty (the built-in registry), so this never
-    # blanks the prompt section.
-    Enum.map_join(Catalog.types(), "\n", fn type -> "- #{type.slug}: #{type.description}" end)
+  # The `{{AVAILABLE_ADW_TYPES}}` equivalent. Two groups:
+  #   * the REAL portable ADWs discovered on disk (`adws/adw_*.py`, app root + the
+  #     orchestrator's working-dir overlay) — launch with `harness: "adw"`;
+  #   * the in-app catalog fallback types — launch with any other harness.
+  # `Catalog.types()` is statically non-empty, so the section never blanks.
+  @spec available_adw_types_block(Orchestrator.t()) :: String.t()
+  defp available_adw_types_block(orchestrator) do
+    real = discovered_adws(orchestrator)
+
+    real_block =
+      case real do
+        [] ->
+          "  (none discovered under adws/ — drop in adws/adw_workflows/adw_<name>.py)"
+
+        adws ->
+          Enum.map_join(adws, "\n", fn adw -> "  - #{adw.name}: #{adw.description}" end)
+      end
+
+    catalog_block =
+      Enum.map_join(Catalog.types(), "\n", fn type -> "  - #{type.slug}: #{type.description}" end)
+
+    """
+    Real portable ADWs (use `harness: "adw"`):
+    #{real_block}
+    In-app catalog fallback (any other harness):
+    #{catalog_block}
+    """
+    |> String.trim_trailing()
+  end
+
+  # The discovered ADW scripts for the merged root (app + the orchestrator's working
+  # dir), de-duplicated by slug with the working-dir overlay winning. Pure disk read.
+  @spec discovered_adws(Orchestrator.t()) :: [Definitions.Adw.t()]
+  defp discovered_adws(%Orchestrator{working_dir: working_dir}) do
+    app = Definitions.Adw.scan(File.cwd!(), :app)
+
+    working =
+      if is_binary(working_dir) and working_dir != "",
+        do: Definitions.Adw.scan(working_dir, :working_dir),
+        else: []
+
+    (working ++ app) |> Enum.uniq_by(& &1.name) |> Enum.sort_by(& &1.name)
   end
 
   # Guidance for watching spend + context-window pressure and relieving it via

@@ -27,15 +27,19 @@ defmodule RepoBuilder.Definitions.Adw do
   @docstring_regex ~r/"""(.*?)"""/s
 
   @doc """
-  Scan `<root>/adws/adw_*.py` into a list of structs tagged with `source`. Returns
-  `[]` when the directory is absent. Never raises.
+  Scan ADW scripts under `<root>/adws/` into structs tagged with `source`. Globs both
+  the top-level `adws/adw_*.py` (the repo's `*_iso` workflows) AND the portable
+  `adws/adw_workflows/adw_*.py` (the real shell-out workflows the orchestrator launches
+  via the `adw` harness). Same-named scripts are de-duplicated by name (first wins,
+  top-level before `adw_workflows/`). Returns `[]` when the directory is absent; never
+  raises.
   """
   @spec scan(root :: String.t(), source()) :: [t()]
   def scan(root, source \\ :app) when is_binary(root) and source in [:app, :working_dir] do
-    root
-    |> Path.join("adws/adw_*.py")
-    |> Path.wildcard()
+    ["adws/adw_*.py", "adws/adw_workflows/adw_*.py"]
+    |> Enum.flat_map(fn pattern -> root |> Path.join(pattern) |> Path.wildcard() end)
     |> Enum.map(&from_file(&1, source))
+    |> Enum.uniq_by(& &1.name)
     |> Enum.sort_by(& &1.name)
   end
 
