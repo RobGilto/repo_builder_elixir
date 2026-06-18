@@ -46,9 +46,12 @@ defmodule RepoBuilderWeb.TestOrchestratorThinkingToggleTest do
 
   test "finalized reasoning lands in the event stream, not the chat", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/")
-    agent = create_agent(view, uniq_name())
+    _ = create_agent(view, uniq_name())
 
-    broadcast = fn event -> Dashboard.broadcast_event(agent.id, event) end
+    # Orchestrator turns broadcast under the `"orch-…"` namespace; only those reach
+    # the chat pane (worker UUIDs stay in the center event stream).
+    orch_id = "orch-#{System.unique_integer([:positive])}-1"
+    broadcast = fn event -> Dashboard.broadcast_event(orch_id, event) end
     broadcast.(%Event.TextDelta{harness: :fake, text: "deep thoughts", thinking?: true})
     broadcast.(%Event.TextDelta{harness: :fake, text: "hello response", thinking?: false})
 
@@ -65,7 +68,7 @@ defmodule RepoBuilderWeb.TestOrchestratorThinkingToggleTest do
 
   test "the thinking toggle hides/shows the live streaming THINKING bubble", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/")
-    agent_id = "stream-think-#{System.unique_integer([:positive])}"
+    agent_id = "orch-stream-think-#{System.unique_integer([:positive])}"
 
     # In-flight (partial) reasoning + response stream into separate live bubbles.
     Dashboard.broadcast_event(agent_id, %Event.TextDelta{

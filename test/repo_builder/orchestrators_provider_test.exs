@@ -38,6 +38,28 @@ defmodule RepoBuilder.OrchestratorsProviderTest do
     end
   end
 
+  describe "set_working_dir/2" do
+    test "stores the working dir and clears the resumable session id" do
+      orch = orchestrator_fixture(%{session_id: "claude-resume-abc"})
+
+      assert {:ok, updated} = Orchestrators.set_working_dir(orch.id, "/srv/project")
+      assert updated.working_dir == "/srv/project"
+      # The CLI session store is cwd-keyed, so moving dirs must start the next turn fresh.
+      assert updated.session_id == nil
+    end
+
+    test "blank clears the working dir" do
+      orch = orchestrator_fixture(%{working_dir: "/srv/project"})
+      assert {:ok, cleared} = Orchestrators.set_working_dir(orch.id, "   ")
+      assert cleared.working_dir == nil
+    end
+
+    test "a missing orchestrator returns {:error, :not_found}" do
+      assert {:error, :not_found} =
+               Orchestrators.set_working_dir(Ecto.UUID.generate(), "/srv/project")
+    end
+  end
+
   describe "per-harness orchestrator defaults (no auto model)" do
     test "get_or_create_default(\"claude\") seeds provider anthropic but NO model" do
       assert {:ok, orch} = Orchestrators.get_or_create_default("claude")

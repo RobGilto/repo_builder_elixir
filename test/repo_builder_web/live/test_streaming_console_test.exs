@@ -14,6 +14,10 @@ defmodule RepoBuilderWeb.TestStreamingConsoleTest do
   `Dashboard.broadcast_event/2`; the ~50 ms flush tick is driven deterministically
   by sending `:flush_stream` to the view (no `Process.sleep`). `async: false`
   matches the other console tests (shared Ecto sandbox).
+
+  The chat streaming buffer is orchestrator-only (worker text stays in the center
+  event stream), so these agent_ids use the `"orch-…"` namespace the orchestrator
+  broadcasts under at runtime (orchestrator/server.ex).
   """
   use RepoBuilderWeb.ConnCase, async: false
 
@@ -40,7 +44,7 @@ defmodule RepoBuilderWeb.TestStreamingConsoleTest do
     test "[#{harness}] partials coalesce into one growing bubble, finalize once, no duplicate",
          %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/")
-      agent_id = "stream-#{System.unique_integer([:positive])}"
+      agent_id = "orch-stream-#{System.unique_integer([:positive])}"
 
       Dashboard.broadcast_event(agent_id, %Event.TextDelta{
         harness: @harness,
@@ -79,7 +83,7 @@ defmodule RepoBuilderWeb.TestStreamingConsoleTest do
     test "[#{harness}] the thinking channel coalesces independently and respects @show_thinking?",
          %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/")
-      agent_id = "stream-think-#{System.unique_integer([:positive])}"
+      agent_id = "orch-stream-think-#{System.unique_integer([:positive])}"
 
       Dashboard.broadcast_event(agent_id, %Event.TextDelta{
         harness: @harness,
@@ -117,7 +121,7 @@ defmodule RepoBuilderWeb.TestStreamingConsoleTest do
     test "[#{harness}] a partial-only stream ending in Done promotes the buffer once",
          %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/")
-      agent_id = "stream-done-#{System.unique_integer([:positive])}"
+      agent_id = "orch-stream-done-#{System.unique_integer([:positive])}"
 
       Dashboard.broadcast_event(agent_id, %Event.TextDelta{
         harness: @harness,

@@ -173,6 +173,11 @@ defmodule RepoBuilderWeb.DashboardComponents do
         <div><span style="color: var(--cns-text-2)">category</span> {@event.category}</div>
         <div><span style="color: var(--cns-text-2)">agent</span> {@event.agent}</div>
         <div><span style="color: var(--cns-text-2)">time</span> {@event.time}</div>
+        <div>
+          <span style="color: var(--cns-text-2)">log</span> {RepoBuilder.Logs.log_label(
+            @event[:log_no]
+          )}
+        </div>
       </div>
 
       <div>
@@ -194,7 +199,7 @@ defmodule RepoBuilderWeb.DashboardComponents do
   def cost_badge(assigns) do
     ~H"""
     <span class="badge badge-outline">
-      {if @cost, do: "$" <> Decimal.to_string(@cost), else: "—"}
+      {if @cost, do: "$" <> Decimal.to_string(Decimal.round(@cost, 2)), else: "—"}
     </span>
     """
   end

@@ -15,6 +15,14 @@ defmodule RepoBuilder.Harness.Claude do
 
   @ctx %{harness: :claude}
 
+  # The orchestrator is a delegation-only meta-agent: ALL real work goes to worker
+  # agents via the bound MCP meta-tools (`RepoBuilder.Orchestrator.Tools`). Claude ships
+  # native coding tools that would otherwise be available AND auto-approved (the
+  # orchestrator carries `--dangerously-skip-permissions`), so we DENY the native
+  # file-mutation/shell/native-subagent tools on the orchestrator spawn — leaving only
+  # the MCP tools. Workers NEVER hit `orchestrator_spawn/2`, so they keep these tools.
+  @orchestrator_disallowed_tools ~w(Write Edit MultiEdit NotebookEdit Bash BashOutput KillShell Task)
+
   @impl RepoBuilder.Harness.Orchestrating
   def orchestrator_spawn(_opts, ctx) do
     # Claude natively speaks MCP over HTTP via a declared server file. The bearer
@@ -33,6 +41,7 @@ defmodule RepoBuilder.Harness.Claude do
     # block on an interactive prompt (the headless deadlock, §6) — no duplicate here.
     args =
       ["--mcp-config", path, "--strict-mcp-config"] ++
+        ["--disallowedTools" | @orchestrator_disallowed_tools] ++
         [system_prompt_flag(ctx.system_prompt_mode), ctx.system_prompt] ++
         resume_args(ctx.resume_session_id)
 

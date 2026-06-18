@@ -109,7 +109,7 @@ defmodule RepoBuilderWeb.TestAgentCardStreamFilterTest do
     assert has_element?(view, "#event-stream", "bravo-row")
   end
 
-  test "CLEAR FILTERS removes an active agent filter", %{conn: conn} do
+  test "CLEAR removes an active agent filter and clears the log view", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/")
     a = create_agent(view, uniq_name())
     b = create_agent(view, uniq_name())
@@ -123,9 +123,10 @@ defmodule RepoBuilderWeb.TestAgentCardStreamFilterTest do
 
     view |> element("#clear-filters") |> render_click()
 
+    # CLEAR resets filters AND clears the log view from the UI (no DB delete).
     refute has_element?(view, "#filter-bar", a.name)
-    assert has_element?(view, "#event-stream", "alpha-row")
-    assert has_element?(view, "#event-stream", "bravo-row")
+    refute has_element?(view, "#event-stream", "alpha-row")
+    refute has_element?(view, "#event-stream", "bravo-row")
   end
 
   test "exactly one agent filter routes a manual run to that agent", %{conn: conn} do
@@ -142,8 +143,8 @@ defmodule RepoBuilderWeb.TestAgentCardStreamFilterTest do
     |> form("#command-form", command: "ship it")
     |> render_submit()
 
-    assert_receive {:agent_event, _id, %Event.SessionStarted{}}, 2_000
-    assert_receive {:agent_event, _id, %Event.Done{ok: true}}, 2_000
+    assert_receive {:agent_event, _id, %Event.SessionStarted{}, _seq_no}, 2_000
+    assert_receive {:agent_event, _id, %Event.Done{ok: true}, _seq_no}, 2_000
   end
 
   test "no agent filter routes a manual run to the orchestrator (no spawn, no error)", %{

@@ -21,6 +21,13 @@ defmodule RepoBuilder.Harness.Orchestrating do
   loop). Either way the canonical `Event` flow and the worker `Session` runtime are
   untouched — adding an orchestrator-capable harness is one module + one registry
   `orchestrating: true` entry (§10).
+
+  SECURITY INVARIANT: the orchestrator is delegation-only — it must call ONLY its bound
+  meta-tools, never the harness's native file/shell tools. Every `orchestrator_spawn/2`
+  MUST restrict the session's native toolset accordingly (Claude `--disallowedTools …`,
+  pi `--no-builtin-tools`), otherwise a drifting model writes files itself instead of
+  dispatching to a worker. Workers reach the harness WITHOUT this callback, so they keep
+  the full native toolset.
   """
 
   @typedoc """

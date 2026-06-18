@@ -58,3 +58,4 @@ npm-debug.log
 /trees/
 __pycache__/
 
+/.planning/

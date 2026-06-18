@@ -100,6 +100,10 @@ config :repo_builder, :orchestrator,
   default_harness: "fake",
   default_model: nil,
   mcp_base_url: "http://127.0.0.1:4002",
+  # Deterministic queue defaults for tests; the holding-pattern test flips
+  # auto_resume_on_worker_return to true via app-env for its own scope.
+  auto_resume_on_worker_return: false,
+  max_queue_depth: 50,
   # Per-run tmp root so template tests are hermetic and never touch the real
   # ~/.repo_builder/agents. Each test may further override this via app-env.
   agents_dir: Path.join(System.tmp_dir!(), "repo_builder_agents_test")

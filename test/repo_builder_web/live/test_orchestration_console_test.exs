@@ -70,8 +70,8 @@ defmodule RepoBuilderWeb.TestOrchestrationConsoleTest do
 
     run_via_command(view, "ship it")
 
-    assert_receive {:agent_event, _id, %Event.SessionStarted{}}, 2_000
-    assert_receive {:agent_event, _id, %Event.Done{ok: true}}, 2_000
+    assert_receive {:agent_event, _id, %Event.SessionStarted{}, _seq_no}, 2_000
+    assert_receive {:agent_event, _id, %Event.Done{ok: true}, _seq_no}, 2_000
 
     # The test process can observe the broadcasts a beat before the LiveView process
     # has handled them; wait until all 7 canned events are reflected (stat-logs pill)
@@ -101,7 +101,7 @@ defmodule RepoBuilderWeb.TestOrchestrationConsoleTest do
 
     run_via_command(view, "ship it")
 
-    assert_receive {:agent_event, _id, %Event.Done{ok: true}}, 2_000
+    assert_receive {:agent_event, _id, %Event.Done{ok: true}, _seq_no}, 2_000
     # The session also broadcasts a lane transition; wait for the terminal one so the
     # view has processed it before we render (no Process.sleep).
     assert_receive {:lane, %{id: "agent:" <> _, status: :succeeded}}, 2_000

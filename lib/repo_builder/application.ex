@@ -38,6 +38,16 @@ defmodule RepoBuilder.Application do
       # in-process tool calls for harnesses without an external (MCP/extension)
       # binding. A crashed turn is isolated, never restarted.
       {DynamicSupervisor, name: RepoBuilder.OrchestratorSupervisor, strategy: :one_for_one},
+      # Per-orchestrator FIFO turn queue (issue message-queue): serializes operator
+      # turns so a second message during an in-flight turn queues instead of racing
+      # the same resumable CLI session. One long-lived Queue per orchestrator id,
+      # registered by id and started on demand under this DynamicSupervisor.
+      {Registry, keys: :unique, name: RepoBuilder.OrchestratorQueueRegistry},
+      {DynamicSupervisor, name: RepoBuilder.OrchestratorQueueSupervisor, strategy: :one_for_one},
+      # One :temporary runner per ephemeral "explain logs" request (issue-explain):
+      # a one-shot Fast-tier session that never persists and never hits the global
+      # feed. A crashed/finished run is isolated, never restarted.
+      {DynamicSupervisor, name: RepoBuilder.ExplainSupervisor, strategy: :one_for_one},
       # Boot-time reconciliation of orphaned OS children via the durable ledger.
       # Runs AFTER Repo (it reads os_pid_ledger). Disabled on boot in tests.
       RepoBuilder.OrphanReaper,

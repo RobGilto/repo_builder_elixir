@@ -252,7 +252,10 @@ defmodule RepoBuilder.Orchestrator.Tools do
         harness: worker.harness,
         prompt: prompt,
         model: worker.model,
-        provider: worker_provider(worker)
+        provider: worker_provider(worker),
+        # Run the worker in the orchestrator's working directory so it operates on the
+        # same project (nil ⇒ the worker's own isolated scratch workspace).
+        cwd: orchestrator_working_dir(orchestrator_id)
       ]
 
       case Session.Supervisor.start_session(opts) do
@@ -707,6 +710,16 @@ defmodule RepoBuilder.Orchestrator.Tools do
 
   @spec worker_provider(Agents.Agent.t()) :: String.t() | nil
   defp worker_provider(%{config: config}), do: blank_to_nil(config["provider"])
+
+  # The orchestrator's configured working directory (the cwd its workers run in), or
+  # nil when unset/unknown — in which case the worker gets an isolated workspace.
+  @spec orchestrator_working_dir(Ecto.UUID.t()) :: String.t() | nil
+  defp orchestrator_working_dir(orchestrator_id) do
+    case Orchestrators.fetch(orchestrator_id) do
+      {:ok, orchestrator} -> blank_to_nil(orchestrator.working_dir)
+      {:error, :not_found} -> nil
+    end
+  end
 
   @spec resolve_harness(Ecto.UUID.t(), map()) :: {:ok, String.t()} | {:error, reason()}
   defp resolve_harness(orchestrator_id, args) do

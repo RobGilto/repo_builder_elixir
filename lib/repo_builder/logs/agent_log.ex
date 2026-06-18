@@ -29,8 +29,12 @@ defmodule RepoBuilder.Logs.AgentLog do
           session_id: String.t() | nil,
           event_type: event_type() | nil,
           harness: String.t() | nil,
+          provider: String.t() | nil,
+          model: String.t() | nil,
           payload: map(),
           usage: Usage.t() | nil,
+          hidden: boolean(),
+          seq_no: integer() | nil,
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
@@ -45,15 +49,37 @@ defmodule RepoBuilder.Logs.AgentLog do
     field :session_id, :string
     field :event_type, Ecto.Enum, values: @event_types
     field :harness, :string
+    # Time-stable snapshot of the owner's identity at write time (issue-cost-center):
+    # cost rolls up by (harness, provider, model) via GROUP BY, not a fragile join to
+    # the owner's mutable current identity. Both nullable → "unknown" dimension.
+    field :provider, :string
+    field :model, :string
     field :payload, :map, default: %{}
     embeds_one :usage, Usage, on_replace: :update
+    # Soft-hide for the console CLEAR action: hidden rows are skipped by the default
+    # backfill but kept in the DB (revealed by the settings "show hidden" toggle).
+    field :hidden, :boolean, default: false
+    # DB-assigned durable, human-readable, best-effort-chronological number (`log-<n>`),
+    # backed by an owned sequence (migration). `read_after_writes: true` so the live path
+    # gets the value back in the inserted struct at broadcast time. Never cast — DB-managed,
+    # never user input.
+    field :seq_no, :integer, read_after_writes: true
     timestamps()
   end
 
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(log, params) do
     log
-    |> cast(params, [:agent_id, :orchestrator_id, :session_id, :event_type, :harness, :payload])
+    |> cast(params, [
+      :agent_id,
+      :orchestrator_id,
+      :session_id,
+      :event_type,
+      :harness,
+      :provider,
+      :model,
+      :payload
+    ])
     |> cast_embed(:usage)
     |> validate_required([:event_type])
     |> validate_owner()

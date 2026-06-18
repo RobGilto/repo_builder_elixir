@@ -28,6 +28,7 @@ defmodule RepoBuilder.Session.Server do
   alias RepoBuilder.{Agents, Logs}
   alias RepoBuilder.Harness.Event
   alias RepoBuilder.Harness.Registry, as: HarnessRegistry
+  alias RepoBuilder.Logs.AgentLog
   alias RepoBuilder.OsPidLedger
   alias RepoBuilder.Session.Admission
 
@@ -61,6 +62,10 @@ defmodule RepoBuilder.Session.Server do
       field :exec_pid, pid(), enforce: false
       field :os_pid, non_neg_integer(), enforce: false
       field :cwd, Path.t()
+      # false when `cwd` is an operator-provided working directory (the user's
+      # project): it is NEVER created-then-deleted by this session. true (default)
+      # for the ephemeral per-session scratch workspace, which is cleaned on exit.
+      field :managed_workspace?, boolean(), default: true
       field :marker, String.t()
       field :buf, binary(), default: ""
       field :idle_ref, reference(), enforce: false
@@ -79,6 +84,11 @@ defmodule RepoBuilder.Session.Server do
       # this orchestrator id (parallel to the worker `agent_db_id` gate). nil for
       # every worker session.
       field :orchestrator_db_id, Ecto.UUID.t(), enforce: false
+      # Ephemeral contract (issue-explain): when false, `dispatch/2` suppresses the
+      # global console feed + swimlane broadcasts so the run stays private to its
+      # per-agent topic (the only channel the ephemeral Explain runner observes).
+      # Defaults true — workers and the orchestrator keep their current behavior.
+      field :broadcast_feed?, boolean(), default: true
     end
   end
 
@@ -117,6 +127,7 @@ defmodule RepoBuilder.Session.Server do
   defp build_state(opts, harness, config) do
     cfg = Application.get_env(:repo_builder, :session, [])
     session_id = opts[:session_id] || generate_token()
+    {cwd, managed?} = resolve_workspace(opts, cfg, session_id)
 
     %State{
       agent_id: to_string(opts[:agent_id]),
@@ -130,17 +141,39 @@ defmodule RepoBuilder.Session.Server do
       config: opts[:config] || %{},
       secrets: resolve_secrets(opts, harness),
       reasoning_effort: opts[:reasoning_effort] || :default,
-      price_table: Map.get(config, :price_table, %{}),
-      cwd: workspace_path(cfg, opts[:orchestrator_db_id], session_id),
+      price_table: resolve_price_table(harness, config),
+      cwd: cwd,
+      managed_workspace?: managed?,
       marker: generate_token(),
       idle_ms: cfg_value(opts, cfg, :idle_ms, 300_000),
       max_line_bytes: cfg_value(opts, cfg, :max_line_bytes, 1_048_576),
       orchestrator_ctx: opts[:orchestrator_ctx],
-      orchestrator_db_id: opts[:orchestrator_db_id]
+      orchestrator_db_id: opts[:orchestrator_db_id],
+      broadcast_feed?: opts[:broadcast_feed?] != false
     }
   end
 
   defp cfg_value(opts, cfg, key, default), do: opts[key] || cfg[key] || default
+
+  # The price table that derives `cost_usd` for unpriced harnesses (pi): the config
+  # default, with the operator-editable `model_prices` catalog merged OVER it so edits
+  # in the Cost Center tab affect future cost without a redeploy (issue-cost-center). A
+  # pure read; any error falls back to the config table so a session start never crashes.
+  @spec resolve_price_table(String.t(), map()) :: %{optional(String.t()) => number()}
+  defp resolve_price_table(harness, config) do
+    config_table = Map.get(config, :price_table, %{})
+
+    catalog_table =
+      try do
+        RepoBuilder.CostCenter.price_table_for(harness)
+      rescue
+        _error -> %{}
+      catch
+        _kind, _reason -> %{}
+      end
+
+    Map.merge(config_table, catalog_table)
+  end
 
   # Merge runtime-configured per-harness secrets (§6) with any explicit per-session
   # overrides; drop unset (nil) env values so they never reach the child env.
@@ -387,27 +420,74 @@ defmodule RepoBuilder.Session.Server do
   defp dispatch(event, %State{agent_id: agent_id} = state) do
     # Persist the REDACTED event (Logs.persist_event scrubs `raw`); broadcast the FULL
     # event for the live UI (§4.1). Persistence only applies when the session is tied
-    # to a durable agent row.
-    if state.agent_db_id do
-      if persist?(event), do: persist_quietly(event, state)
-      update_status_quietly(event, state)
-    end
+    # to a durable agent row. Capture the inserted log so the global feed can carry its
+    # durable `seq_no` (the `log-<n>` drilldown number).
+    log =
+      if state.agent_db_id do
+        update_status_quietly(event, state)
+        if persist?(event), do: persist_quietly(event, state)
+      end
 
     # Independent orchestrator persistence gate (issue-d): an orchestrator session
     # carries `orchestrator_db_id` (never `agent_db_id`), so its events persist to
     # `agent_logs` keyed by `orchestrator_id` — observability parity with workers,
     # with the worker path above untouched.
-    if state.orchestrator_db_id && persist?(event) do
-      persist_orchestrator_quietly(event, state)
+    log =
+      if state.orchestrator_db_id && persist?(event) do
+        persist_orchestrator_quietly(event, state)
+      else
+        log
+      end
+
+    seq_no = log && log.seq_no
+
+    # The per-agent topic broadcast is UNCONDITIONAL: it is the private channel an
+    # ephemeral run (issue-explain, `broadcast_feed?: false`) subscribes to observe
+    # its own output. Only the global feed + swimlanes below are gated.
+    _ = Phoenix.PubSub.broadcast(@pubsub, "agent:#{agent_id}:events", {:harness_event, event})
+
+    if state.broadcast_feed? do
+      # Additive global feed for the multi-layered console (§9): one unified stream
+      # across all agents. Per-agent topic above is unchanged.
+      _ = RepoBuilder.Dashboard.broadcast_event(agent_id, event, seq_no)
+      _ = maybe_broadcast_lane(event, state)
     end
 
-    _ = Phoenix.PubSub.broadcast(@pubsub, "agent:#{agent_id}:events", {:harness_event, event})
-    # Additive global feed for the multi-layered console (§9): one unified stream
-    # across all agents. Per-agent topic above is unchanged.
-    _ = RepoBuilder.Dashboard.broadcast_event(agent_id, event)
-    _ = maybe_broadcast_lane(event, state)
+    _ = maybe_emit_worker_terminal(event, state)
     %{state | saw_output?: true, saw_terminal?: state.saw_terminal? or terminal?(event)}
   end
+
+  # Holding pattern (issue message-queue): when a WORKER session (one tied to a durable
+  # agent row) reaches a terminal event, signal the owning orchestrator's Queue on
+  # `orchestrator:<id>:workers` so it can auto-resume if idle. Scoped to workers that
+  # carry an `orchestrator_id`; quiet (a DB blip never breaks the dispatch path).
+  @spec maybe_emit_worker_terminal(Event.t(), State.t()) :: :ok
+  defp maybe_emit_worker_terminal(event, %State{agent_db_id: agent_id})
+       when is_binary(agent_id) do
+    if terminal?(event) do
+      case Agents.get_agent(agent_id) do
+        %{orchestrator_id: orchestrator_id, name: name} when is_binary(orchestrator_id) ->
+          ok? = match?(%Event.Done{ok: true}, event)
+
+          RepoBuilder.Dashboard.broadcast_worker_terminal(orchestrator_id, %{
+            worker_id: agent_id,
+            name: name,
+            ok?: ok?
+          })
+
+        _ ->
+          :ok
+      end
+    end
+
+    :ok
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
+
+  defp maybe_emit_worker_terminal(_event, _state), do: :ok
 
   # Publish a swimlane update on lifecycle transitions only (start/terminal), §9.
   @spec maybe_broadcast_lane(Event.t(), State.t()) :: :ok
@@ -441,29 +521,45 @@ defmodule RepoBuilder.Session.Server do
   defp persist?(%Event.TextDelta{partial?: true}), do: false
   defp persist?(_event), do: true
 
-  @spec persist_quietly(Event.t(), State.t()) :: :ok
+  # Returns the inserted log so the global feed can broadcast its durable `seq_no`;
+  # any failure (changeset error, rescue, catch) degrades to `nil` → the drilldown
+  # shows "—" for that row, never crashing the dispatch path.
+  @spec persist_quietly(Event.t(), State.t()) :: AgentLog.t() | nil
   defp persist_quietly(event, %State{} = state) do
-    _ = Logs.persist_event(event, %{agent_id: state.agent_db_id, session_id: state.session_id})
-    :ok
+    case Logs.persist_event(event, %{
+           agent_id: state.agent_db_id,
+           session_id: state.session_id,
+           provider: state.provider,
+           model: state.model
+         }) do
+      {:ok, %AgentLog{} = log} -> log
+      {:error, _changeset} -> nil
+    end
   rescue
-    error -> Logger.warning("persist_event failed: #{inspect(error)}")
+    error ->
+      Logger.warning("persist_event failed: #{inspect(error)}")
+      nil
   catch
-    _kind, _reason -> :ok
+    _kind, _reason -> nil
   end
 
-  @spec persist_orchestrator_quietly(Event.t(), State.t()) :: :ok
+  @spec persist_orchestrator_quietly(Event.t(), State.t()) :: AgentLog.t() | nil
   defp persist_orchestrator_quietly(event, %State{} = state) do
-    _ =
-      Logs.persist_orchestrator_event(event, %{
-        orchestrator_id: state.orchestrator_db_id,
-        session_id: state.session_id
-      })
-
-    :ok
+    case Logs.persist_orchestrator_event(event, %{
+           orchestrator_id: state.orchestrator_db_id,
+           session_id: state.session_id,
+           provider: state.provider,
+           model: state.model
+         }) do
+      {:ok, %AgentLog{} = log} -> log
+      {:error, _changeset} -> nil
+    end
   rescue
-    error -> Logger.warning("persist_orchestrator_event failed: #{inspect(error)}")
+    error ->
+      Logger.warning("persist_orchestrator_event failed: #{inspect(error)}")
+      nil
   catch
-    _kind, _reason -> :ok
+    _kind, _reason -> nil
   end
 
   @spec update_status_quietly(Event.t(), State.t()) :: :ok
@@ -578,11 +674,18 @@ defmodule RepoBuilder.Session.Server do
   # erlexec's {:env, ...} REPLACES the child's environment (it does not inherit), so
   # we must carry the parent OS env (PATH/HOME/…) forward, overlay the harness
   # secrets, and inject the orphan-reaper marker.
+  #
+  # EMPTY values are dropped: erlexec's C port cannot decode an empty-string env value
+  # (it encodes as NIL, desyncing the port's sequential parse and rejecting a LATER
+  # entry with "invalid env argument #N" — a whole-spawn failure). An empty value is
+  # equivalent to "unset" for a child CLI, so dropping it is safe. (Real example: a
+  # shell exporting `ANTHROPIC_API_KEY=` broke EVERY session spawn.)
   @spec build_env([{String.t(), String.t()}], String.t()) :: [{charlist(), charlist()}]
   defp build_env(env, marker) do
     System.get_env()
     |> Map.merge(Map.new(env))
     |> Map.put("REPO_BUILDER_SESSION_MARKER", marker)
+    |> Enum.reject(fn {_k, v} -> v == "" end)
     |> Enum.map(fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end)
   end
 
@@ -592,6 +695,24 @@ defmodule RepoBuilder.Session.Server do
     |> :crypto.hash(:erlang.term_to_binary(cmd))
     |> Base.encode16(case: :lower)
   end
+
+  # Resolve the session cwd. An explicit operator working directory (`opts[:cwd]`)
+  # wins — both the orchestrator and the workers it commands run there, and it is
+  # NEVER deleted on exit (managed? == false). With none, fall back to the managed
+  # per-session/orchestrator workspace under `workspace_base` (managed? == true).
+  @spec resolve_workspace(keyword(), keyword(), String.t()) :: {Path.t(), boolean()}
+  defp resolve_workspace(opts, cfg, session_id) do
+    case blank_to_nil(opts[:cwd]) do
+      nil -> {workspace_path(cfg, opts[:orchestrator_db_id], session_id), true}
+      dir -> {dir, false}
+    end
+  end
+
+  @spec blank_to_nil(term()) :: String.t() | nil
+  defp blank_to_nil(value) when is_binary(value),
+    do: if(String.trim(value) == "", do: nil, else: value)
+
+  defp blank_to_nil(_value), do: nil
 
   # Workers get a fresh per-session workspace (ephemeral, cleaned on exit). An
   # ORCHESTRATOR is a long-lived conversation resumed across turns via the harness
@@ -610,9 +731,11 @@ defmodule RepoBuilder.Session.Server do
     Path.join(base, "orchestrator-" <> to_string(orchestrator_id))
   end
 
-  # Keep the orchestrator's persistent workspace between turns (its CLI session
-  # store is keyed to this cwd); only ephemeral worker workspaces are removed.
+  # NEVER remove an operator-provided working directory (the user's project), and
+  # keep the orchestrator's persistent managed workspace between turns (its CLI
+  # session store is keyed to this cwd). Only ephemeral worker workspaces are removed.
   @spec cleanup_workspace(State.t()) :: :ok
+  defp cleanup_workspace(%State{managed_workspace?: false}), do: :ok
   defp cleanup_workspace(%State{orchestrator_db_id: id}) when not is_nil(id), do: :ok
 
   defp cleanup_workspace(%State{cwd: cwd}) do

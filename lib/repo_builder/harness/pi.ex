@@ -31,8 +31,15 @@ defmodule RepoBuilder.Harness.Pi do
     # pi has no MCP: tools come from a TypeScript extension loaded with `-e`, whose
     # handlers `fetch` the same MCP/JSON endpoint using the env below (token in env,
     # never argv). Session resume uses `--session <id>`.
+    #
+    # `--no-builtin-tools` disables pi's native read/bash/edit/write while KEEPING the
+    # `-e` extension's orchestrator tools: the orchestrator is delegation-only, so it
+    # must not touch the filesystem/shell itself — all real work goes to worker agents
+    # via the bound meta-tools. Workers NEVER hit `orchestrator_spawn/2`, so they keep
+    # pi's built-in coding tools.
     args =
-      ["-e", @pi_extension, system_prompt_flag(ctx.system_prompt_mode), ctx.system_prompt] ++
+      ["-e", @pi_extension, "--no-builtin-tools"] ++
+        [system_prompt_flag(ctx.system_prompt_mode), ctx.system_prompt] ++
         resume_args(ctx.resume_session_id)
 
     env = [
@@ -165,6 +172,16 @@ defmodule RepoBuilder.Harness.Pi do
   # pi emits `message_end` for the user's OWN message too; never echo it back as
   # assistant text (it would render the prompt as an orchestrator reply).
   def normalize(%{"type" => "message_end", "message" => %{"role" => "user"}}, _ctx), do: :skip
+
+  # pi ALSO emits `message_end` for the `toolResult` message it feeds back to the
+  # model (pi-agent-core `emitToolResultMessage`). A `ToolResultMessage` carries the
+  # tool's output as `type:"text"` content blocks — so `join_blocks/2` would harvest
+  # the raw tool-result JSON into the orchestrator's TEXT channel and duplicate it
+  # into the chat. The canonical result is already emitted by the
+  # `tool_execution_end` clause (a `ToolResult` event, event-stream only), so the
+  # echo must be dropped here — discriminated structurally by `role`.
+  def normalize(%{"type" => "message_end", "message" => %{"role" => "toolResult"}}, _ctx),
+    do: :skip
 
   def normalize(%{"type" => "message_end"} = raw, ctx) do
     message = Map.get(raw, "message", %{})

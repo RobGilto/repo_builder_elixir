@@ -7,10 +7,13 @@ defmodule RepoBuilder.LogsOrchestratorTest do
   """
   use RepoBuilder.DataCase, async: true
 
+  import Ecto.Query, only: [from: 2]
+
   alias RepoBuilder.Harness.Event
   alias RepoBuilder.Logs
   alias RepoBuilder.Logs.AgentLog
   alias RepoBuilder.Orchestrators
+  alias RepoBuilder.Repo
 
   defp orchestrator_fixture do
     {:ok, orch} =
@@ -69,6 +72,32 @@ defmodule RepoBuilder.LogsOrchestratorTest do
     assert log.id in ids
   end
 
+  test "list_recent_global/2 returns rows ascending by (inserted_at, id)" do
+    orch = orchestrator_fixture()
+
+    # Insert in scrambled time order, then force distinct known instants.
+    instants = [
+      ~U[2026-06-18 03:00:00Z],
+      ~U[2026-06-18 01:00:00Z],
+      ~U[2026-06-18 02:00:00Z]
+    ]
+
+    for at <- instants do
+      event = %Event.TextDelta{harness: :claude, text: "x", raw: %{"text" => "x"}}
+
+      {:ok, log} =
+        Logs.persist_orchestrator_event(event, %{orchestrator_id: orch.id, session_id: "s"})
+
+      {1, _} =
+        Repo.update_all(from(l in AgentLog, where: l.id == ^log.id), set: [inserted_at: at])
+    end
+
+    times = Logs.list_recent_global(200) |> Enum.map(& &1.inserted_at)
+    assert times == Enum.sort(times, DateTime)
+    # Oldest first (ascending): 01:00 precedes 02:00 precedes 03:00.
+    assert Enum.take(times, 3) |> Enum.map(& &1.hour) == [1, 2, 3]
+  end
+
   describe "orchestrator_cost_rollup!/1 (nil-vs-0.0 preserved)" do
     test "an unpriced turn stores NULL and contributes nothing to the rollup" do
       orch = orchestrator_fixture()
@@ -117,6 +146,60 @@ defmodule RepoBuilder.LogsOrchestratorTest do
         Logs.persist_orchestrator_event(priced, %{orchestrator_id: orch.id, session_id: "s"})
 
       assert Decimal.equal?(Logs.orchestrator_cost_rollup!(orch.id), Decimal.from_float(1.25))
+    end
+  end
+
+  describe "durable seq_no (log-<n>)" do
+    test "persist_event/2 returns a log with a positive integer seq_no" do
+      {:ok, agent} =
+        RepoBuilder.Agents.create_agent(%{
+          name: "w-#{System.unique_integer([:positive])}",
+          harness: "claude",
+          provider: :local
+        })
+
+      event = %Event.TextDelta{
+        harness: :claude,
+        text: "hi",
+        raw: %{"type" => "t", "text" => "hi"}
+      }
+
+      assert {:ok, %AgentLog{seq_no: seq_no}} =
+               Logs.persist_event(event, %{agent_id: agent.id, session_id: "s"})
+
+      assert is_integer(seq_no) and seq_no > 0
+    end
+
+    test "successive inserts produce strictly increasing seq_no (monotonic / chronological)" do
+      orch = orchestrator_fixture()
+      event = %Event.TextDelta{harness: :claude, text: "x", raw: %{"type" => "t", "text" => "x"}}
+
+      {:ok, a} =
+        Logs.persist_orchestrator_event(event, %{orchestrator_id: orch.id, session_id: "s"})
+
+      {:ok, b} =
+        Logs.persist_orchestrator_event(event, %{orchestrator_id: orch.id, session_id: "s"})
+
+      assert b.seq_no > a.seq_no
+    end
+
+    test "list_recent_global/2 rows each carry a non-nil seq_no" do
+      orch = orchestrator_fixture()
+      event = %Event.TextDelta{harness: :claude, text: "x", raw: %{"type" => "t", "text" => "x"}}
+
+      {:ok, _} =
+        Logs.persist_orchestrator_event(event, %{orchestrator_id: orch.id, session_id: "s"})
+
+      rows = Logs.list_recent_global(50)
+      assert rows != []
+      assert Enum.all?(rows, &is_integer(&1.seq_no))
+    end
+
+    test "log_label/1 formats integers and degrades nil to —" do
+      assert Logs.log_label(1) == "log-1"
+      assert Logs.log_label(12) == "log-12"
+      assert Logs.log_label(435_444_545) == "log-435444545"
+      assert Logs.log_label(nil) == "—"
     end
   end
 end

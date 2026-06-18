@@ -57,6 +57,51 @@ defmodule RepoBuilder.Harness.PiNormalizeTest do
     assert String.contains?(text, "世界")
   end
 
+  test "message_end for a `toolResult` message is NOT harvested as assistant text" do
+    # pi-agent-core emits message_start/message_end for the `toolResult` message it
+    # feeds back to the model. Its content is the tool's output as `type:"text"`
+    # blocks — this MUST NOT leak into the orchestrator's TEXT channel (chat); the
+    # canonical result already comes from the `tool_execution_end` clause.
+    tool_result_echo = %{
+      "type" => "message_end",
+      "message" => %{
+        "role" => "toolResult",
+        "toolCallId" => "call_18cde5414901425d94fc3183",
+        "toolName" => "configure_tier",
+        "isError" => false,
+        "content" => [
+          %{
+            "type" => "text",
+            "text" =>
+              ~s({"category":"fast","harness":"claude","model":"claude-haiku-4-5","status":"configured"})
+          }
+        ]
+      }
+    }
+
+    assert Pi.normalize(tool_result_echo, @ctx) == :skip
+  end
+
+  test "message_end for an `assistant` message still yields the genuine prose TextDelta" do
+    assistant_prose = %{
+      "type" => "message_end",
+      "message" => %{
+        "role" => "assistant",
+        "content" => [%{"type" => "text", "text" => "Configured the fast tier."}]
+      }
+    }
+
+    assert {:ok,
+            [
+              %Event.TextDelta{
+                thinking?: false,
+                partial?: false,
+                text: "Configured the fast tier."
+              }
+            ]} =
+             Pi.normalize(assistant_prose, @ctx)
+  end
+
   test "turn_end with OpenAI-shaped usage -> Usage", %{frames: frames} do
     assert {:ok, [%Event.Usage{input_tokens: 100, output_tokens: 50}]} =
              Pi.normalize(Enum.at(frames, 9), @ctx)

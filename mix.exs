@@ -103,6 +103,10 @@ defmodule RepoBuilder.MixProject do
       {:type_check, "~> 0.13.7"},
       # YAML frontmatter parsing for subagent template files (.claude/agents/*.md).
       {:yaml_elixir, "~> 2.11"},
+      # Pure-Elixir IANA time zone database (compiled at build time, no runtime fetch).
+      # Wired as Elixir's :time_zone_database so DateTime.shift_zone/2 resolves zones
+      # for local-time rendering of log timestamps (issue-a timezone).
+      {:tz, "~> 0.28"},
       # --- Tooling / quality ---
       # Phoenix runtime-intelligence MCP (project_eval/get_logs/get_source_location),
       # served at /tidewave/mcp via `plug Tidewave` in dev only (§2). Not in the prod

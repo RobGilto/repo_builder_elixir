@@ -78,10 +78,56 @@ defmodule RepoBuilder.Workflows do
     Repo.all(from(r in WorkflowRun, where: r.status in [:queued, :running]))
   end
 
-  @doc "The most recent runs (dashboard swimlane seeding)."
-  @spec list_recent_runs(pos_integer()) :: [WorkflowRun.t()]
-  def list_recent_runs(limit \\ 50) do
-    Repo.all(from(r in WorkflowRun, order_by: [desc: r.updated_at], limit: ^limit))
+  @doc """
+  The most recent runs (dashboard swimlane seeding). Runs soft-hidden by the console
+  CLEAR action are skipped unless `include_hidden?` is true (the settings "show hidden"
+  troubleshooting toggle).
+  """
+  @spec list_recent_runs(pos_integer(), boolean()) :: [WorkflowRun.t()]
+  def list_recent_runs(limit \\ 50, include_hidden? \\ false) do
+    query =
+      if include_hidden? do
+        from(r in WorkflowRun, order_by: [desc: r.updated_at], limit: ^limit)
+      else
+        from(r in WorkflowRun,
+          where: r.hidden == false,
+          order_by: [desc: r.updated_at],
+          limit: ^limit
+        )
+      end
+
+    Repo.all(query)
+  end
+
+  @doc """
+  Soft-hide every FINISHED (succeeded/failed/cancelled) run — the console "CLEAR
+  finished workflows" action. Running/queued runs are untouched. Persists the cleared
+  state (rows are NOT deleted; revealed by the "show hidden" toggle). Returns the count.
+  """
+  @spec hide_finished_runs() :: non_neg_integer()
+  def hide_finished_runs do
+    {count, _} =
+      from(r in WorkflowRun,
+        where: r.hidden == false and r.status in [:succeeded, :failed, :cancelled]
+      )
+      |> Repo.update_all(set: [hidden: true])
+
+    count
+  end
+
+  @doc """
+  Release (permanently un-hide) EVERY soft-hidden workflow_runs row (any status) — the
+  inverse of `hide_finished_runs/0` and the console "Release hidden logs & workflows"
+  action. Cleared finished runs return to the swimlane view for good; already-visible
+  runs are untouched. Returns the count released.
+  """
+  @spec release_hidden_runs() :: non_neg_integer()
+  def release_hidden_runs do
+    {count, _} =
+      from(r in WorkflowRun, where: r.hidden == true)
+      |> Repo.update_all(set: [hidden: false])
+
+    count
   end
 
   # --- per-step observability (BUILD_PROMPT.md §7/§9) ---

@@ -35,18 +35,33 @@ defmodule RepoBuilderWeb.ConsoleLive do
       event_detail_panel: 1
     ]
 
-  alias RepoBuilder.{Agents, Dashboard, Logs, Orchestrators, Session, WorkflowEngine, Workflows}
+  alias RepoBuilder.{
+    Agents,
+    CostCenter,
+    Dashboard,
+    Explain,
+    Logs,
+    Orchestrators,
+    Session,
+    WorkflowEngine,
+    Workflows
+  }
+
   alias RepoBuilder.Agents.Agent
+  alias RepoBuilder.CostCenter.ModelPrice
+  alias RepoBuilder.FileBrowser
   alias RepoBuilder.Harness.Event
   alias RepoBuilder.Harness.Pi.Models, as: PiModels
   alias RepoBuilder.Harness.Registry, as: HarnessRegistry
-  alias RepoBuilder.Orchestrator.Server, as: OrchestratorServer
+  alias RepoBuilder.Orchestrator.Queue, as: OrchestratorQueue
   alias RepoBuilder.Orchestrator.Templates
   alias RepoBuilderWeb.AgentColors
 
   @categories [:response, :tool, :thinking, :hook]
   @buffer_limit 500
   @messages_limit 100
+  # Terminal workflow run statuses (WorkflowRun.status): clearable from the ADWS view.
+  @finished_workflow_statuses [:succeeded, :failed, :cancelled]
   # Throttle the live streaming assign to ≤ one render per tick (~20 fps) so a fast
   # provider streaming thousands of token deltas/sec can't flood the WebSocket.
   @stream_flush_ms 50
@@ -67,6 +82,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
         statuses: %{},
         agent_costs: %{},
         orchestrator_id: nil,
+        # FIFO turn-queue snapshot (issue message-queue): busy?/current/queued/depth.
+        # Safe idle default for the disconnected render; reseeded on the connected mount.
+        orchestrator_queue: %{busy?: false, current: nil, queued: [], depth: 0},
         orchestrator_harness: nil,
         orchestrator_provider: nil,
         orchestrator_model: nil,
@@ -83,17 +101,37 @@ defmodule RepoBuilderWeb.ConsoleLive do
         orchestrator_system_prompt_mode: :append,
         orchestrator_default_prompt: "",
         orchestrator_reasoning_effort: :default,
+        orchestrator_working_dir: "",
+        dir_picker_open?: false,
+        dir_picker_path: "",
+        dir_picker_parent: nil,
+        dir_picker_dirs: [],
         view_mode: :logs,
         rail_collapsed?: false,
         chat_width: :sm,
+        # Operator display timezone for log timestamps; the connected mount reads the
+        # persisted value off the orchestrator (this default is for the static render).
+        timezone: RepoBuilder.Timezones.default(),
         auto_follow?: true,
         show_thinking?: true,
+        # Reveal logs/workflows soft-hidden by CLEAR (settings troubleshooting toggle).
+        show_hidden?: false,
+        # Transient "Released N rows" confirmation for the Release action (nil ⇒ none).
+        release_notice: nil,
         settings_tab: :general,
         # Agent-template settings tab. Defaults are safe for the disconnected render;
         # the connected mount seeds the real rows from the Templates context.
         template_rows: [],
         selected_template: nil,
         template_versions: [],
+        # Cost Center settings tab (issue-cost-center). Lazily loaded when the tab is
+        # selected so an ordinary mount never runs the rollup aggregation.
+        cost_rollups: [],
+        # Time-windowed accounting view (issue-cost-adw-periods); loaded with the tab.
+        period_spend: nil,
+        price_rows: [],
+        price_form: to_form(ModelPrice.changeset(%ModelPrice{}, %{}), as: :model_price),
+        editing_price_id: nil,
         regex?: false,
         search: "",
         active_categories: MapSet.new(@categories),
@@ -108,6 +146,13 @@ defmodule RepoBuilderWeb.ConsoleLive do
         stream_pending: %{},
         stream_flush_ref: nil,
         event_buffer: [],
+        # Reusable multi-select over the event stream (issue-explain): a transient set
+        # of selected row ids the bulk-action bar (EXPLAIN/HIDE/COPY) acts on. Never
+        # persisted; cleared on CLEAR / disconnect / backfill re-stream.
+        selected_ids: MapSet.new(),
+        # Ephemeral explain-logs modal state: :idle | :running | {:ready, text} |
+        # {:error, msg}. Discarded on close; nothing survives a reconnect.
+        explain: %{status: :idle, request_id: nil, count: 0},
         # Per-step ADW observability (§9): run_id => a per-step progress view
         # (status/completed/total/current/cost/steps). Seeded from recent runs,
         # updated live on the lanes topic's workflow broadcasts.
@@ -146,8 +191,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
         |> seed_lanes()
         |> seed_workflow_progress()
         |> seed_cost()
-        |> backfill_events()
+        # assign_orchestrator must precede backfill_events: it reads the persisted
+        # display timezone into assigns, which backfill_events uses to format row times.
         |> assign_orchestrator()
+        |> backfill_events()
         |> assign_template_rows()
         |> subscribe_feeds()
         |> tap(fn _ -> PiModels.refresh_async() end)
@@ -179,6 +226,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
     assign(socket,
       orchestrator_id: orchestrator.id,
+      orchestrator_queue: OrchestratorQueue.snapshot(orchestrator.id),
       orchestrator_harness: orchestrator.harness,
       orchestrator_provider: orchestrator.provider,
       orchestrator_model: orchestrator.model,
@@ -191,7 +239,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
       orchestrator_system_prompt: orchestrator.system_prompt || "",
       orchestrator_system_prompt_mode: orchestrator.system_prompt_mode,
       orchestrator_default_prompt: Orchestrators.default_system_prompt(orchestrator),
-      orchestrator_reasoning_effort: orchestrator.reasoning_effort
+      orchestrator_reasoning_effort: orchestrator.reasoning_effort,
+      orchestrator_working_dir: orchestrator.working_dir || "",
+      timezone: Orchestrators.timezone(orchestrator)
     )
   end
 
@@ -213,15 +263,23 @@ defmodule RepoBuilderWeb.ConsoleLive do
       entry = Map.get(roster, category, %{})
       harness = entry["harness"]
       provider = entry["provider"]
+      model = entry["model"]
+
+      # The orchestrator assigns concrete model ids (e.g. `claude-sonnet-4-5`) that the
+      # registry's curated tier-alias list (`opus`/`sonnet`/`haiku`) omits. Prepend the
+      # assigned id so the `<select>` can mark it selected — mirroring the header
+      # dropdown's `model_extra` "Current" handling — instead of falling back to blank.
+      base = if(harness, do: model_options_for(harness, provider), else: [])
+      model_options = if(model in [nil, "" | base], do: base, else: [model | base])
 
       %{
         category: category,
         harness: harness,
         provider: provider,
-        model: entry["model"],
+        model: model,
         harness_options: harnesses,
         provider_options: if(harness, do: provider_options_for(harness), else: []),
-        model_options: if(harness, do: model_options_for(harness, provider), else: [])
+        model_options: model_options
       }
     end)
   end
@@ -261,6 +319,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
   defp subscribe_feeds(socket) do
     :ok = Dashboard.subscribe()
     :ok = Dashboard.subscribe_events()
+    # The per-orchestrator queue topic (issue message-queue): re-render the queued
+    # strip live. assign_orchestrator runs before this, so orchestrator_id is set.
+    _ =
+      if id = socket.assigns.orchestrator_id, do: Dashboard.subscribe_orchestrator_queue(id)
+
     socket
   end
 
@@ -299,7 +362,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
   @spec seed_workflow_progress(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp seed_workflow_progress(socket) do
     progress =
-      Map.new(Workflows.list_recent_runs(), fn run -> {run.id, workflow_view(run)} end)
+      Workflows.list_recent_runs(50, socket.assigns.show_hidden?)
+      |> Map.new(fn run -> {run.id, workflow_view(run)} end)
 
     assign(socket, :workflow_progress, progress)
   end
@@ -386,13 +450,15 @@ defmodule RepoBuilderWeb.ConsoleLive do
   # reconnect backfills instead of starting empty (§9 reconnect rule).
   @spec backfill_events(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp backfill_events(socket) do
-    logs = Logs.list_recent_global(200)
+    logs = Logs.list_recent_global(200, socket.assigns.show_hidden?)
+
+    timezone = socket.assigns.timezone
 
     {rows, messages, seq} =
       Enum.reduce(logs, {[], [], 0}, fn log, {rows, msgs, seq} ->
         seq = seq + 1
-        row = log_to_row(log, seq, socket.assigns.agent_names)
-        msgs = append_chat(msgs, chat_for_row(row), seq)
+        row = log_to_row(log, seq, socket.assigns.agent_names, timezone)
+        msgs = append_chat(msgs, chat_for_row(row), seq, timezone)
         {rows ++ [row], msgs, seq}
       end)
 
@@ -401,8 +467,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
     socket
     |> assign(event_buffer: rows, messages: Enum.take(messages, -@messages_limit), seq: seq)
     # A reconnect starts from persisted finalized history only — drop any stale
-    # in-flight streaming buffer so no token shards survive the reconnect (§9).
+    # in-flight streaming buffer so no token shards survive the reconnect (§9), and
+    # drop any selection referencing the now-reset row ids (issue-explain).
     |> assign(streaming: %{}, stream_pending: %{}, stream_flush_ref: nil)
+    |> assign(selected_ids: MapSet.new())
     |> stream(:events, rows, reset: true)
   end
 
@@ -531,6 +599,47 @@ defmodule RepoBuilderWeb.ConsoleLive do
     )
   end
 
+  # Persist the orchestrator + worker working directory. Blank clears it (back to an
+  # isolated per-session workspace); a non-blank value must be an absolute path to an
+  # existing directory, validated before it is stored (no silent un-runnable cwd).
+  def handle_event("save_working_dir", %{"working_dir" => dir}, socket) do
+    save_working_dir(socket, dir)
+  end
+
+  # Clear the working dir (blank ⇒ each agent gets an isolated scratch workspace).
+  def handle_event("clear_working_dir", _params, socket) do
+    save_working_dir(socket, "")
+  end
+
+  # Open the directory picker, starting at the current working dir when it is a valid
+  # directory, otherwise the project root (the default).
+  def handle_event("open_dir_picker", _params, socket) do
+    start =
+      case nilify_blank(socket.assigns.orchestrator_working_dir) do
+        path when is_binary(path) ->
+          if File.dir?(path), do: path, else: FileBrowser.project_root()
+
+        nil ->
+          FileBrowser.project_root()
+      end
+
+    {:noreply, socket |> assign(:dir_picker_open?, true) |> load_dir_picker(start)}
+  end
+
+  def handle_event("dir_picker_browse", %{"path" => path}, socket) do
+    {:noreply, load_dir_picker(socket, path)}
+  end
+
+  def handle_event("close_dir_picker", _params, socket) do
+    {:noreply, assign(socket, :dir_picker_open?, false)}
+  end
+
+  # Commit the currently-browsed directory as the orchestrator cwd, then close the picker.
+  def handle_event("dir_picker_select", _params, socket) do
+    {:noreply, socket} = save_working_dir(socket, socket.assigns.dir_picker_path)
+    {:noreply, assign(socket, :dir_picker_open?, false)}
+  end
+
   # Persist the harness-blind reasoning effort immediately (consistent with the other
   # orchestrator settings). The next run_turn spawns with the per-harness flag.
   def handle_event("set_reasoning_effort", %{"effort" => effort}, socket) do
@@ -539,6 +648,30 @@ defmodule RepoBuilderWeb.ConsoleLive do
       &Orchestrators.set_reasoning_effort(&1, reasoning_effort(effort)),
       "Could not set reasoning effort"
     )
+  end
+
+  # Persist the operator's display timezone and re-render the center stream in the new
+  # zone (the select snaps back to @timezone on an invalid/failed write — no-op here).
+  def handle_event("set_timezone", %{"timezone" => zone}, socket) do
+    case socket.assigns.orchestrator_id do
+      nil ->
+        {:noreply, put_flash(socket, :error, "No orchestrator available")}
+
+      id ->
+        case Orchestrators.set_timezone(id, zone) do
+          {:ok, orchestrator} ->
+            socket =
+              socket
+              |> assign_orchestrator_selection(orchestrator)
+              |> backfill_events()
+              |> refresh_cost_center_on_tz()
+
+            {:noreply, socket}
+
+          {:error, _reason} ->
+            {:noreply, socket}
+        end
+    end
   end
 
   # --- agent-template settings tab ---
@@ -607,6 +740,22 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
       {:error, _reason} ->
         {:noreply, put_flash(socket, :error, "Could not delete template")}
+    end
+  end
+
+  # Cancel a still-queued operator/auto-resume turn before it runs (issue message-queue);
+  # the in-flight turn is never affected (use interrupt for that). The queue broadcasts a
+  # fresh snapshot on success, so the strip updates via the queue handle_info.
+  def handle_event("cancel_queued", %{"id" => id}, socket) do
+    case socket.assigns.orchestrator_id do
+      nil ->
+        {:noreply, socket}
+
+      orchestrator_id ->
+        case OrchestratorQueue.cancel(orchestrator_id, id) do
+          {:ok, snapshot} -> {:noreply, assign(socket, :orchestrator_queue, snapshot)}
+          {:error, :not_found} -> {:noreply, socket}
+        end
     end
   end
 
@@ -753,19 +902,133 @@ defmodule RepoBuilderWeb.ConsoleLive do
   def handle_event("toggle_thinking", _params, socket),
     do: {:noreply, assign(socket, :show_thinking?, not socket.assigns.show_thinking?)}
 
-  def handle_event("select_settings_tab", %{"tab" => tab}, socket),
-    do: {:noreply, assign(socket, :settings_tab, settings_tab(tab))}
+  # Troubleshooting: reveal (or re-hide) rows soft-hidden by CLEAR. Flip the flag, then
+  # re-seed the log stream + workflow swimlanes from the DB honoring the new flag.
+  def handle_event("toggle_show_hidden", _params, socket) do
+    socket = assign(socket, :show_hidden?, not socket.assigns.show_hidden?)
+    {:noreply, socket |> backfill_events() |> seed_workflow_progress()}
+  end
 
+  # Durable reveal: permanently un-hide every row soft-hidden by CLEAR (the inverse of
+  # CLEAR). Unlike the troubleshooting peek, this persists hidden=false so the rows stay
+  # visible across reconnects without holding a flag on. Re-seed the streams from the
+  # now-visible DB and flash a transient "Released N rows" confirmation.
+  def handle_event("release_hidden", _params, socket) do
+    released = Logs.release_hidden_logs() + Workflows.release_hidden_runs()
+    Process.send_after(self(), :clear_release_notice, 2_000)
+
+    {:noreply,
+     socket
+     |> assign(:release_notice, released)
+     |> backfill_events()
+     |> seed_workflow_progress()}
+  end
+
+  def handle_event("select_settings_tab", %{"tab" => tab}, socket) do
+    selected = settings_tab(tab)
+    socket = assign(socket, :settings_tab, selected)
+    socket = if selected == :cost_center, do: load_cost_center(socket), else: socket
+    {:noreply, socket}
+  end
+
+  # Save a catalog price (issue-cost-center). Routes to `update_price/2` when an edit is in
+  # flight (identity key fields dropped so the row can never be repointed, §key-immutability)
+  # or `upsert_price/1` when creating. On success re-derive the catalog + rollup and reset
+  # to create mode; on a validation error re-render the form with the changeset (staying in
+  # edit mode); a stale id (row deleted concurrently) falls back to create mode.
+  def handle_event("save_price", %{"model_price" => params}, socket) do
+    result =
+      case socket.assigns.editing_price_id do
+        nil ->
+          CostCenter.upsert_price(params)
+
+        id ->
+          case CostCenter.get_price(id) do
+            nil -> {:error, :not_found}
+            price -> CostCenter.update_price(price, Map.drop(params, ~w(harness provider model)))
+          end
+      end
+
+    case result do
+      {:ok, _price} ->
+        {:noreply, socket |> load_cost_center() |> reset_price_form()}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply, assign(socket, :price_form, to_form(changeset, as: :model_price))}
+
+      {:error, :not_found} ->
+        {:noreply, socket |> load_cost_center() |> reset_price_form()}
+    end
+  end
+
+  # Load a catalog row into the form and flip into edit mode. A stale id (concurrent
+  # delete) no-ops rather than crashing.
+  def handle_event("edit_price", %{"id" => id}, socket) do
+    case CostCenter.get_price(id) do
+      nil ->
+        {:noreply, socket}
+
+      %ModelPrice{} = price ->
+        {:noreply,
+         assign(socket,
+           editing_price_id: price.id,
+           price_form: to_form(ModelPrice.changeset(price, %{}), as: :model_price)
+         )}
+    end
+  end
+
+  def handle_event("cancel_edit", _params, socket) do
+    {:noreply, reset_price_form(socket)}
+  end
+
+  def handle_event("delete_price", %{"id" => id}, socket) do
+    _ = CostCenter.delete_price(id)
+    socket = load_cost_center(socket)
+
+    socket =
+      if socket.assigns.editing_price_id == id, do: reset_price_form(socket), else: socket
+
+    {:noreply, socket}
+  end
+
+  # Reset every filter AND clear the log view. Empties the in-memory event buffer + the
+  # rendered stream (and collapses expanded rows) AND soft-hides the persisted rows, so
+  # the cleared state survives a reconnect. Nothing is deleted — the settings "show
+  # hidden" toggle reveals it again. When troubleshooting (show_hidden?), skip the
+  # persist so CLEAR stays a view-only reset.
   def handle_event("clear_filters", _params, socket) do
+    # Discard the hidden-row count: the persist is a side effect, not a return value.
+    _ = unless socket.assigns.show_hidden?, do: Logs.hide_all_logs()
+
     {:noreply,
      socket
      |> assign(
        active_categories: MapSet.new(@categories),
        active_agents: [],
        search: "",
-       regex?: false
+       regex?: false,
+       event_buffer: [],
+       expanded_ids: MapSet.new(),
+       selected_ids: MapSet.new(),
+       log_count: 0
      )
-     |> restream()}
+     |> stream(:events, [], reset: true)}
+  end
+
+  # Clear finished (succeeded/failed/cancelled) workflows from the ADWS view AND soft-hide
+  # the persisted runs so the cleared state survives a reconnect. Running/queued runs stay;
+  # nothing is deleted (the settings "show hidden" toggle reveals them). When
+  # troubleshooting (show_hidden?), skip the persist so CLEAR stays a view-only reset.
+  def handle_event("clear_workflows", _params, socket) do
+    # Discard the hidden-run count: the persist is a side effect, not a return value.
+    _ = unless socket.assigns.show_hidden?, do: Workflows.hide_finished_runs()
+
+    kept =
+      socket.assigns.workflow_progress
+      |> Enum.reject(fn {_run_id, view} -> view.status in @finished_workflow_statuses end)
+      |> Map.new()
+
+    {:noreply, assign(socket, :workflow_progress, kept)}
   end
 
   def handle_event("toggle_event", %{"id" => id}, socket) do
@@ -788,6 +1051,55 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   def handle_event("close_event", _params, socket),
     do: {:noreply, assign(socket, :selected_event, nil)}
+
+  # --- reusable event-stream selection + bulk actions (issue-explain) ---
+
+  # Toggle one row's membership in the action-agnostic selection. Re-stream the row so
+  # its checkbox reflects the new state (the stream only re-renders changed items).
+  def handle_event("toggle_select", %{"id" => id}, socket) do
+    id = String.to_integer(id)
+    selected = toggle_member(socket.assigns.selected_ids, id)
+    socket = assign(socket, :selected_ids, selected)
+
+    case Enum.find(socket.assigns.event_buffer, &(&1.id == id)) do
+      nil -> {:noreply, socket}
+      row -> {:noreply, stream_insert(socket, :events, row)}
+    end
+  end
+
+  def handle_event("clear_selection", _params, socket),
+    do: {:noreply, clear_selection(socket)}
+
+  # EXPLAIN: gather the selected rows (order-preserving), resolve the Fast tier, and
+  # start the ephemeral runner. The modal is shown client-side by the button's JS; this
+  # only flips the assign to :running (or to an actionable error when no Fast agent).
+  def handle_event("explain_selected", _params, socket) do
+    rows = selected_rows(socket.assigns.event_buffer, socket.assigns.selected_ids)
+
+    if rows == [] do
+      {:noreply, socket}
+    else
+      explain_selected(socket, rows)
+    end
+  end
+
+  # HIDE: soft-hide the selected rows from the view (declutter), then clear the
+  # selection. View-only — persisted history is untouched (reconnect re-backfills).
+  def handle_event("hide_selected", _params, socket) do
+    rows = selected_rows(socket.assigns.event_buffer, socket.assigns.selected_ids)
+    ids = MapSet.new(rows, & &1.id)
+    buffer = Enum.reject(socket.assigns.event_buffer, &MapSet.member?(ids, &1.id))
+
+    socket =
+      socket
+      |> assign(event_buffer: buffer, selected_ids: MapSet.new())
+
+    socket = Enum.reduce(rows, socket, &stream_delete(&2, :events, &1))
+    {:noreply, socket}
+  end
+
+  def handle_event("close_explain", _params, socket),
+    do: {:noreply, assign(socket, :explain, %{status: :idle, request_id: nil, count: 0})}
 
   defp launch_adw_builder(steps, name, harness, socket) do
     step_list =
@@ -861,15 +1173,21 @@ defmodule RepoBuilderWeb.ConsoleLive do
         put_flash(socket, :error, "No orchestrator available")
 
       orchestrator_id ->
-        case OrchestratorServer.run_turn(orchestrator_id, prompt) do
-          {:ok, _agent_id} ->
+        case OrchestratorQueue.enqueue(orchestrator_id, prompt) do
+          {:ok, :started, _agent_id} ->
             socket
+
+          {:ok, :queued, position} ->
+            put_flash(socket, :info, "Queued — will run next (position #{position})")
 
           {:error, :not_orchestrator_capable} ->
             put_flash(socket, :error, "Orchestrator harness can't orchestrate")
 
           {:error, :no_model_selected} ->
             put_flash(socket, :error, "No model selected — pick a model in the header")
+
+          {:error, :queue_full} ->
+            put_flash(socket, :error, "Message queue is full — wait for it to drain")
 
           {:error, _reason} ->
             put_flash(socket, :error, "Could not start the orchestrator")
@@ -927,6 +1245,66 @@ defmodule RepoBuilderWeb.ConsoleLive do
     end
   end
 
+  # Validate + persist a working directory on the orchestrator (shared by the prompt
+  # modal's CWD button, the Clear button, and the directory picker's "Use" action).
+  @spec save_working_dir(Phoenix.LiveView.Socket.t(), String.t()) ::
+          {:noreply, Phoenix.LiveView.Socket.t()}
+  defp save_working_dir(socket, dir) do
+    case validate_working_dir(dir) do
+      {:ok, working_dir} ->
+        update_orchestrator(
+          socket,
+          &Orchestrators.set_working_dir(&1, working_dir),
+          "Could not save working directory"
+        )
+
+      {:error, message} ->
+        {:noreply, put_flash(socket, :error, message)}
+    end
+  end
+
+  # Load one directory's listing into the picker assigns; flash + keep the prior view
+  # on an unreadable/missing path so the picker never lands in a broken state.
+  @spec load_dir_picker(Phoenix.LiveView.Socket.t(), String.t()) :: Phoenix.LiveView.Socket.t()
+  defp load_dir_picker(socket, path) do
+    case FileBrowser.list(path) do
+      {:ok, listing} ->
+        socket
+        |> assign(:dir_picker_path, listing.path)
+        |> assign(:dir_picker_parent, listing.parent)
+        |> assign(:dir_picker_dirs, listing.dirs)
+
+      {:error, _reason} ->
+        put_flash(socket, :error, "Cannot open directory: #{path}")
+    end
+  end
+
+  # Validate an operator-supplied working directory: blank ⇒ {:ok, nil} (clear it);
+  # otherwise it must be an ABSOLUTE path to an EXISTING directory before we store it,
+  # so a turn never spawns into a missing/relative cwd.
+  @spec validate_working_dir(String.t()) :: {:ok, String.t() | nil} | {:error, String.t()}
+  defp validate_working_dir(dir) when is_binary(dir) do
+    case nilify_blank(dir) do
+      nil ->
+        {:ok, nil}
+
+      path ->
+        cond do
+          not absolute_path?(path) ->
+            {:error, "Working directory must be an absolute path"}
+
+          not File.dir?(path) ->
+            {:error, "Working directory does not exist: #{path}"}
+
+          true ->
+            {:ok, Path.expand(path)}
+        end
+    end
+  end
+
+  @spec absolute_path?(String.t()) :: boolean()
+  defp absolute_path?(path), do: Path.type(path) == :absolute
+
   # Cascade an agent-models row change: changing harness clears provider+model;
   # changing provider clears model; changing model keeps the row as posted.
   @spec agent_model_attrs(map()) :: %{optional(String.t()) => String.t() | nil}
@@ -959,7 +1337,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
     socket
     |> assign(:seq, seq)
-    |> assign(:messages, append_chat(socket.assigns.messages, msg, seq))
+    |> assign(:messages, append_chat(socket.assigns.messages, msg, seq, socket.assigns.timezone))
   end
 
   @spec start_session(Phoenix.LiveView.Socket.t(), keyword()) :: Phoenix.LiveView.Socket.t()
@@ -978,59 +1356,106 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   # --- event / lane handlers (one clause per canonical variant) ---
 
+  # Ephemeral explain result (issue-explain): ignore a superseded request (a second
+  # EXPLAIN issued while one was running); otherwise flip the modal to its result.
   @impl true
-  def handle_info({:agent_event, agent_id, %Event.SessionStarted{} = event}, socket) do
+  def handle_info({:explain_result, request_id, result}, socket) do
+    if socket.assigns.explain.request_id == request_id do
+      status =
+        case result do
+          {:ok, text} -> {:ready, text}
+          {:error, reason} -> {:error, explain_error_message(reason)}
+        end
+
+      {:noreply, assign(socket, :explain, %{socket.assigns.explain | status: status})}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info({:agent_event, agent_id, %Event.SessionStarted{} = event, seq_no}, socket) do
     {:noreply,
      socket
      |> set_status(agent_id, :running)
-     |> record_event(agent_id, %{
-       category: :system,
-       kind: "session",
-       body: "session #{event.session_id}",
-       payload: event.raw
-     })}
+     |> record_event(
+       agent_id,
+       %{
+         category: :system,
+         kind: "session",
+         body: "session #{event.session_id}",
+         payload: event.raw
+       },
+       seq_no
+     )}
   end
 
   # Incremental token delta — coalesce into the per-agent streaming buffer (no
   # center-log row, no per-token counter); a throttled flush commits it to render.
-  def handle_info({:agent_event, agent_id, %Event.TextDelta{partial?: true} = event}, socket) do
-    {:noreply, accumulate_partial(socket, agent_id, channel(event.thinking?), event.text)}
+  def handle_info(
+        {:agent_event, agent_id, %Event.TextDelta{partial?: true} = event, _seq_no},
+        socket
+      ) do
+    # Only the orchestrator's in-flight text feeds the chat streaming buffer; worker
+    # partials are dropped here (their finalized text still lands in the center stream).
+    if orchestrator_event?(agent_id) do
+      {:noreply, accumulate_partial(socket, agent_id, channel(event.thinking?), event.text)}
+    else
+      {:noreply, socket}
+    end
   end
 
   # Finalized thinking block — clear the in-flight thinking buffer, then record the
   # one permanent thinking message + center row.
-  def handle_info({:agent_event, agent_id, %Event.TextDelta{thinking?: true} = event}, socket) do
+  def handle_info(
+        {:agent_event, agent_id, %Event.TextDelta{thinking?: true} = event, seq_no},
+        socket
+      ) do
     socket = finalize_stream_channel(socket, agent_id, :thinking)
 
     {:noreply,
-     record_event(socket, agent_id, %{
-       category: :thinking,
-       kind: "thinking",
-       body: event.text,
-       thinking?: true,
-       payload: event.raw
-     })}
+     record_event(
+       socket,
+       agent_id,
+       %{
+         category: :thinking,
+         kind: "thinking",
+         body: event.text,
+         thinking?: true,
+         payload: event.raw
+       },
+       seq_no
+     )}
   end
 
   # Finalized text block — clear the in-flight text buffer, then record the one
   # permanent orchestrator message + center row.
-  def handle_info({:agent_event, agent_id, %Event.TextDelta{} = event}, socket) do
+  def handle_info({:agent_event, agent_id, %Event.TextDelta{} = event, seq_no}, socket) do
     socket = finalize_stream_channel(socket, agent_id, :text)
 
+    chat =
+      if orchestrator_event?(agent_id) do
+        %{
+          role: :orchestrator,
+          label: "ORCHESTRATOR",
+          content: event.text,
+          tool_name: nil,
+          params_json: nil
+        }
+      end
+
     {:noreply,
-     record_event(socket, agent_id, %{
-       category: :response,
-       kind: "text",
-       body: event.text,
-       payload: event.raw,
-       chat: %{
-         role: :orchestrator,
-         label: "ORCHESTRATOR",
-         content: event.text,
-         tool_name: nil,
-         params_json: nil
-       }
-     })}
+     record_event(
+       socket,
+       agent_id,
+       %{
+         category: :response,
+         kind: "text",
+         body: event.text,
+         payload: event.raw,
+         chat: chat
+       },
+       seq_no
+     )}
   end
 
   # Throttled flush tick: commit accumulated partials into the rendered streaming
@@ -1041,52 +1466,71 @@ defmodule RepoBuilderWeb.ConsoleLive do
     {:noreply, assign(socket, streaming: streaming, stream_pending: %{}, stream_flush_ref: nil)}
   end
 
-  def handle_info({:agent_event, agent_id, %Event.ToolCall{} = event}, socket) do
+  def handle_info({:agent_event, agent_id, %Event.ToolCall{} = event, seq_no}, socket) do
     {:noreply,
-     record_event(socket, agent_id, %{
-       category: :tool,
-       kind: "tool_call",
-       body: "#{event.name} #{inspect(event.input)}",
-       payload: event.raw
-     })}
+     record_event(
+       socket,
+       agent_id,
+       %{
+         category: :tool,
+         kind: "tool_call",
+         body: "#{event.name} #{inspect(event.input)}",
+         payload: event.raw
+       },
+       seq_no
+     )}
   end
 
-  def handle_info({:agent_event, agent_id, %Event.ToolResult{} = event}, socket) do
+  def handle_info({:agent_event, agent_id, %Event.ToolResult{} = event, seq_no}, socket) do
     {:noreply,
-     record_event(socket, agent_id, %{
-       category: :tool,
-       kind: "tool_result",
-       body: inspect(event.content),
-       payload: event.raw
-     })}
+     record_event(
+       socket,
+       agent_id,
+       %{
+         category: :tool,
+         kind: "tool_result",
+         body: inspect(event.content),
+         payload: event.raw
+       },
+       seq_no
+     )}
   end
 
-  def handle_info({:agent_event, agent_id, %Event.Usage{} = event}, socket) do
+  def handle_info({:agent_event, agent_id, %Event.Usage{} = event, seq_no}, socket) do
     {:noreply,
      socket
      |> add_cost(event.cost_usd)
      |> add_agent_cost(agent_id, event.cost_usd)
      |> put_context(agent_id, event.input_tokens + event.output_tokens)
-     |> record_event(agent_id, %{
-       category: :system,
-       kind: "usage",
-       body: "in=#{event.input_tokens} out=#{event.output_tokens}",
-       tokens: "#{event.input_tokens + event.output_tokens}t",
-       payload: event.raw
-     })}
+     |> record_event(
+       agent_id,
+       %{
+         category: :system,
+         kind: "usage",
+         body: "in=#{event.input_tokens} out=#{event.output_tokens}",
+         tokens: "#{event.input_tokens + event.output_tokens}t",
+         payload: event.raw
+       },
+       seq_no
+     )}
   end
 
-  def handle_info({:agent_event, agent_id, %Event.Status{} = event}, socket) do
+  def handle_info({:agent_event, agent_id, %Event.Status{} = event, seq_no}, socket) do
     {:noreply,
-     record_event(socket, agent_id, %{
-       category: :hook,
-       kind: "status",
-       body: "#{event.kind} #{inspect(event.detail)}",
-       payload: event.raw
-     })}
+     record_event(
+       socket,
+       agent_id,
+       %{
+         category: :hook,
+         kind: "status",
+         body: "#{event.kind} #{inspect(event.detail)}",
+         payload: event.raw
+       },
+       seq_no
+     )}
   end
 
-  def handle_info({:agent_event, agent_id, %Event.Done{} = event}, socket) do
+  def handle_info({:agent_event, agent_id, %Event.Done{} = event, seq_no}, socket) do
     status = if event.ok, do: :succeeded, else: :failed
 
     {:noreply,
@@ -1095,25 +1539,33 @@ defmodule RepoBuilderWeb.ConsoleLive do
      |> set_status(agent_id, status)
      |> add_cost(event.cost_usd)
      |> add_agent_cost(agent_id, event.cost_usd)
-     |> record_event(agent_id, %{
-       category: :system,
-       kind: "done",
-       body: "reason=#{event.reason}",
-       payload: event.raw
-     })}
+     |> record_event(
+       agent_id,
+       %{
+         category: :system,
+         kind: "done",
+         body: "reason=#{event.reason}",
+         payload: event.raw
+       },
+       seq_no
+     )}
   end
 
-  def handle_info({:agent_event, agent_id, %Event.Error{} = event}, socket) do
+  def handle_info({:agent_event, agent_id, %Event.Error{} = event, seq_no}, socket) do
     {:noreply,
      socket
      |> flush_streaming_agent(agent_id)
      |> set_status(agent_id, :error)
-     |> record_event(agent_id, %{
-       category: :system,
-       kind: "error",
-       body: "#{event.reason}: #{event.message}",
-       payload: event.raw
-     })}
+     |> record_event(
+       agent_id,
+       %{
+         category: :system,
+         kind: "error",
+         body: "#{event.reason}: #{event.message}",
+         payload: event.raw
+       },
+       seq_no
+     )}
   end
 
   # A worker the orchestrator just created (issue-c): add it to the rail roster +
@@ -1143,9 +1595,26 @@ defmodule RepoBuilderWeb.ConsoleLive do
     {:noreply, assign(socket, :agent_model_saved, false)}
   end
 
+  def handle_info(:clear_release_notice, socket) do
+    {:noreply, assign(socket, :release_notice, nil)}
+  end
+
+  # Live queue snapshot (issue message-queue): re-render the queued strip in place.
+  def handle_info({:orchestrator_queue, id, snapshot}, socket) do
+    if id == socket.assigns.orchestrator_id do
+      {:noreply, assign(socket, :orchestrator_queue, snapshot)}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_info({:orchestrator_updated, orchestrator}, socket) do
     if orchestrator.id == socket.assigns.orchestrator_id do
-      {:noreply, assign_orchestrator_selection(socket, orchestrator)}
+      # A timezone change from another tab/session must re-format already-rendered rows.
+      tz_changed? = Orchestrators.timezone(orchestrator) != socket.assigns.timezone
+      socket = assign_orchestrator_selection(socket, orchestrator)
+      socket = if tz_changed?, do: backfill_events(socket), else: socket
+      {:noreply, socket}
     else
       {:noreply, socket}
     end
@@ -1184,12 +1653,15 @@ defmodule RepoBuilderWeb.ConsoleLive do
   # entry where one applies.
   # Inference-only spec — dialyzer narrows `attrs` to the specific per-variant map
   # shapes, which a hand-written map() spec would supertype under :underspecs.
-  defp record_event(socket, agent_id, attrs) do
+  # `seq_no` is the persisted row's DURABLE `log-<n>` number (nil for non-persisted
+  # shards), distinct from the in-memory per-socket `seq` that ids/orders the stream row.
+  defp record_event(socket, agent_id, attrs, seq_no) do
     seq = socket.assigns.seq + 1
 
     row = %{
       id: seq,
       line: seq,
+      log_no: seq_no,
       agent: agent_label(socket, agent_id),
       agent_key: agent_id,
       color: AgentColors.hex(to_string(agent_id)),
@@ -1198,7 +1670,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
       body: to_string(attrs.body),
       thinking?: Map.get(attrs, :thinking?, false),
       tokens: Map.get(attrs, :tokens),
-      time: now_hms(),
+      time: now_hms(socket.assigns.timezone),
       payload_json: pretty_json(Map.get(attrs, :payload, %{}))
     }
 
@@ -1232,17 +1704,29 @@ defmodule RepoBuilderWeb.ConsoleLive do
   defp maybe_chat(socket, nil, _seq), do: socket
 
   defp maybe_chat(socket, chat, seq),
-    do: assign(socket, :messages, append_chat(socket.assigns.messages, chat, seq))
+    do:
+      assign(
+        socket,
+        :messages,
+        append_chat(socket.assigns.messages, chat, seq, socket.assigns.timezone)
+      )
 
-  @spec append_chat([map()], map() | nil, pos_integer()) :: [map()]
-  defp append_chat(messages, nil, _seq), do: messages
+  @spec append_chat([map()], map() | nil, pos_integer(), String.t()) :: [map()]
+  defp append_chat(messages, nil, _seq, _timezone), do: messages
 
-  defp append_chat(messages, chat, seq) do
-    entry = Map.merge(chat, %{id: seq, time: now_hm()})
+  defp append_chat(messages, chat, seq, timezone) do
+    entry = Map.merge(chat, %{id: seq, time: now_hm(timezone)})
     Enum.take(messages ++ [entry], -@messages_limit)
   end
 
   # --- live streaming buffer (partials coalesced per agent + channel) -------
+
+  # The chat pane is orchestrator ↔ user only. Orchestrator turns broadcast under an
+  # `"orch-#{orchestrator_id}-#{n}"` agent_id (orchestrator/server.ex:85,113); worker
+  # DB agents broadcast under their Ecto UUID (never `"orch-"`). Gate every chat-pane
+  # surface on this so worker text stays in the center event stream, not the chat.
+  @spec orchestrator_event?(String.t()) :: boolean()
+  defp orchestrator_event?(agent_id), do: String.starts_with?(to_string(agent_id), "orch-")
 
   @spec channel(boolean()) :: :text | :thinking
   defp channel(true), do: :thinking
@@ -1331,10 +1815,12 @@ defmodule RepoBuilderWeb.ConsoleLive do
     p = Map.get(socket.assigns.stream_pending, agent_id, %{text: "", thinking: ""})
     leftover = %{text: s.text <> p.text, thinking: s.thinking <> p.thinking}
 
+    timezone = socket.assigns.timezone
+
     {messages, seq} =
       {socket.assigns.messages, socket.assigns.seq}
-      |> promote_channel(leftover.text, :text)
-      |> promote_channel(leftover.thinking, :thinking)
+      |> promote_channel(leftover.text, :text, timezone)
+      |> promote_channel(leftover.thinking, :thinking, timezone)
 
     socket
     |> assign(:messages, messages)
@@ -1343,14 +1829,14 @@ defmodule RepoBuilderWeb.ConsoleLive do
     |> assign(:stream_pending, Map.delete(socket.assigns.stream_pending, agent_id))
   end
 
-  @spec promote_channel({[map()], non_neg_integer()}, String.t(), :text | :thinking) ::
+  @spec promote_channel({[map()], non_neg_integer()}, String.t(), :text | :thinking, String.t()) ::
           {[map()], non_neg_integer()}
-  defp promote_channel({messages, seq}, text, channel) do
+  defp promote_channel({messages, seq}, text, channel, timezone) do
     if String.trim(text) == "" do
       {messages, seq}
     else
       seq = seq + 1
-      {append_chat(messages, stream_chat(channel, text), seq), seq}
+      {append_chat(messages, stream_chat(channel, text), seq, timezone), seq}
     end
   end
 
@@ -1562,6 +2048,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
               regex?={@regex?}
               auto_follow?={@auto_follow?}
             />
+            <.selection_bar
+              selected_count={MapSet.size(@selected_ids)}
+              copy_payload={selected_copy_payload(@event_buffer, @selected_ids)}
+            />
             <div
               id="event-stream"
               phx-update="stream"
@@ -1573,6 +2063,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
                 <.event_row
                   id={row.id}
                   line={row.line}
+                  log_no={row.log_no}
                   agent={row.agent}
                   color={row.color}
                   category={row.category}
@@ -1582,6 +2073,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
                   tokens={row.tokens}
                   time={row.time}
                   expanded?={MapSet.member?(@expanded_ids, row.id)}
+                  selected?={MapSet.member?(@selected_ids, row.id)}
                 />
               </div>
             </div>
@@ -1589,6 +2081,18 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
           <div id="swimlanes" class={["flex min-h-0 flex-1", @view_mode != :adws && "hidden"]}>
             <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
+              <div class="flex items-center justify-end">
+                <button
+                  id="clear-workflows"
+                  type="button"
+                  phx-click="clear_workflows"
+                  disabled={not any_finished_workflows?(@workflow_progress)}
+                  class="cns-chip disabled:cursor-not-allowed disabled:opacity-40"
+                  title="Clear finished workflows (succeeded/failed/cancelled) from the view; running ones stay. Does not delete persisted runs."
+                >
+                  CLEAR
+                </button>
+              </div>
               <div id="workflow-runs" class="flex flex-col gap-2">
                 <.workflow_swimlane
                   :for={view <- workflow_views(@workflow_progress)}
@@ -1684,17 +2188,31 @@ defmodule RepoBuilderWeb.ConsoleLive do
               <% end %>
             </:messages>
           </.command_panel>
+
+          <.queued_messages
+            busy?={@orchestrator_queue.busy?}
+            depth={@orchestrator_queue.depth}
+            queued={@orchestrator_queue.queued}
+          />
         </aside>
       </div>
 
       <.global_command_input
         harnesses={@harness_options}
         agents={Enum.map(@agents, & &1.name)}
+        working_dir={@orchestrator_working_dir}
         uploads={@uploads}
         adw_builder?={@adw_builder?}
         adw_steps={@adw_steps}
         adw_name={@adw_name}
         adw_local?={@adw_local?}
+      />
+
+      <.dir_picker_modal
+        open?={@dir_picker_open?}
+        path={@dir_picker_path}
+        parent={@dir_picker_parent}
+        dirs={@dir_picker_dirs}
       />
 
       <.agent_models_modal
@@ -1704,25 +2222,102 @@ defmodule RepoBuilderWeb.ConsoleLive do
         updated_at={@agent_models_updated_at}
       />
 
+      <.explain_modal status={@explain.status} count={@explain.count} />
+
       <.settings_modal
         settings_tab={@settings_tab}
         view_mode={@view_mode}
         chat_width={@chat_width}
         auto_follow?={@auto_follow?}
         show_thinking?={@show_thinking?}
+        show_hidden?={@show_hidden?}
+        release_notice={@release_notice}
         harnesses={@harness_options}
         system_prompt={@orchestrator_system_prompt}
         system_prompt_mode={@orchestrator_system_prompt_mode}
         default_system_prompt={@orchestrator_default_prompt}
         reasoning_effort={@orchestrator_reasoning_effort}
         reasoning_efforts={Orchestrators.reasoning_efforts()}
+        timezone={@timezone}
+        timezones={RepoBuilder.Timezones.list()}
         template_rows={@template_rows}
         selected_template={@selected_template}
         template_versions={@template_versions}
+        cost_rollups={@cost_rollups}
+        period_spend={@period_spend}
+        price_rows={@price_rows}
+        price_form={@price_form}
+        editing_price_id={@editing_price_id}
       />
     </div>
     """
   end
+
+  # --- selection / explain helpers (issue-explain) ---
+
+  # Selected rows in buffer order (so the prompt reads top-to-bottom, not click order).
+  @spec selected_rows([map()], MapSet.t()) :: [map()]
+  defp selected_rows(event_buffer, selected_ids) do
+    Enum.filter(event_buffer, &MapSet.member?(selected_ids, &1.id))
+  end
+
+  # The selected rows' raw bodies joined by newlines, for the COPY action's `data-copy`.
+  @spec selected_copy_payload([map()], MapSet.t()) :: String.t()
+  defp selected_copy_payload(event_buffer, selected_ids) do
+    event_buffer
+    |> selected_rows(selected_ids)
+    |> Enum.map_join("\n", & &1.body)
+  end
+
+  # Reset the selection and re-stream the formerly-selected rows so their checkboxes
+  # clear (the stream only re-renders items it is handed).
+  @spec clear_selection(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp clear_selection(socket) do
+    rows = selected_rows(socket.assigns.event_buffer, socket.assigns.selected_ids)
+    socket = assign(socket, :selected_ids, MapSet.new())
+    Enum.reduce(rows, socket, &stream_insert(&2, :events, &1))
+  end
+
+  @spec explain_selected(Phoenix.LiveView.Socket.t(), [map()]) ::
+          {:noreply, Phoenix.LiveView.Socket.t()}
+  defp explain_selected(socket, rows) do
+    count = length(rows)
+
+    with id when is_binary(id) <- socket.assigns.orchestrator_id,
+         {:ok, orchestrator} <- Orchestrators.fetch(id),
+         {:ok, request_id} <- Explain.explain(orchestrator, rows) do
+      {:noreply,
+       assign(socket, :explain, %{status: :running, request_id: request_id, count: count})}
+    else
+      {:error, :no_fast_agent} ->
+        {:noreply,
+         assign(socket, :explain, %{
+           status: {:error, no_fast_agent_message()},
+           request_id: nil,
+           count: count
+         })}
+
+      _ ->
+        {:noreply,
+         assign(socket, :explain, %{
+           status: {:error, "Could not start the explanation — no orchestrator available."},
+           request_id: nil,
+           count: count
+         })}
+    end
+  end
+
+  @spec no_fast_agent_message() :: String.t()
+  defp no_fast_agent_message do
+    "No Fast agent configured — pick a harness + model for the Fast tier under Agents…"
+  end
+
+  @spec explain_error_message(term()) :: String.t()
+  defp explain_error_message(:no_fast_agent), do: no_fast_agent_message()
+  defp explain_error_message(:timeout), do: "The Fast agent timed out before replying."
+
+  defp explain_error_message(reason),
+    do: "The explanation run failed: #{inspect(reason)}"
 
   # --- view helpers ---
 
@@ -1731,6 +2326,13 @@ defmodule RepoBuilderWeb.ConsoleLive do
   @spec workflow_views(%{optional(Ecto.UUID.t()) => map()}) :: [map()]
   defp workflow_views(workflow_progress) do
     workflow_progress |> Map.values() |> Enum.sort_by(& &1.run_id)
+  end
+
+  @spec any_finished_workflows?(map()) :: boolean()
+  defp any_finished_workflows?(workflow_progress) do
+    Enum.any?(workflow_progress, fn {_run_id, view} ->
+      view.status in @finished_workflow_statuses
+    end)
   end
 
   @spec agent_swimlanes(map()) :: [map()]
@@ -1778,17 +2380,27 @@ defmodule RepoBuilderWeb.ConsoleLive do
   defp short_id(id), do: id |> to_string() |> String.slice(0, 8)
 
   # Convert one persisted log row into an event-stream row for reconnect backfill.
-  @spec log_to_row(Logs.AgentLog.t(), pos_integer(), %{optional(String.t()) => String.t()}) ::
-          map()
-  defp log_to_row(log, seq, names) do
+  @spec log_to_row(
+          Logs.AgentLog.t(),
+          pos_integer(),
+          %{optional(String.t()) => String.t()},
+          String.t()
+        ) :: map()
+  defp log_to_row(log, seq, names, timezone) do
     category = category_for_type(log.event_type)
+    # Worker rows carry an `agent_id` (UUID); orchestrator rows carry no `agent_id`
+    # but hold the `"orch-…"` turn id in `session_id`. Fall back to it so the backfill
+    # agent_key matches the live path — and so the chat gate (`orchestrator_event?/1`)
+    # can tell orchestrator text from worker text on reconnect.
+    agent_key = log.agent_id || log.session_id
 
     %{
       id: seq,
       line: seq,
-      agent: Map.get(names, log.agent_id, short_id(log.agent_id)),
-      agent_key: log.agent_id,
-      color: AgentColors.hex(to_string(log.agent_id)),
+      log_no: log.seq_no,
+      agent: Map.get(names, log.agent_id, short_id(agent_key)),
+      agent_key: agent_key,
+      color: AgentColors.hex(to_string(agent_key)),
       category: category,
       kind: to_string(log.event_type),
       body: log_body(log),
@@ -1796,7 +2408,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
       # backfill can route reasoning to the thinking pane like the live path does.
       thinking?: log.payload["thinking"] == true,
       tokens: nil,
-      time: log_time(log),
+      time: log_time(log, timezone),
       payload_json: pretty_json(log.payload)
     }
   end
@@ -1812,9 +2424,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
   defp log_body(%{payload: %{"text" => text}}) when is_binary(text), do: text
   defp log_body(%{event_type: type, payload: payload}), do: "#{type} #{inspect(payload)}"
 
-  @spec log_time(Logs.AgentLog.t()) :: String.t()
-  defp log_time(%{inserted_at: %DateTime{} = at}), do: Calendar.strftime(at, "%H:%M:%S")
-  defp log_time(_log), do: ""
+  @spec log_time(Logs.AgentLog.t(), String.t()) :: String.t()
+  defp log_time(%{inserted_at: %DateTime{} = at}, timezone),
+    do: RepoBuilder.Timezones.format_datetime(at, timezone)
+
+  defp log_time(_log, _timezone), do: ""
 
   # Convert a backfilled row into the chat entry it maps to (text → orchestrator
   # message). Only finalized orchestrator text reaches the chat; thinking and tool
@@ -1823,14 +2437,17 @@ defmodule RepoBuilderWeb.ConsoleLive do
   # (Inference-only spec — a hand-written one would be a supertype under :underspecs.)
   defp chat_for_row(%{category: :response, thinking?: true}), do: nil
 
-  defp chat_for_row(%{category: :response, body: body}),
-    do: %{
-      role: :orchestrator,
-      label: "ORCHESTRATOR",
-      content: body,
-      tool_name: nil,
-      params_json: nil
-    }
+  defp chat_for_row(%{category: :response, body: body, agent_key: agent_key}) do
+    if orchestrator_event?(agent_key) do
+      %{
+        role: :orchestrator,
+        label: "ORCHESTRATOR",
+        content: body,
+        tool_name: nil,
+        params_json: nil
+      }
+    end
+  end
 
   defp chat_for_row(_row), do: nil
 
@@ -1858,12 +2475,41 @@ defmodule RepoBuilderWeb.ConsoleLive do
   defp to_chat_width("lg"), do: :lg
   defp to_chat_width(_other), do: :sm
 
-  @spec settings_tab(String.t()) :: :general | :appearance | :about | :prompt | :templates
+  @spec settings_tab(String.t()) ::
+          :general | :appearance | :about | :prompt | :templates | :cost_center
   defp settings_tab("appearance"), do: :appearance
   defp settings_tab("about"), do: :about
   defp settings_tab("prompt"), do: :prompt
   defp settings_tab("templates"), do: :templates
+  defp settings_tab("cost_center"), do: :cost_center
   defp settings_tab(_other), do: :general
+
+  # Re-derive the Cost Center tab's data from the DB (no reliance on socket state, so a
+  # reconnect re-renders correctly). Cheap enough to run on each tab open.
+  # The period-spend windows are timezone-relative — recompute them when the operator
+  # changes timezone WHILE looking at the Cost Center tab so the numbers track the new zone.
+  @spec refresh_cost_center_on_tz(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp refresh_cost_center_on_tz(%{assigns: %{settings_tab: :cost_center}} = socket),
+    do: load_cost_center(socket)
+
+  defp refresh_cost_center_on_tz(socket), do: socket
+
+  @spec load_cost_center(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp load_cost_center(socket) do
+    assign(socket,
+      cost_rollups: CostCenter.rollup(include_hidden?: socket.assigns.show_hidden?),
+      period_spend: CostCenter.period_spend(timezone: socket.assigns.timezone),
+      price_rows: CostCenter.list_prices()
+    )
+  end
+
+  @spec reset_price_form(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp reset_price_form(socket) do
+    assign(socket,
+      editing_price_id: nil,
+      price_form: to_form(ModelPrice.changeset(%ModelPrice{}, %{}), as: :model_price)
+    )
+  end
 
   # Guard operator-supplied mode string into the closed atom set (never
   # String.to_atom/1 on input). Anything but "replace" defaults to :append.
@@ -1896,9 +2542,12 @@ defmodule RepoBuilderWeb.ConsoleLive do
     end
   end
 
-  @spec now_hms() :: String.t()
-  defp now_hms, do: Calendar.strftime(Time.utc_now(), "%H:%M:%S")
+  # Live-row timestamp: format the current UTC instant as a full local datetime so
+  # live rows match the backfill path (which formats the persisted `inserted_at`).
+  @spec now_hms(String.t()) :: String.t()
+  defp now_hms(timezone), do: RepoBuilder.Timezones.format_datetime(DateTime.utc_now(), timezone)
 
-  @spec now_hm() :: String.t()
-  defp now_hm, do: Calendar.strftime(Time.utc_now(), "%H:%M")
+  # Chat-entry timestamp: compact local time-of-day.
+  @spec now_hm(String.t()) :: String.t()
+  defp now_hm(timezone), do: RepoBuilder.Timezones.format_time(DateTime.utc_now(), timezone)
 end

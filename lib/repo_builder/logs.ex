@@ -16,7 +16,9 @@ defmodule RepoBuilder.Logs do
   @doc """
   Redact, map, and persist one canonical event as an `agent_logs` row.
 
-  `attrs` must carry `:agent_id` (the FK) and `:session_id`.
+  `attrs` must carry `:agent_id` (the FK) and `:session_id`. It MAY carry
+  `:provider`/`:model` snapshots (issue-cost-center) for the dimensional rollup;
+  missing keys degrade to `nil` columns (no crash).
   """
   @spec persist_event(Event.t(), map()) :: {:ok, AgentLog.t()} | {:error, Ecto.Changeset.t()}
   def persist_event(event, attrs) do
@@ -27,6 +29,8 @@ defmodule RepoBuilder.Logs do
       session_id: attrs[:session_id],
       event_type: event_type(event),
       harness: to_string(event.harness),
+      provider: attrs[:provider],
+      model: attrs[:model],
       payload: event_payload(event, scrubbed.raw),
       usage: usage_params(event)
     }
@@ -42,11 +46,15 @@ defmodule RepoBuilder.Logs do
   redaction, same float→Decimal usage embed — but scopes the row to an orchestrator
   (no `agent_id`), giving observability parity with workers for both harnesses.
 
-  `attrs` must carry `:orchestrator_id` and `:session_id`.
+  `attrs` must carry `:orchestrator_id` and `:session_id`, and MAY carry
+  `:provider`/`:model` snapshots (issue-cost-center) for the dimensional rollup;
+  missing keys degrade to `nil` columns (no crash).
   """
   @spec persist_orchestrator_event(Event.t(), %{
           required(:orchestrator_id) => Ecto.UUID.t(),
-          required(:session_id) => String.t()
+          required(:session_id) => String.t(),
+          optional(:provider) => String.t() | nil,
+          optional(:model) => String.t() | nil
         }) :: {:ok, AgentLog.t()} | {:error, Ecto.Changeset.t()}
   def persist_orchestrator_event(event, attrs) do
     scrubbed = Redact.scrub(event)
@@ -56,6 +64,8 @@ defmodule RepoBuilder.Logs do
       session_id: attrs[:session_id],
       event_type: event_type(event),
       harness: to_string(event.harness),
+      provider: attrs[:provider],
+      model: attrs[:model],
       payload: event_payload(event, scrubbed.raw),
       usage: usage_params(event)
     }
@@ -64,6 +74,16 @@ defmodule RepoBuilder.Logs do
     |> AgentLog.changeset(params)
     |> Repo.insert()
   end
+
+  @doc """
+  Format a persisted log's durable `seq_no` as the human-readable `log-<n>` label
+  surfaced in the event-detail drilldown. A `nil` (non-persisted live shard, or a row
+  built before this field) degrades to `"—"`. Pure formatter — no `Repo` — co-located
+  here so the live path, the backfill path, and tests share one definition.
+  """
+  @spec log_label(integer() | nil) :: String.t()
+  def log_label(n) when is_integer(n), do: "log-#{n}"
+  def log_label(_n), do: "—"
 
   @doc "The most recent `limit` agent_logs rows for an agent, in chronological order (reconnect backfill)."
   @spec list_recent(Ecto.UUID.t(), pos_integer()) :: [AgentLog.t()]
@@ -80,15 +100,54 @@ defmodule RepoBuilder.Logs do
   The most recent `limit` agent_logs rows across ALL agents, in chronological
   order. Seeds the console's center stream + chat buffer on connect so a
   reconnect backfills instead of starting empty (§9 reconnect rule).
+
+  Rows soft-hidden by the console CLEAR action are skipped unless `include_hidden?`
+  is true (the settings "show hidden" troubleshooting toggle).
   """
-  @spec list_recent_global(pos_integer()) :: [AgentLog.t()]
-  def list_recent_global(limit \\ 500) do
+  @spec list_recent_global(pos_integer(), boolean()) :: [AgentLog.t()]
+  def list_recent_global(limit \\ 500, include_hidden? \\ false) do
     AgentLog
+    |> filter_hidden(include_hidden?)
     |> order_by([l], desc: l.inserted_at, desc: l.id)
     |> limit(^limit)
     |> Repo.all()
     |> Enum.reverse()
   end
+
+  @doc """
+  Soft-hide EVERY currently-visible agent_logs row (the console "CLEAR" log action).
+  Persists the cleared state so a reconnect stays empty; rows are NOT deleted and are
+  revealed again by the settings "show hidden" toggle. Returns the count hidden.
+  """
+  @spec hide_all_logs() :: non_neg_integer()
+  def hide_all_logs do
+    {count, _} =
+      AgentLog
+      |> where([l], l.hidden == false)
+      |> Repo.update_all(set: [hidden: true])
+
+    count
+  end
+
+  @doc """
+  Release (permanently un-hide) EVERY soft-hidden agent_logs row — the inverse of
+  `hide_all_logs/0` and the console "Release hidden logs & workflows" action. Rows that
+  were cleared return to the default view for good (the durable reveal, not the
+  troubleshooting peek); already-visible rows are untouched. Returns the count released.
+  """
+  @spec release_hidden_logs() :: non_neg_integer()
+  def release_hidden_logs do
+    {count, _} =
+      AgentLog
+      |> where([l], l.hidden == true)
+      |> Repo.update_all(set: [hidden: false])
+
+    count
+  end
+
+  @spec filter_hidden(Ecto.Queryable.t(), boolean()) :: Ecto.Query.t()
+  defp filter_hidden(query, true), do: where(query, [l], true)
+  defp filter_hidden(query, false), do: where(query, [l], l.hidden == false)
 
   @doc "Sum of all priced `cost_usd` across an agent's logs (unpriced rows contribute nothing)."
   @spec cost_rollup!(Ecto.UUID.t()) :: Decimal.t()

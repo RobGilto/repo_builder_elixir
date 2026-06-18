@@ -29,6 +29,18 @@ defmodule RepoBuilder.Orchestrators do
   @spec config() :: keyword()
   def config, do: Application.get_env(:repo_builder, :orchestrator, [])
 
+  @doc """
+  Whether the holding pattern is enabled: when a dispatched worker returns and the
+  orchestrator is otherwise idle, the `Queue` enqueues a low-priority auto-resume
+  turn. Defaults to `false` (issue message-queue).
+  """
+  @spec auto_resume?() :: boolean()
+  def auto_resume?, do: config()[:auto_resume_on_worker_return] == true
+
+  @doc "The maximum number of queued operator turns before `enqueue` is rejected."
+  @spec max_queue_depth() :: pos_integer()
+  def max_queue_depth, do: config()[:max_queue_depth] || 50
+
   @spec default_harness() :: String.t()
   def default_harness do
     config()[:default_harness] || List.first(RepoBuilder.Harness.Registry.known()) || "fake"
@@ -148,6 +160,18 @@ defmodule RepoBuilder.Orchestrators do
     do: update_fields(id, %{provider: provider, model: nil, session_id: nil})
 
   @doc """
+  Set the working directory the orchestrator AND the workers it commands run in
+  (their session `cwd`). A blank value clears it (`nil`), restoring the default of
+  an isolated per-session scratch workspace. Clears the resumable session id: a CLI
+  session store is keyed to its project cwd (pi keys sessions by cwd), so moving to
+  a new directory must start the next turn fresh rather than resume in the old tree.
+  """
+  @spec set_working_dir(Ecto.UUID.t(), String.t() | nil) ::
+          {:ok, Orchestrator.t()} | {:error, :not_found}
+  def set_working_dir(id, working_dir),
+    do: update_fields(id, %{working_dir: blank_to_nil(working_dir), session_id: nil})
+
+  @doc """
   Set the orchestrator's custom system prompt (`nil`/blank falls back to the
   generated default at spawn) and its append/replace `mode`. Both are persisted
   together so the next turn spawns with the chosen text under the chosen flag.
@@ -193,6 +217,65 @@ defmodule RepoBuilder.Orchestrators do
   def agent_models(%Orchestrator{metadata: metadata}), do: Map.get(metadata, "agent_models", %{})
 
   @doc """
+  The operator's chosen display timezone (IANA name) for rendering log timestamps.
+  Stored in `metadata["timezone"]`; falls back to the default (`"UTC"`) when unset or
+  no longer a curated/valid zone.
+  """
+  @spec timezone(Orchestrator.t()) :: String.t()
+  def timezone(%Orchestrator{metadata: metadata}) do
+    case Map.get(metadata, "timezone") do
+      zone when is_binary(zone) ->
+        if RepoBuilder.Timezones.valid?(zone), do: zone, else: default_tz()
+
+      _ ->
+        default_tz()
+    end
+  end
+
+  @doc """
+  Set the operator's display timezone (validated against `RepoBuilder.Timezones`).
+  Persists to `metadata["timezone"]` via the same atomic `FOR UPDATE` read-merge-write
+  as `set_agent_model/3` so a concurrent metadata write can't clobber sibling keys, then
+  broadcasts the orchestrator update so open consoles re-render in the new zone.
+  """
+  @spec set_timezone(Ecto.UUID.t(), String.t()) ::
+          {:ok, Orchestrator.t()} | {:error, :not_found | :invalid_timezone}
+  def set_timezone(id, zone) do
+    if RepoBuilder.Timezones.valid?(zone) do
+      put_metadata_locked(id, "timezone", zone)
+    else
+      {:error, :invalid_timezone}
+    end
+  end
+
+  # Atomically put a single top-level `key => value` into the orchestrator's metadata
+  # under a `FOR UPDATE` row lock (so concurrent metadata writes can't clobber sibling
+  # keys), then broadcast the update outside the transaction. Shared by metadata setters.
+  @spec put_metadata_locked(Ecto.UUID.t(), String.t(), term()) ::
+          {:ok, Orchestrator.t()} | {:error, :not_found}
+  defp put_metadata_locked(id, key, value) do
+    result =
+      Repo.transaction(fn ->
+        case Repo.one(from(o in Orchestrator, where: o.id == ^id, lock: "FOR UPDATE")) do
+          nil -> Repo.rollback(:not_found)
+          %Orchestrator{} = orchestrator -> merge_metadata!(orchestrator, key, value)
+        end
+      end)
+
+    case result do
+      {:ok, updated} ->
+        :ok = RepoBuilder.Dashboard.broadcast_orchestrator_updated(updated)
+        {:ok, updated}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @spec default_tz() :: String.t()
+  defp default_tz, do: RepoBuilder.Timezones.default()
+
+  @doc """
   Assign the {harness, provider, model} a worker `category` (`fast`/`main`/`heavy`/
   `leader`) uses. A blank model means "unassigned" — the orchestrator can't spawn
   into that category until a model is chosen.
@@ -200,29 +283,62 @@ defmodule RepoBuilder.Orchestrators do
   @spec set_agent_model(Ecto.UUID.t(), String.t(), map()) ::
           {:ok, Orchestrator.t()} | {:error, :not_found | :invalid_category}
   def set_agent_model(id, category, attrs) when category in @agent_categories do
-    case fetch(id) do
-      {:ok, %Orchestrator{metadata: metadata}} ->
-        entry = %{
-          "harness" => attr(attrs, "harness"),
-          "provider" => attr(attrs, "provider"),
-          "model" => attr(attrs, "model"),
-          "_updated_at" => DateTime.utc_now() |> DateTime.to_iso8601()
-        }
+    # The four `configure_tier` tool calls arrive as concurrent HTTP requests, each
+    # an independent process. A plain read-merge-write would lose updates (the last
+    # writer clobbers the others' categories). Serialize writers on the same row with
+    # a `FOR UPDATE` lock inside one transaction so each merge sees the prior committed
+    # roster and the entries accumulate.
+    entry = %{
+      "harness" => attr(attrs, "harness"),
+      "provider" => attr(attrs, "provider"),
+      "model" => attr(attrs, "model"),
+      "_updated_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+    }
 
-        roster = Map.put(Map.get(metadata, "agent_models", %{}), category, entry)
-
-        with {:ok, updated} <-
-               update_fields(id, %{metadata: Map.put(metadata, "agent_models", roster)}) do
-          :ok = RepoBuilder.Dashboard.broadcast_orchestrator_updated(updated)
-          {:ok, updated}
+    result =
+      Repo.transaction(fn ->
+        case Repo.one(from(o in Orchestrator, where: o.id == ^id, lock: "FOR UPDATE")) do
+          nil -> Repo.rollback(:not_found)
+          %Orchestrator{} = orchestrator -> merge_agent_model!(orchestrator, category, entry)
         end
+      end)
 
-      error ->
-        error
+    # Broadcast outside the transaction so PubSub never holds the row lock.
+    case result do
+      {:ok, updated} ->
+        :ok = RepoBuilder.Dashboard.broadcast_orchestrator_updated(updated)
+        {:ok, updated}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
   def set_agent_model(_id, _category, _attrs), do: {:error, :invalid_category}
+
+  # Merge `entry` into the locked orchestrator's `agent_models` roster and persist.
+  # Runs inside the `set_agent_model/3` transaction; rolls back on a write error so
+  # the caller's contract stays `{:error, :not_found}`. Returns the updated row.
+  # Inference-only spec — Dialyzer narrows the returned struct below `Orchestrator.t()`.
+  defp merge_agent_model!(%Orchestrator{metadata: metadata} = orchestrator, category, entry) do
+    roster = Map.put(Map.get(metadata, "agent_models", %{}), category, entry)
+
+    case update_record(orchestrator, %{metadata: Map.put(metadata, "agent_models", roster)}) do
+      {:ok, updated} -> updated
+      {:error, _} -> Repo.rollback(:not_found)
+    end
+  end
+
+  # Put a single top-level `key => value` into the locked orchestrator's `metadata`
+  # and persist, preserving all sibling keys. Runs inside the `set_timezone/2`
+  # transaction; rolls back on a write error. Returns the updated row.
+  # Inference-only spec — Dialyzer narrows the returned struct below `Orchestrator.t()`.
+  defp merge_metadata!(%Orchestrator{metadata: metadata} = orchestrator, key, value) do
+    case update_record(orchestrator, %{metadata: Map.put(metadata, key, value)}) do
+      {:ok, updated} -> updated
+      {:error, _} -> Repo.rollback(:not_found)
+    end
+  end
 
   @doc """
   Set the orchestrator's model (nil clears it) and remember it in the per-provider

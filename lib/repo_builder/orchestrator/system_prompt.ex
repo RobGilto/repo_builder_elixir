@@ -64,12 +64,29 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     Available worker harnesses: #{harnesses_block()}.
     Your own harness is #{own_harness_block(orchestrator)}.
 
+    Working directory:
+    #{working_dir_block(orchestrator)}
+
     Worker specialization (name workers by the role they play):
     - builder: implement features, write code
     - reviewer: code review, quality checks
     - tester: write and run tests
     - documenter: write documentation
     - debugger: troubleshoot failures
+
+    Message queue & holding pattern:
+    - Operator messages you receive while you are working are QUEUED and delivered to
+      you as your NEXT turn, in the order they were sent. You will not be interrupted
+      mid-turn.
+    - So finish dispatching the current batch and END YOUR TURN — report what you kicked
+      off ("started the builder on X", "launched the ADW") rather than blocking in a long
+      monitor loop. That lets the queue flow: your dispatched workers run in parallel in
+      the background while the next operator message is processed.
+    - Do NOT sit and poll `check_agent_status` waiting for a worker to finish before
+      ending your turn. Check status only when the operator asks, then end the turn.
+    - When a worker you dispatched returns, you may be re-engaged automatically (the
+      holding pattern) to review its work and decide next steps — if that is enabled.
+      Operator messages always take precedence over these automatic resume turns.
 
     Working rhythm: analyze the request → plan which workers are needed → create or
     reuse them → dispatch clear, specific instructions → monitor with
@@ -97,6 +114,36 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
       end
     end)
   end
+
+  # Make the brain self-aware of where it (and the workers it commands) operate. When
+  # a working dir is set, both run there; the platform itself (its prompts, scripts,
+  # and source) lives at the BEAM cwd (the repo root) — named so the orchestrator can
+  # refer to platform context while doing its work in the working directory.
+  @spec working_dir_block(Orchestrator.t()) :: String.t()
+  defp working_dir_block(%Orchestrator{working_dir: working_dir})
+       when is_binary(working_dir) and working_dir != "" do
+    """
+    - You and every worker you command run in `#{working_dir}`. Do all project work there.
+    - The repo_builder platform itself (its prompts, scripts, and source) lives at
+      `#{platform_root()}` — refer to it for platform context, but operate in the working directory above.
+    """
+    |> String.trim_trailing()
+  end
+
+  defp working_dir_block(%Orchestrator{}) do
+    """
+    - No working directory is set: you and your workers each run in an isolated, empty
+      scratch workspace with no project files. If a task needs a real codebase, ask the
+      operator to set a Working directory in Settings → General.
+    - The repo_builder platform itself lives at `#{platform_root()}`.
+    """
+    |> String.trim_trailing()
+  end
+
+  # The platform root = the BEAM process cwd, i.e. the directory `mix phx.server` runs
+  # from (the repo root where the orchestrator's prompts/scripts live).
+  @spec platform_root() :: String.t()
+  defp platform_root, do: File.cwd!()
 
   # Make the brain self-aware of its execution context (harness + provider + model).
   @spec own_harness_block(Orchestrator.t()) :: String.t()

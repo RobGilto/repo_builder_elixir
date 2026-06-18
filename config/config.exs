@@ -11,6 +11,10 @@ config :repo_builder,
   ecto_repos: [RepoBuilder.Repo],
   generators: [timestamp_type: :utc_datetime, binary_id: true]
 
+# Time zone database for DateTime.shift_zone/2 (local-time rendering of log
+# timestamps, issue-a timezone). `tz` compiles the IANA data at build time.
+config :elixir, :time_zone_database, Tz.TimeZoneDatabase
+
 # Configure the endpoint
 config :repo_builder, RepoBuilderWeb.Endpoint,
   url: [host: "localhost"],
@@ -253,6 +257,11 @@ config :repo_builder, :orchestrator,
   default_harness: "claude",
   default_model: nil,
   mcp_base_url: "http://127.0.0.1:4000",
+  # FIFO turn queue (issue message-queue). `auto_resume_on_worker_return` enables the
+  # holding pattern (an idle orchestrator is re-engaged when a worker returns);
+  # `max_queue_depth` bounds the pending operator-message backlog.
+  auto_resume_on_worker_return: false,
+  max_queue_depth: 50,
   # Writable root for operator/orchestrator-authored subagent templates (the
   # read-only built-ins ship at priv/orchestrator/agents). Markdown-with-frontmatter
   # files, versioned on the filesystem. Overridden to a tmp dir in test.exs.

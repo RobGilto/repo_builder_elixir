@@ -19,6 +19,7 @@ defmodule RepoBuilder.Workflows.WorkflowRun do
           artifacts: map(),
           step_states: map(),
           total_cost_usd: Decimal.t() | nil,
+          hidden: boolean(),
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
@@ -35,6 +36,9 @@ defmodule RepoBuilder.Workflows.WorkflowRun do
     # the live Runner and the durable StepWorker. See `Workflows.run_progress/1`.
     field :step_states, :map, default: %{}
     field :total_cost_usd, :decimal
+    # Soft-hide for the console CLEAR action on finished runs: hidden runs are skipped
+    # by the default ADWS seed but kept in the DB (revealed by the "show hidden" toggle).
+    field :hidden, :boolean, default: false
     timestamps()
   end
 

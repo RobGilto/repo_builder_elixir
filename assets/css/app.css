@@ -241,7 +241,7 @@
 /* event stream rows */
 .cns-event-row {
   display: grid;
-  grid-template-columns: 3rem 5rem 7rem 1fr auto;
+  grid-template-columns: 1.25rem 3rem 5rem 7rem 1fr auto;
   gap: 0.5rem;
   align-items: start;
   padding: 0.25rem 0.5rem;
@@ -253,6 +253,14 @@
 }
 .cns-event-row:hover { background-color: var(--cns-bg-1); }
 .cns-event-row--thinking { font-style: italic; opacity: 0.65; }
+.cns-event-row--selected { background-color: var(--cns-bg-1); box-shadow: inset 2px 0 0 var(--cns-cyan); }
+/* Subtle selection checkbox: faint until row hover or selected (issue-explain). */
+.cns-event-row__select { align-self: center; cursor: pointer; opacity: 0.3; transition: opacity 120ms; }
+.cns-event-row:hover .cns-event-row__select,
+.cns-event-row__select:checked { opacity: 1; }
+/* Lightweight spinner for the explain modal's running state. */
+.cns-spinner { display: inline-block; animation: cns-spin 1s linear infinite; color: var(--cns-cyan); }
+@keyframes cns-spin { to { transform: rotate(360deg); } }
 .cns-event-row__ln { color: var(--cns-text-3); text-align: right; }
 .cns-event-row__agent { color: var(--agent-color, var(--cns-text-1)); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cns-event-row__body { color: var(--cns-text-0); word-break: break-word; }

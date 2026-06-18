@@ -275,4 +275,35 @@ defmodule RepoBuilder.Session.ServerTest do
       assert [%{payload: %{"text" => "Hello"}}] = text_logs
     end
   end
+
+  describe "operator working directory (cwd opt)" do
+    test "runs in the given cwd and NEVER deletes it on exit" do
+      agent = unique_agent()
+      subscribe(agent)
+
+      # An operator-provided working dir holding a sentinel file (the "project").
+      cwd =
+        Path.join(
+          System.tmp_dir!(),
+          "rb-wd-" <> Integer.to_string(System.unique_integer([:positive]))
+        )
+
+      File.mkdir_p!(cwd)
+      sentinel = Path.join(cwd, "KEEP_ME")
+      File.write!(sentinel, "project file")
+
+      {:ok, pid} =
+        Supervisor.start_session(agent_id: agent, harness: "fake", prompt: "hi", cwd: cwd)
+
+      ref = Process.monitor(pid)
+      assert_receive {:harness_event, %Event.Done{ok: true}}, 2_000
+      assert_receive {:DOWN, ^ref, :process, _, _}, 2_000
+
+      # The operator's directory and its contents survive session teardown.
+      assert File.dir?(cwd)
+      assert File.read!(sentinel) == "project file"
+
+      File.rm_rf!(cwd)
+    end
+  end
 end

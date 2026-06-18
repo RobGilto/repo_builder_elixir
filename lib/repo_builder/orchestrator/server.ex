@@ -26,7 +26,7 @@ defmodule RepoBuilder.Orchestrator.Server do
   alias RepoBuilder.{Dashboard, Logs, Orchestrators, Session}
   alias RepoBuilder.Harness.Event
   alias RepoBuilder.Harness.Registry, as: HarnessRegistry
-  alias RepoBuilder.Orchestrator.{SystemPrompt, Tools}
+  alias RepoBuilder.Orchestrator.{Queue, SystemPrompt, Tools}
 
   @sup RepoBuilder.OrchestratorSupervisor
   @pubsub RepoBuilder.PubSub
@@ -45,17 +45,21 @@ defmodule RepoBuilder.Orchestrator.Server do
   end
 
   @doc """
-  Start (or resume) the default/identified orchestrator and run `prompt` as one
-  turn. Returns the session's `agent_id` (used by the console for attribution) or
-  `{:error, reason}` when the orchestrator is missing or its harness is not
-  orchestrator-capable.
+  Run `prompt` as one orchestrator turn, routed through the per-orchestrator FIFO
+  `Queue` (issue message-queue): when a turn is already in flight the prompt is
+  appended instead of racing the same resumable CLI session. Returns the started
+  turn's `agent_id` (used by the console for attribution) when it ran immediately,
+  the sentinel `"queued"` when it was appended, or `{:error, reason}` when the
+  orchestrator is missing or its harness is not orchestrator-capable.
+
+  Kept as the back-compatible entry point; the queue is the serialization backbone.
   """
   @spec run_turn(Ecto.UUID.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
   def run_turn(orchestrator_id, prompt) do
-    with {:ok, orchestrator} <- Orchestrators.fetch(orchestrator_id),
-         :ok <- ensure_orchestrating(orchestrator),
-         :ok <- ensure_model(orchestrator) do
-      start_turn(orchestrator, prompt)
+    case Queue.enqueue(orchestrator_id, prompt) do
+      {:ok, :started, agent_id} -> {:ok, agent_id}
+      {:ok, :queued, _position} -> {:ok, "queued"}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -91,13 +95,20 @@ defmodule RepoBuilder.Orchestrator.Server do
       retryable: false
     }
 
-    _ = Dashboard.broadcast_event(agent_id, event)
+    # Persist first so the global feed broadcast can carry the persisted row's durable
+    # `seq_no` (the `log-<n>` drilldown number) — parity with the session path.
+    seq_no =
+      case Logs.persist_orchestrator_event(event, %{
+             orchestrator_id: orchestrator.id,
+             session_id: agent_id,
+             provider: orchestrator.provider,
+             model: orchestrator.model
+           }) do
+        {:ok, log} -> log.seq_no
+        {:error, _changeset} -> nil
+      end
 
-    _ =
-      Logs.persist_orchestrator_event(event, %{
-        orchestrator_id: orchestrator.id,
-        session_id: agent_id
-      })
+    _ = Dashboard.broadcast_event(agent_id, event, seq_no)
 
     _ = Orchestrators.set_status(orchestrator.id, :error)
     {:error, :no_model_selected}
@@ -107,16 +118,33 @@ defmodule RepoBuilder.Orchestrator.Server do
   defp blank?(nil), do: true
   defp blank?(value) when is_binary(value), do: String.trim(value) == ""
 
-  @spec start_turn(RepoBuilder.Orchestrator.Orchestrator.t(), String.t()) ::
-          {:ok, String.t()} | {:error, term()}
-  defp start_turn(orchestrator, prompt) do
+  @doc """
+  Start ONE orchestrator turn and return the started per-turn process pid plus its
+  `agent_id`, so the `Queue` can `Process.monitor/1` it and dequeue the next item
+  when it stops (on `Done`/`Error`). Validates the orchestrator can run
+  (orchestrator-capable harness + a selected model) exactly as `run_turn/2` did,
+  surfacing `{:error, :not_orchestrator_capable}` / `{:error, :no_model_selected}`.
+  """
+  @spec start_turn(Ecto.UUID.t(), String.t()) ::
+          {:ok, pid(), String.t()} | {:error, term()}
+  def start_turn(orchestrator_id, prompt) do
+    with {:ok, orchestrator} <- Orchestrators.fetch(orchestrator_id),
+         :ok <- ensure_orchestrating(orchestrator),
+         :ok <- ensure_model(orchestrator) do
+      do_start_turn(orchestrator, prompt)
+    end
+  end
+
+  @spec do_start_turn(RepoBuilder.Orchestrator.Orchestrator.t(), String.t()) ::
+          {:ok, pid(), String.t()} | {:error, term()}
+  defp do_start_turn(orchestrator, prompt) do
     agent_id = "orch-#{orchestrator.id}-#{System.unique_integer([:positive])}"
 
     child =
       {__MODULE__, orchestrator: orchestrator, agent_id: agent_id, prompt: prompt}
 
     case DynamicSupervisor.start_child(@sup, child) do
-      {:ok, _pid} -> {:ok, agent_id}
+      {:ok, pid} -> {:ok, pid, agent_id}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -160,6 +188,9 @@ defmodule RepoBuilder.Orchestrator.Server do
           HarnessRegistry.orchestrator_defaults(orchestrator.harness)[:default_model],
       provider: orchestrator.provider,
       reasoning_effort: orchestrator.reasoning_effort,
+      # Operator-chosen working directory (nil ⇒ managed per-orchestrator workspace).
+      # The runtime writes `.mcp.json`/per-session config here and resumes turns in it.
+      cwd: orchestrator.working_dir,
       config: %{orchestrator: true},
       orchestrator_ctx: tool_ctx(orchestrator, token),
       orchestrator_db_id: orchestrator.id

@@ -393,8 +393,14 @@ defmodule RepoBuilderWeb.ConsoleComponents do
       >
         AUTO-FOLLOW
       </button>
-      <button id="clear-filters" type="button" phx-click="clear_filters" class="cns-chip">
-        CLEAR FILTERS
+      <button
+        id="clear-filters"
+        type="button"
+        phx-click="clear_filters"
+        class="cns-chip"
+        title="Reset all filters and clear the log view (does not delete persisted history; reconnect re-backfills)"
+      >
+        CLEAR
       </button>
     </div>
     """
@@ -424,6 +430,11 @@ defmodule RepoBuilderWeb.ConsoleComponents do
 
   attr :id, :integer, required: true
   attr :line, :integer, required: true
+
+  attr :log_no, :integer,
+    default: nil,
+    doc: "durable persisted log number (nil for non-persisted shards ⇒ falls back to line#)"
+
   attr :agent, :string, required: true
   attr :color, :string, required: true
   attr :category, :atom, required: true, values: @categories
@@ -434,7 +445,11 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   attr :time, :string, default: ""
   attr :expanded?, :boolean, default: false
 
-  @doc "One center event-stream row: line# | category badge | agent (colored) | content | meta; expandable."
+  attr :selected?, :boolean,
+    default: false,
+    doc: "reusable multi-select state (action-agnostic — EXPLAIN/HIDE/COPY act on the selection)"
+
+  @doc "One center event-stream row: select | log# | category badge | agent (colored) | content | meta; expandable."
   @spec event_row(map()) :: Phoenix.LiveView.Rendered.t()
   def event_row(assigns) do
     ~H"""
@@ -443,9 +458,25 @@ defmodule RepoBuilderWeb.ConsoleComponents do
       phx-click="toggle_event"
       phx-value-id={@id}
       style={"--agent-color: #{@color}"}
-      class={["cns-event-row", @thinking? && "cns-event-row--thinking"]}
+      class={[
+        "cns-event-row",
+        @thinking? && "cns-event-row--thinking",
+        @selected? && "cns-event-row--selected"
+      ]}
     >
-      <span class="cns-event-row__ln">{@line}</span>
+      <%!-- Reusable selection toggle: its own phx-click means LiveView fires
+      `toggle_select` for the closest element and NOT the row's `toggle_event`. --%>
+      <input
+        type="checkbox"
+        class="cns-event-row__select"
+        checked={@selected?}
+        phx-click="toggle_select"
+        phx-value-id={@id}
+        aria-label={"Select log row #{@id}"}
+      />
+      <span class="cns-event-row__ln" title="durable log number">
+        {if @log_no, do: "log-#{@log_no}", else: @line}
+      </span>
       <span class={["cns-cat", "cns-cat--#{@category}"]}>{category_label(@category)}</span>
       <span class="cns-event-row__agent">{@agent}</span>
       <span class="cns-event-row__body">
@@ -458,6 +489,72 @@ defmodule RepoBuilderWeb.ConsoleComponents do
       <span class="cns-event-row__meta">
         <span :if={@tokens}>{@tokens} · </span>{@time}
       </span>
+    </div>
+    """
+  end
+
+  # --- selection action bar -------------------------------------------------
+
+  attr :selected_count, :integer, default: 0
+  attr :copy_payload, :string, default: "", doc: "selected rows' raw bodies joined by newlines"
+
+  @doc """
+  Bulk-action bar over the reusable event-stream selection (issue-explain).
+
+  Renders only when ≥1 row is selected. EXPLAIN is wired end-to-end; HIDE and COPY
+  are sibling actions over the SAME `selected_ids` set — each "one button + one
+  handler", with no Explain-specific coupling, so a new bulk action slots in here
+  without reworking the selection primitive.
+  """
+  @spec selection_bar(map()) :: Phoenix.LiveView.Rendered.t()
+  def selection_bar(assigns) do
+    ~H"""
+    <div
+      :if={@selected_count > 0}
+      id="selection-bar"
+      class="flex flex-wrap items-center gap-2 border-b px-3 py-2"
+      style="border-color: var(--cns-border); background: var(--cns-bg-2, rgba(255,255,255,0.02))"
+    >
+      <span class="text-xs font-semibold" style="color: var(--cns-cyan)">
+        {@selected_count} selected
+      </span>
+      <button
+        id="explain-selected"
+        type="button"
+        phx-click={JS.push("explain_selected") |> show_explain()}
+        class="cns-chip cns-chip--active cns-chip--hook"
+        title="Explain the selected log line(s) with the Fast agent"
+      >
+        EXPLAIN ✦ ({@selected_count})
+      </button>
+      <button
+        id="hide-selected"
+        type="button"
+        phx-click="hide_selected"
+        class="cns-chip"
+        title="Hide the selected rows from the view (does not delete persisted history)"
+      >
+        HIDE
+      </button>
+      <button
+        id="copy-selected"
+        type="button"
+        phx-hook="ClipboardCopy"
+        data-copy={@copy_payload}
+        class="cns-chip"
+        title="Copy the selected rows' raw bodies to the clipboard"
+      >
+        COPY
+      </button>
+      <button
+        id="clear-selection"
+        type="button"
+        phx-click="clear_selection"
+        class="cns-chip ml-auto"
+        title="Clear the current selection"
+      >
+        Clear selection
+      </button>
     </div>
     """
   end
@@ -648,6 +745,62 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     """
   end
 
+  # --- orchestrator message queue strip -------------------------------------
+
+  attr :busy?, :boolean, default: false, doc: "a turn is currently in flight"
+  attr :depth, :integer, default: 0, doc: "number of queued operator/auto-resume turns"
+
+  attr :queued, :list,
+    default: [],
+    doc: "pending items: %{id, preview, kind} maps, in FIFO order"
+
+  @doc """
+  The pending-message strip (issue message-queue): a busy/queued badge plus one chip
+  per queued turn with a cancel button. Hidden entirely when the orchestrator is idle
+  with an empty queue, so it never takes vertical space in the common case.
+  """
+  @spec queued_messages(map()) :: Phoenix.LiveView.Rendered.t()
+  def queued_messages(assigns) do
+    ~H"""
+    <div
+      :if={@busy? or @depth > 0}
+      id="orchestrator-queue"
+      class="flex flex-wrap items-center gap-1.5 border-t px-3 py-1.5"
+      style="border-color: var(--cns-border)"
+    >
+      <span
+        id="queue-badge"
+        class="text-[0.625rem] font-semibold uppercase"
+        style="color: var(--cns-text-2)"
+      >
+        {if @busy?, do: "Busy", else: "Idle"} · {@depth} queued
+      </span>
+      <span
+        :for={item <- @queued}
+        id={"queued-#{item.id}"}
+        class="cns-chip flex items-center gap-1"
+        title={item.preview}
+      >
+        <span :if={item.kind == :auto_resume} class="text-[0.625rem]" style="color: var(--cns-text-3)">
+          auto
+        </span>
+        <span class="max-w-[14rem] truncate">{item.preview}</span>
+        <button
+          type="button"
+          id={"cancel-queued-#{item.id}"}
+          phx-click="cancel_queued"
+          phx-value-id={item.id}
+          class="font-bold"
+          title="Cancel"
+          aria-label="Cancel queued message"
+        >
+          ×
+        </button>
+      </span>
+    </div>
+    """
+  end
+
   # --- global command input modal -------------------------------------------
 
   @doc """
@@ -666,6 +819,102 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   @spec hide_command(JS.t()) :: JS.t()
   def hide_command(js \\ %JS{}), do: JS.hide(js, to: "#command-input")
 
+  attr :open?, :boolean, default: false
+  attr :path, :string, default: ""
+  attr :parent, :any, default: nil, doc: "parent dir path, or nil at the filesystem root"
+  attr :dirs, :list, default: [], doc: "child directory names of @path"
+
+  @doc """
+  Dialog modal directory picker for the working directory. Server-driven (the listing
+  is loaded over `open_dir_picker`/`dir_picker_browse`); rendered on top of the command
+  modal. Picking commits the browsed path as the orchestrator cwd.
+  """
+  @spec dir_picker_modal(map()) :: Phoenix.LiveView.Rendered.t()
+  def dir_picker_modal(assigns) do
+    ~H"""
+    <div
+      :if={@open?}
+      id="dir-picker"
+      class="cns-cmd-overlay"
+      style="display:flex; z-index: 60"
+      phx-window-keydown="close_dir_picker"
+      phx-key="Escape"
+    >
+      <div class="cns-cmd-panel">
+        <div class="mb-2 flex items-center justify-between">
+          <span class="text-xs font-semibold" style="color: var(--cns-cyan)">
+            SELECT WORKING DIRECTORY
+          </span>
+          <button type="button" id="dir-picker-close" phx-click="close_dir_picker" class="cns-chip">
+            Esc
+          </button>
+        </div>
+
+        <div
+          id="dir-picker-path"
+          class="mb-2 truncate rounded border p-2 font-mono text-xs"
+          style="border-color: var(--cns-border); color: var(--cns-text-1)"
+          title={@path}
+        >
+          {@path}
+        </div>
+
+        <div
+          class="max-h-64 overflow-y-auto rounded border"
+          style="border-color: var(--cns-border)"
+        >
+          <button
+            :if={@parent}
+            type="button"
+            id="dir-picker-up"
+            phx-click="dir_picker_browse"
+            phx-value-path={@parent}
+            class="flex w-full items-center gap-2 px-3 py-1.5 text-left font-mono text-xs hover:bg-white/5"
+          >
+            <span>⬆️</span> ..
+          </button>
+          <button
+            :for={dir <- @dirs}
+            type="button"
+            phx-click="dir_picker_browse"
+            phx-value-path={Path.join(@path, dir)}
+            class="flex w-full items-center gap-2 px-3 py-1.5 text-left font-mono text-xs hover:bg-white/5"
+            style="color: var(--cns-text-1)"
+          >
+            <span>📁</span> {dir}
+          </button>
+          <p
+            :if={@dirs == [] and is_nil(@parent)}
+            class="px-3 py-2 text-xs"
+            style="color: var(--cns-text-3)"
+          >
+            No subdirectories.
+          </p>
+          <p
+            :if={@dirs == [] and not is_nil(@parent)}
+            class="px-3 py-2 text-xs"
+            style="color: var(--cns-text-3)"
+          >
+            No subdirectories here.
+          </p>
+        </div>
+
+        <div class="mt-3 flex items-center justify-end gap-2">
+          <button type="button" phx-click="close_dir_picker" class="cns-chip">Cancel</button>
+          <button
+            type="button"
+            id="dir-picker-select"
+            phx-click="dir_picker_select"
+            class="cns-chip cns-chip--active cns-chip--hook"
+          >
+            Use this directory
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
   # --- agent-models modal ---------------------------------------------------
 
   @doc "Open the agent-models modal (client-side; always in the DOM, just hidden)."
@@ -675,6 +924,14 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   @doc "Close the agent-models modal (client-side)."
   @spec hide_agent_models(JS.t()) :: JS.t()
   def hide_agent_models(js \\ %JS{}), do: JS.hide(js, to: "#agent-models-modal")
+
+  @doc "Open the ephemeral explain-logs modal (client-side; always in the DOM, just hidden)."
+  @spec show_explain(JS.t()) :: JS.t()
+  def show_explain(js \\ %JS{}), do: JS.show(js, to: "#explain-modal", display: "flex")
+
+  @doc "Close the explain-logs modal (client-side)."
+  @spec hide_explain(JS.t()) :: JS.t()
+  def hide_explain(js \\ %JS{}), do: JS.hide(js, to: "#explain-modal")
 
   @doc "Open the settings modal (client-side; always in the DOM, just hidden)."
   @spec show_settings(JS.t()) :: JS.t()
@@ -686,12 +943,14 @@ defmodule RepoBuilderWeb.ConsoleComponents do
 
   attr :settings_tab, :atom,
     default: :general,
-    values: [:general, :appearance, :about, :prompt, :templates]
+    values: [:general, :appearance, :about, :prompt, :templates, :cost_center]
 
   attr :view_mode, :atom, default: :logs
   attr :chat_width, :atom, default: :sm
   attr :auto_follow?, :boolean, default: true
   attr :show_thinking?, :boolean, default: true
+  attr :show_hidden?, :boolean, default: false
+  attr :release_notice, :any, default: nil
   attr :harnesses, :list, default: []
   attr :system_prompt, :string, default: ""
   attr :system_prompt_mode, :atom, default: :append, values: [:append, :replace]
@@ -702,9 +961,16 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     values: [:default, :off, :low, :medium, :high, :max]
 
   attr :reasoning_efforts, :list, default: []
+  attr :timezone, :string, default: "UTC"
+  attr :timezones, :list, default: []
   attr :template_rows, :list, default: []
   attr :selected_template, :any, default: nil
   attr :template_versions, :list, default: []
+  attr :cost_rollups, :list, default: []
+  attr :period_spend, :any, default: nil
+  attr :price_rows, :list, default: []
+  attr :price_form, :any, default: nil
+  attr :editing_price_id, :any, default: nil
 
   @doc """
   Settings modal with a vertical tab rail (General / Appearance / About). Shown and
@@ -737,6 +1003,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
             <.settings_tab_button tab={:appearance} active={@settings_tab} label="Appearance" />
             <.settings_tab_button tab={:prompt} active={@settings_tab} label="System Prompt" />
             <.settings_tab_button tab={:templates} active={@settings_tab} label="Agent Templates" />
+            <.settings_tab_button tab={:cost_center} active={@settings_tab} label="Cost Center" />
             <.settings_tab_button tab={:about} active={@settings_tab} label="About" />
           </nav>
 
@@ -775,6 +1042,42 @@ defmodule RepoBuilderWeb.ConsoleComponents do
                 </button>
               </.settings_field>
 
+              <.settings_field label="Release hidden logs & workflows">
+                <div class="flex items-center gap-2">
+                  <button
+                    id="settings-release-hidden"
+                    type="button"
+                    phx-click="release_hidden"
+                    class="cns-chip"
+                  >
+                    Release
+                  </button>
+                  <span
+                    :if={@release_notice != nil}
+                    id="settings-release-notice"
+                    class="text-[0.625rem]"
+                    style="color: var(--cns-text-2)"
+                  >
+                    Released {@release_notice} {if @release_notice == 1, do: "row", else: "rows"}
+                  </span>
+                </div>
+                <div class="text-[0.625rem]" style="color: var(--cns-text-2)">
+                  Permanently un-hides everything cleared by the CLEAR actions (the inverse of CLEAR);
+                  released rows stay visible across reconnects.
+                </div>
+              </.settings_field>
+
+              <.settings_field label="Temporarily show cleared rows (peek)">
+                <button
+                  id="settings-show-hidden"
+                  type="button"
+                  phx-click="toggle_show_hidden"
+                  class={["cns-chip", @show_hidden? && "cns-chip--active cns-chip--hook"]}
+                >
+                  {if @show_hidden?, do: "ON", else: "OFF"}
+                </button>
+              </.settings_field>
+
               <.settings_field label="Reasoning effort">
                 <div id="settings-reasoning-effort" class="cns-toggle">
                   <button
@@ -791,6 +1094,20 @@ defmodule RepoBuilderWeb.ConsoleComponents do
                 <p class="mt-1 text-[0.625rem]" style="color: var(--cns-text-2)">
                   How hard the orchestrator's model reasons. DEFAULT keeps each harness's
                   own default (no flag); MAX maps to each harness's top level.
+                </p>
+              </.settings_field>
+
+              <.settings_field label="Timezone">
+                <form id="settings-timezone-form" phx-change="set_timezone" title="Display timezone">
+                  <select id="settings-timezone" name="timezone" class="cns-chip" style="width: 12rem">
+                    <option :for={tz <- @timezones} value={tz} selected={@timezone == tz}>
+                      {tz}
+                    </option>
+                  </select>
+                </form>
+                <p class="mt-1 text-[0.625rem]" style="color: var(--cns-text-2)">
+                  Log timestamps render in this timezone (YYYY-MM-DD HH:MM:SS). The
+                  setting persists across sessions.
                 </p>
               </.settings_field>
             </div>
@@ -1038,6 +1355,16 @@ defmodule RepoBuilderWeb.ConsoleComponents do
               </div>
             </div>
 
+            <div :if={@settings_tab == :cost_center} class="flex flex-col gap-4">
+              <.spend_summary_table :if={@period_spend} summary={@period_spend} />
+              <.cost_rollup_table rollups={@cost_rollups} />
+              <.price_catalog_table
+                rows={@price_rows}
+                form={@price_form}
+                editing_price_id={@editing_price_id}
+              />
+            </div>
+
             <div :if={@settings_tab == :about} class="flex flex-col gap-2 text-xs">
               <div
                 class="text-[0.625rem] font-semibold uppercase"
@@ -1094,6 +1421,339 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     </div>
     """
   end
+
+  attr :summary, :any, required: true
+
+  @doc """
+  Time-windowed spend summary (issue-cost-adw-periods): Today / This week / This month,
+  each broken down by harness and by provider. This is the **accounting** view — it counts
+  all activity regardless of visibility (cleared/hidden logs included), so it stays put when
+  CLEAR is pressed. Estimates are marked `est.` exactly as in the all-time rollup.
+  """
+  @spec spend_summary_table(map()) :: Phoenix.LiveView.Rendered.t()
+  def spend_summary_table(assigns) do
+    ~H"""
+    <div class="flex flex-col gap-3">
+      <div class="text-[0.625rem] font-semibold uppercase" style="color: var(--cns-text-2)">
+        Spend by period
+      </div>
+      <p class="text-[0.625rem]" style="color: var(--cns-text-2)">
+        All activity in {@summary.timezone} — includes cleared logs (accounting view, not the
+        console buffer).
+      </p>
+      <.spend_period id="spend-today" label="Today" tz={@summary.timezone} period={@summary.today} />
+      <.spend_period
+        id="spend-week"
+        label="This week"
+        tz={@summary.timezone}
+        period={@summary.week}
+      />
+      <.spend_period
+        id="spend-month"
+        label="This month"
+        tz={@summary.timezone}
+        period={@summary.month}
+      />
+    </div>
+    """
+  end
+
+  attr :id, :string, required: true
+  attr :label, :string, required: true
+  attr :tz, :string, required: true
+  attr :period, :any, required: true
+
+  # One period block: a heading with its local start boundary, plus the by-harness and
+  # by-provider sub-tables.
+  @spec spend_period(map()) :: Phoenix.LiveView.Rendered.t()
+  defp spend_period(assigns) do
+    ~H"""
+    <div id={@id} class="flex flex-col gap-2">
+      <div class="text-[0.6875rem] font-semibold">
+        {@label}
+        <span class="font-normal" style="color: var(--cns-text-2)">
+          · since {RepoBuilder.Timezones.format_datetime(@period.since, @tz)}
+        </span>
+      </div>
+      <.spend_breakdown id={"#{@id}-harness"} title="By harness" rows={@period.by_harness} />
+      <.spend_breakdown id={"#{@id}-provider"} title="By provider" rows={@period.by_provider} />
+    </div>
+    """
+  end
+
+  attr :id, :string, required: true
+  attr :title, :string, required: true
+  attr :rows, :list, required: true
+
+  # One dimension breakdown table (harness or provider) for a single period.
+  @spec spend_breakdown(map()) :: Phoenix.LiveView.Rendered.t()
+  defp spend_breakdown(assigns) do
+    ~H"""
+    <div class="flex flex-col gap-1">
+      <div class="text-[0.625rem] uppercase" style="color: var(--cns-text-2)">{@title}</div>
+      <div :if={@rows == []} class="text-[0.625rem]" style="color: var(--cns-text-2)">
+        No spend.
+      </div>
+      <table :if={@rows != []} id={@id} class="w-full text-[0.6875rem]">
+        <thead>
+          <tr style="color: var(--cns-text-2)">
+            <th class="py-1 pr-2 text-left font-medium">Name</th>
+            <th class="py-1 pr-2 text-right font-medium">Cost</th>
+            <th class="py-1 pr-2 text-right font-medium">In</th>
+            <th class="py-1 pr-2 text-right font-medium">Out</th>
+            <th class="py-1 pr-2 text-right font-medium">Events</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr :for={r <- @rows} style="border-top: 1px solid var(--cns-border)">
+            <td class="py-1 pr-2">{cost_dim(r.key)}</td>
+            <td class="py-1 pr-2 text-right"><.spend_cost row={r} /></td>
+            <td class="py-1 pr-2 text-right">{r.input_tokens}</td>
+            <td class="py-1 pr-2 text-right">{r.output_tokens}</td>
+            <td class="py-1 pr-2 text-right">{r.event_count}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    """
+  end
+
+  attr :row, :any, required: true
+
+  # Cost cell for a spend row: the billed amount (hidden when a bucket is purely an
+  # estimate) plus an `est.`-marked catalog estimate when any unpriced portion exists.
+  @spec spend_cost(map()) :: Phoenix.LiveView.Rendered.t()
+  defp spend_cost(assigns) do
+    ~H"""
+    <span>
+      <.cost_badge :if={spend_show_actual?(@row)} cost={@row.actual_cost_usd} />
+      <span
+        :if={@row.estimated_cost_usd}
+        class="cns-chip"
+        title="estimated from the price catalog"
+      >
+        {cost_str(@row.estimated_cost_usd)} <span style="color: var(--cns-text-2)">est.</span>
+      </span>
+    </span>
+    """
+  end
+
+  attr :rollups, :list, required: true
+
+  @doc """
+  Recent-spend rollup grouped by `(harness, provider, model)`, most-recent first.
+  Unpriced dimensions that the catalog can price show an `est.`-labelled estimate
+  rather than a billed amount (issue-cost-center).
+  """
+  @spec cost_rollup_table(map()) :: Phoenix.LiveView.Rendered.t()
+  def cost_rollup_table(assigns) do
+    ~H"""
+    <div class="flex flex-col gap-1">
+      <div class="text-[0.625rem] font-semibold uppercase" style="color: var(--cns-text-2)">
+        Recent spend
+      </div>
+      <div
+        :if={@rollups == []}
+        class="text-[0.625rem]"
+        style="color: var(--cns-text-2)"
+      >
+        No cost recorded yet.
+      </div>
+      <table :if={@rollups != []} id="cost-rollup-table" class="w-full text-[0.6875rem]">
+        <thead>
+          <tr style="color: var(--cns-text-2)">
+            <th class="py-1 pr-2 text-left font-medium">Harness</th>
+            <th class="py-1 pr-2 text-left font-medium">Provider</th>
+            <th class="py-1 pr-2 text-left font-medium">Model</th>
+            <th class="py-1 pr-2 text-right font-medium">Cost</th>
+            <th class="py-1 pr-2 text-right font-medium">In</th>
+            <th class="py-1 pr-2 text-right font-medium">Out</th>
+            <th class="py-1 pr-2 text-right font-medium">Events</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            :for={r <- @rollups}
+            id={cost_rollup_row_id(r)}
+            style="border-top: 1px solid var(--cns-border)"
+          >
+            <td class="py-1 pr-2">{r.harness}</td>
+            <td class="py-1 pr-2">{cost_dim(r.provider)}</td>
+            <td class="py-1 pr-2">{cost_dim(r.model)}</td>
+            <td class="py-1 pr-2 text-right">
+              <span :if={r.estimated?} class="cns-chip" title="estimated from the price catalog">
+                {cost_str(r.estimated_cost_usd)} <span style="color: var(--cns-text-2)">est.</span>
+              </span>
+              <.cost_badge :if={not r.estimated?} cost={r.actual_cost_usd} />
+            </td>
+            <td class="py-1 pr-2 text-right">{r.input_tokens}</td>
+            <td class="py-1 pr-2 text-right">{r.output_tokens}</td>
+            <td class="py-1 pr-2 text-right">{r.event_count}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    """
+  end
+
+  attr :rows, :list, required: true
+  attr :form, :any, required: true
+  attr :editing_price_id, :any, default: nil
+
+  @doc """
+  Editable price catalog (issue-cost-center): a create/edit form plus the current rows
+  with per-row Edit + (confirmed) Delete. When `:editing_price_id` is set the form is in
+  edit mode — its identity key inputs are locked (readonly) so an edit can never repoint
+  the `(harness, provider, model)` key. Operator edits persist to `model_prices` and
+  override config rates.
+  """
+  @spec price_catalog_table(map()) :: Phoenix.LiveView.Rendered.t()
+  def price_catalog_table(assigns) do
+    ~H"""
+    <div class="flex flex-col gap-2">
+      <div class="text-[0.625rem] font-semibold uppercase" style="color: var(--cns-text-2)">
+        Price catalog (USD / Mtok)
+      </div>
+
+      <.form
+        :if={@form}
+        id="price-form"
+        for={@form}
+        phx-submit="save_price"
+        class="flex flex-wrap items-end gap-2"
+      >
+        <div
+          class="w-full text-[0.625rem] font-semibold uppercase"
+          style="color: var(--cns-text-2)"
+        >
+          <span :if={@editing_price_id}>Editing {@form[:harness].value}/{@form[:model].value}</span>
+          <span :if={!@editing_price_id}>New price</span>
+        </div>
+        <.input :if={@editing_price_id} field={@form[:id]} type="hidden" />
+        <.input
+          field={@form[:harness]}
+          label="Harness"
+          class="cns-input w-24"
+          readonly={@editing_price_id != nil}
+        />
+        <.input
+          field={@form[:provider]}
+          label="Provider"
+          class="cns-input w-24"
+          readonly={@editing_price_id != nil}
+        />
+        <.input
+          field={@form[:model]}
+          label="Model"
+          class="cns-input w-40"
+          readonly={@editing_price_id != nil}
+        />
+        <.input
+          field={@form[:input_price_per_mtok]}
+          label="Input"
+          type="number"
+          step="any"
+          class="cns-input w-20"
+        />
+        <.input
+          field={@form[:output_price_per_mtok]}
+          label="Output"
+          type="number"
+          step="any"
+          class="cns-input w-20"
+        />
+        <button id="price-form-submit" type="submit" class="cns-chip">Save</button>
+        <button
+          :if={@editing_price_id}
+          id="price-cancel"
+          type="button"
+          phx-click="cancel_edit"
+          class="cns-chip"
+        >
+          Cancel
+        </button>
+      </.form>
+
+      <table id="price-catalog-table" class="w-full text-[0.6875rem]">
+        <thead>
+          <tr style="color: var(--cns-text-2)">
+            <th class="py-1 pr-2 text-left font-medium">Harness</th>
+            <th class="py-1 pr-2 text-left font-medium">Provider</th>
+            <th class="py-1 pr-2 text-left font-medium">Model</th>
+            <th class="py-1 pr-2 text-right font-medium">In</th>
+            <th class="py-1 pr-2 text-right font-medium">Out</th>
+            <th class="py-1 pr-2 text-right font-medium">Source</th>
+            <th class="py-1"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            :for={p <- @rows}
+            id={"price-row-#{p.id}"}
+            style="border-top: 1px solid var(--cns-border)"
+          >
+            <td class="py-1 pr-2">{p.harness}</td>
+            <td class="py-1 pr-2">{cost_dim(p.provider)}</td>
+            <td class="py-1 pr-2">{p.model}</td>
+            <td class="py-1 pr-2 text-right">{price_str(p.input_price_per_mtok)}</td>
+            <td class="py-1 pr-2 text-right">{price_str(p.output_price_per_mtok)}</td>
+            <td class="py-1 pr-2 text-right">{p.source}</td>
+            <td class="py-1 text-right">
+              <button
+                type="button"
+                id={"price-edit-#{p.id}"}
+                phx-click="edit_price"
+                phx-value-id={p.id}
+                class="cns-chip"
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                id={"price-delete-#{p.id}"}
+                phx-click="delete_price"
+                phx-value-id={p.id}
+                data-confirm="Delete this price? Manual rates are not restored by re-seed."
+                class="cns-chip"
+              >
+                ✕
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    """
+  end
+
+  # Stable DOM id for a rollup row (the dimension key; nil model/provider → "_").
+  @spec cost_rollup_row_id(RepoBuilder.CostCenter.Rollup.t()) :: String.t()
+  defp cost_rollup_row_id(rollup) do
+    "cost-rollup-#{rollup.harness}-#{rollup.provider}-#{rollup.model || "_"}"
+  end
+
+  # A grouping dimension cell: blank provider/model → a muted "—".
+  @spec cost_dim(String.t() | nil) :: String.t()
+  defp cost_dim(value) when value in [nil, ""], do: "—"
+  defp cost_dim(value) when is_binary(value), do: value
+
+  @spec cost_str(Decimal.t() | nil) :: String.t()
+  defp cost_str(%Decimal{} = cost), do: "$" <> Decimal.to_string(Decimal.round(cost, 2))
+  defp cost_str(nil), do: "—"
+
+  # Show the billed badge when there is a real billed amount, or when nothing was
+  # estimated (so a genuine `$0.00` still renders). A purely-estimated bucket (zero billed
+  # + an estimate present) hides the `$0.00` badge and shows only the `est.` chip — mirrors
+  # the all-time rollup's actual-vs-estimate display.
+  @spec spend_show_actual?(RepoBuilder.CostCenter.SpendRow.t()) :: boolean()
+  defp spend_show_actual?(%{estimated_cost_usd: nil}), do: true
+
+  defp spend_show_actual?(%{actual_cost_usd: %Decimal{} = actual}),
+    do: Decimal.compare(actual, 0) == :gt
+
+  @spec price_str(Decimal.t() | nil) :: String.t()
+  defp price_str(%Decimal{} = price), do: Decimal.to_string(price)
+  defp price_str(nil), do: "—"
 
   # Read a string-coerced field off the selected `Template` struct for a form value,
   # tolerating `nil` (the "+ New" blank-form state) and nil optional fields.
@@ -1210,6 +1870,91 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     """
   end
 
+  attr :status, :any,
+    default: :idle,
+    doc: ":idle | :running | {:ready, text} | {:error, msg}"
+
+  attr :count, :integer, default: 0, doc: "number of selected rows being explained"
+
+  @doc """
+  Transient modal for the ephemeral "explain logs" result (issue-explain).
+
+  Always mounted (shown/hidden client-side), `id=\"explain-modal\"`. Renders by
+  `@status`: a spinner while running, the paragraph (with a Copy button) when ready,
+  or an actionable error. Closing discards everything — nothing here is persisted.
+  """
+  @spec explain_modal(map()) :: Phoenix.LiveView.Rendered.t()
+  def explain_modal(assigns) do
+    ~H"""
+    <div
+      id="explain-modal"
+      class="cns-cmd-overlay"
+      style="display:none"
+      phx-window-keydown={JS.push("close_explain") |> hide_explain()}
+      phx-key="Escape"
+    >
+      <div class="cns-cmd-panel" style="max-width: 48rem">
+        <div class="mb-3 flex items-center justify-between">
+          <span class="text-xs font-semibold" style="color: var(--cns-cyan)">
+            EXPLAIN ✦ — Fast-agent log explanation
+          </span>
+          <button
+            type="button"
+            phx-click={JS.push("close_explain") |> hide_explain()}
+            class="cns-chip"
+          >
+            Close
+          </button>
+        </div>
+
+        <div :if={@status == :running} class="flex items-center gap-2 py-6">
+          <span class="cns-spinner" aria-hidden="true">⟳</span>
+          <span class="text-sm" style="color: var(--cns-text-2)">
+            Explaining {@count} event(s)…
+          </span>
+        </div>
+
+        <%= case @status do %>
+          <% {:ready, text} -> %>
+            <pre
+              class="whitespace-pre-wrap break-words text-sm leading-relaxed"
+              style="color: var(--cns-text-1)"
+              phx-no-curly-interpolation
+            ><%= text %></pre>
+            <div class="mt-3 flex items-center gap-2">
+              <button
+                type="button"
+                id="explain-copy"
+                phx-hook="ClipboardCopy"
+                data-copy={text}
+                class="cns-chip cns-chip--active cns-chip--hook"
+              >
+                Copy
+              </button>
+              <button
+                type="button"
+                phx-click={JS.push("close_explain") |> hide_explain()}
+                class="cns-chip"
+              >
+                Close
+              </button>
+            </div>
+          <% {:error, msg} -> %>
+            <p class="py-4 text-sm" style="color: var(--cns-red, #f87171)">{msg}</p>
+            <button
+              type="button"
+              phx-click={JS.push("close_explain") |> hide_explain()}
+              class="cns-chip"
+            >
+              Close
+            </button>
+          <% _ -> %>
+        <% end %>
+      </div>
+    </div>
+    """
+  end
+
   @spec format_relative_time(String.t()) :: String.t()
   defp format_relative_time(iso8601) do
     case DateTime.from_iso8601(iso8601) do
@@ -1231,6 +1976,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   attr :harnesses, :list, default: []
   attr :agents, :list, default: [], doc: "list of agent names"
   attr :example_adw, :string, default: "plan → build → review"
+  attr :working_dir, :string, default: ""
   attr :uploads, :map, required: true
   attr :adw_builder?, :boolean, default: false
   attr :adw_steps, :list, default: []
@@ -1280,6 +2026,29 @@ defmodule RepoBuilderWeb.ConsoleComponents do
 
         <%!-- COMMAND MODE --%>
         <div :if={not @adw_builder?}>
+          <div class="mb-2 flex items-center gap-2 text-[0.625rem]" style="color: var(--cns-text-2)">
+            <span class="font-semibold">CWD</span>
+            <button
+              type="button"
+              id="cmd-working-dir"
+              phx-click="open_dir_picker"
+              class="cns-cmd-chip min-w-0 max-w-full truncate font-mono"
+              title="Choose the working directory the orchestrator and its workers run in"
+            >
+              📁 {if @working_dir in [nil, ""], do: "isolated workspace", else: @working_dir}
+            </button>
+            <button
+              :if={@working_dir not in [nil, ""]}
+              type="button"
+              id="cmd-working-dir-clear"
+              phx-click="clear_working_dir"
+              class="cns-cmd-chip"
+              title="Clear — each agent gets its own isolated scratch workspace"
+            >
+              ✕
+            </button>
+          </div>
+
           <form
             id="command-form"
             phx-change="validate_attachments"

@@ -11,7 +11,7 @@ defmodule RepoBuilder.DashboardTest do
       event = %Event.TextDelta{harness: :fake, text: "hello-console"}
       :ok = Dashboard.broadcast_event("agent-123", event)
 
-      assert_receive {:agent_event, "agent-123", %Event.TextDelta{text: "hello-console"}}
+      assert_receive {:agent_event, "agent-123", %Event.TextDelta{text: "hello-console"}, _seq_no}
     end
 
     test "the lanes topic and the events topic are independent" do
@@ -27,7 +27,7 @@ defmodule RepoBuilder.DashboardTest do
           harness: "fake"
         })
 
-      refute_receive {:agent_event, _id, _event}, 100
+      refute_receive {:agent_event, _id, _event, _seq_no}, 100
     end
   end
 end

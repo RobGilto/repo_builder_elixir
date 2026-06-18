@@ -68,16 +68,20 @@ defmodule RepoBuilder.Dashboard do
 
   @doc """
   Broadcast one canonical event onto the global console feed, tagged with the
-  emitting agent id. Subscribers receive `{:agent_event, agent_id, event}`.
-  Additive seam (§9): does not replace the per-agent broadcast.
+  emitting agent id and the persisted row's durable `seq_no` (the `log-<n>` number).
+  Subscribers receive `{:agent_event, agent_id, event, seq_no}`. Non-persisted events
+  (partial `text_delta` token shards) pass `seq_no = nil` (rendered "—" in the drilldown).
+  Additive seam (§9): does not replace the per-agent broadcast. This topic
+  (`console:events`) has a single subscriber (ConsoleLive); the per-agent
+  `agent:<id>:events` topic is untouched.
   """
-  @spec broadcast_event(String.t(), Event.t()) :: :ok
-  def broadcast_event(agent_id, event) do
+  @spec broadcast_event(String.t(), Event.t(), integer() | nil) :: :ok
+  def broadcast_event(agent_id, event, seq_no \\ nil) do
     _ =
       Phoenix.PubSub.broadcast(
         RepoBuilder.PubSub,
         @events_topic,
-        {:agent_event, agent_id, event}
+        {:agent_event, agent_id, event, seq_no}
       )
 
     :ok
@@ -117,6 +121,68 @@ defmodule RepoBuilder.Dashboard do
         RepoBuilder.PubSub,
         @events_topic,
         {:orchestrator_updated, orchestrator}
+      )
+
+    :ok
+  end
+
+  @doc "Topic for one orchestrator's FIFO turn-queue snapshots (issue message-queue)."
+  @spec orchestrator_queue_topic(Ecto.UUID.t()) :: String.t()
+  def orchestrator_queue_topic(orchestrator_id), do: "orchestrator:#{orchestrator_id}:queue"
+
+  @doc "Subscribe the calling process to an orchestrator's queue-snapshot topic."
+  @spec subscribe_orchestrator_queue(Ecto.UUID.t()) :: :ok
+  def subscribe_orchestrator_queue(orchestrator_id) do
+    _ = Phoenix.PubSub.subscribe(RepoBuilder.PubSub, orchestrator_queue_topic(orchestrator_id))
+    :ok
+  end
+
+  @doc """
+  Broadcast the latest queue snapshot for `orchestrator_id` so a connected console
+  re-renders the queued-messages strip and busy/queued badge. Subscribers receive
+  `{:orchestrator_queue, orchestrator_id, snapshot}`. Additive seam (issue
+  message-queue) — NOT a canonical `Event` variant.
+  """
+  @spec broadcast_orchestrator_queue(Ecto.UUID.t(), map()) :: :ok
+  def broadcast_orchestrator_queue(orchestrator_id, snapshot) do
+    _ =
+      Phoenix.PubSub.broadcast(
+        RepoBuilder.PubSub,
+        orchestrator_queue_topic(orchestrator_id),
+        {:orchestrator_queue, orchestrator_id, snapshot}
+      )
+
+    :ok
+  end
+
+  @doc "Topic for an orchestrator's worker-terminal signals (holding pattern)."
+  @spec orchestrator_workers_topic(Ecto.UUID.t()) :: String.t()
+  def orchestrator_workers_topic(orchestrator_id), do: "orchestrator:#{orchestrator_id}:workers"
+
+  @doc "Subscribe the calling process to an orchestrator's worker-terminal topic."
+  @spec subscribe_orchestrator_workers(Ecto.UUID.t()) :: :ok
+  def subscribe_orchestrator_workers(orchestrator_id) do
+    _ = Phoenix.PubSub.subscribe(RepoBuilder.PubSub, orchestrator_workers_topic(orchestrator_id))
+    :ok
+  end
+
+  @doc """
+  Broadcast that a worker owned by `orchestrator_id` reached a terminal state, so
+  the orchestrator's `Queue` can engage its holding pattern (auto-resume on worker
+  return). Subscribers receive `{:worker_terminal, info}` where `info` is
+  `%{worker_id, name, ok?}`. Additive seam (issue message-queue).
+  """
+  @spec broadcast_worker_terminal(Ecto.UUID.t(), %{
+          worker_id: Ecto.UUID.t(),
+          name: String.t(),
+          ok?: boolean()
+        }) :: :ok
+  def broadcast_worker_terminal(orchestrator_id, info) do
+    _ =
+      Phoenix.PubSub.broadcast(
+        RepoBuilder.PubSub,
+        orchestrator_workers_topic(orchestrator_id),
+        {:worker_terminal, info}
       )
 
     :ok
