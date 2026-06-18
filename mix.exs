@@ -4,7 +4,7 @@ defmodule RepoBuilder.MixProject do
   def project do
     [
       app: :repo_builder,
-      version: "0.1.0",
+      version: "1.0.0",
       elixir: "~> 1.20",
       elixirc_paths: elixirc_paths(Mix.env()),
       elixirc_options: [warnings_as_errors: true],
