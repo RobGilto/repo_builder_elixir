@@ -39,6 +39,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
     Agents,
     CostCenter,
     Dashboard,
+    Definitions,
     Explain,
     Logs,
     Orchestrators,
@@ -168,6 +169,13 @@ defmodule RepoBuilderWeb.ConsoleLive do
         cost: nil,
         connected?: connected?(socket),
         harness_options: HarnessRegistry.known(),
+        # File-driven prompt palette (issue-prompt-adw-palette): live, file-derived
+        # definition lists surfaced as clickable chips. Seeded on the connected mount
+        # from RepoBuilder.Definitions and updated live via PubSub broadcasts. Kept
+        # distinct from the live-worker `agents` assign (this is `agent_defs`).
+        slash_commands: [],
+        agent_defs: [],
+        adws: [],
         # ADW Builder mode
         adw_builder?: false,
         adw_steps: [],
@@ -196,6 +204,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
         |> assign_orchestrator()
         |> backfill_events()
         |> assign_template_rows()
+        |> seed_definitions()
         |> subscribe_feeds()
         |> tap(fn _ -> PiModels.refresh_async() end)
       else
@@ -324,7 +333,21 @@ defmodule RepoBuilderWeb.ConsoleLive do
     _ =
       if id = socket.assigns.orchestrator_id, do: Dashboard.subscribe_orchestrator_queue(id)
 
+    # File-driven prompt palette: receive {:definitions_changed, category, list}.
+    :ok = Definitions.subscribe()
+
     socket
+  end
+
+  # Seed the three file-derived palette assigns from the merged (app + working-dir)
+  # root for the orchestrator's current working dir. Re-run when the working dir
+  # changes so the overlay updates immediately.
+  @spec seed_definitions(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp seed_definitions(socket) do
+    %{slash_command: slash, agent: agents, adw: adws} =
+      Definitions.all(nilify_blank(socket.assigns.orchestrator_working_dir))
+
+    assign(socket, slash_commands: slash, agent_defs: agents, adws: adws)
   end
 
   @spec load_agents(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
@@ -1252,11 +1275,18 @@ defmodule RepoBuilderWeb.ConsoleLive do
   defp save_working_dir(socket, dir) do
     case validate_working_dir(dir) do
       {:ok, working_dir} ->
-        update_orchestrator(
-          socket,
-          &Orchestrators.set_working_dir(&1, working_dir),
-          "Could not save working directory"
-        )
+        {:noreply, socket} =
+          update_orchestrator(
+            socket,
+            &Orchestrators.set_working_dir(&1, working_dir),
+            "Could not save working directory"
+          )
+
+        # Re-resolve the merged definitions for the new working dir: refresh/1 updates
+        # the watcher's tracked dir + broadcasts to every console; the local re-seed
+        # makes this console's chips update without waiting on the round-trip.
+        :ok = Definitions.refresh(working_dir)
+        {:noreply, seed_definitions(socket)}
 
       {:error, message} ->
         {:noreply, put_flash(socket, :error, message)}
@@ -1606,6 +1636,21 @@ defmodule RepoBuilderWeb.ConsoleLive do
     else
       {:noreply, socket}
     end
+  end
+
+  # File-driven prompt palette: a watched definition file was added/edited/removed.
+  # Update only the single matching assign so an open console re-renders that chip
+  # row with no restart and no panel re-open.
+  def handle_info({:definitions_changed, :slash_command, list}, socket) do
+    {:noreply, assign(socket, :slash_commands, list)}
+  end
+
+  def handle_info({:definitions_changed, :agent, list}, socket) do
+    {:noreply, assign(socket, :agent_defs, list)}
+  end
+
+  def handle_info({:definitions_changed, :adw, list}, socket) do
+    {:noreply, assign(socket, :adws, list)}
   end
 
   def handle_info({:orchestrator_updated, orchestrator}, socket) do
@@ -2198,8 +2243,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
       </div>
 
       <.global_command_input
-        harnesses={@harness_options}
-        agents={Enum.map(@agents, & &1.name)}
+        slash_commands={@slash_commands}
+        agent_defs={@agent_defs}
+        adws={@adws}
         working_dir={@orchestrator_working_dir}
         uploads={@uploads}
         adw_builder?={@adw_builder?}

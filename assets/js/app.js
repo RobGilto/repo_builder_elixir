@@ -89,9 +89,34 @@ const CommandPaste = {
       uploadInput.dispatchEvent(new Event("change", { bubbles: true }))
     }
     this.el.addEventListener("paste", this._onPaste)
+
+    // File-driven prompt palette: a chip dispatches "rb:insert-token" at this
+    // textarea; append the token at the caret with space padding and refocus —
+    // no server round-trip. Folded into CommandPaste so the element keeps one hook.
+    this._onInsertToken = (e) => {
+      const token = e.detail?.token
+      if (!token) return
+
+      const el = this.el
+      const start = el.selectionStart ?? el.value.length
+      const end = el.selectionEnd ?? el.value.length
+      const before = el.value.slice(0, start)
+      const after = el.value.slice(end)
+      const lead = before.length > 0 && !/\s$/.test(before) ? " " : ""
+      const trail = after.length > 0 && !/^\s/.test(after) ? " " : ""
+      const insert = lead + token + trail
+
+      el.value = before + insert + after
+      const caret = before.length + insert.length
+      el.setSelectionRange(caret, caret)
+      el.dispatchEvent(new Event("input", { bubbles: true }))
+      el.focus()
+    }
+    this.el.addEventListener("rb:insert-token", this._onInsertToken)
   },
   destroyed() {
     this.el.removeEventListener("paste", this._onPaste)
+    this.el.removeEventListener("rb:insert-token", this._onInsertToken)
   }
 }
 

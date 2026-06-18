@@ -89,6 +89,10 @@ defmodule RepoBuilder.MixProject do
       {:jason, "~> 1.4"},
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
+      # Filesystem watcher for the file-driven prompt palette (issue-prompt-adw-palette).
+      # Promoted from transitive (phoenix_live_reload/credo, mix.lock 1.1.1) to a direct
+      # dep so RepoBuilder.Definitions can watch source dirs outside :dev.
+      {:file_system, "~> 1.1"},
 
       # --- Orchestration stack (BUILD_PROMPT.md §2) ---
       # OS-process driver for harness CLI children (§6).

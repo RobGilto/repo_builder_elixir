@@ -18,6 +18,11 @@ defmodule RepoBuilder.Application do
       RepoBuilder.Repo,
       {DNSCluster, query: Application.get_env(:repo_builder, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: RepoBuilder.PubSub},
+      # File-driven prompt palette (issue-prompt-adw-palette): scans slash commands /
+      # agents / ADWs from the merged (app + working-dir) root, watches them via
+      # FileSystem, and broadcasts changes over PubSub. After PubSub (it broadcasts),
+      # independent of Repo. The watcher/poll loop is disabled in test config.
+      RepoBuilder.Definitions,
       # Durable jobs / cron / webhook triggers (needs Repo).
       {Oban, Application.fetch_env!(:repo_builder, Oban)},
       # --- Live session runtime (BUILD_PROMPT.md §5), after PubSub / before Endpoint ---

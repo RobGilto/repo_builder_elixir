@@ -1973,9 +1973,9 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     end
   end
 
-  attr :harnesses, :list, default: []
-  attr :agents, :list, default: [], doc: "list of agent names"
-  attr :example_adw, :string, default: "plan → build → review"
+  attr :slash_commands, :list, default: [], doc: "file-derived %Definitions.SlashCommand{} list"
+  attr :agent_defs, :list, default: [], doc: "file-derived %Definitions.Agent{} list"
+  attr :adws, :list, default: [], doc: "file-derived %Definitions.Adw{} list"
   attr :working_dir, :string, default: ""
   attr :uploads, :map, required: true
   attr :adw_builder?, :boolean, default: false
@@ -2101,33 +2101,25 @@ defmodule RepoBuilderWeb.ConsoleComponents do
             </div>
           </form>
 
-          <div class="mt-3 grid grid-cols-3 gap-3 text-[0.625rem]">
-            <div>
-              <div class="mb-1 font-semibold" style="color: var(--cns-text-2)">HARNESSES</div>
-              <div class="flex flex-wrap gap-1">
-                <button
-                  :for={h <- @harnesses}
-                  type="button"
-                  class="cns-cmd-chip"
-                  data-copy={h}
-                  phx-hook="ClipboardCopy"
-                  id={"cmd-harness-#{h}"}
-                >
-                  {h}
-                </button>
-              </div>
-            </div>
-            <div>
-              <div class="mb-1 font-semibold" style="color: var(--cns-text-2)">AGENTS</div>
-              <div class="flex flex-wrap gap-1">
-                <span :for={a <- @agents} class="cns-cmd-chip">{a}</span>
-                <span :if={@agents == []} style="color: var(--cns-text-3)">none</span>
-              </div>
-            </div>
-            <div>
-              <div class="mb-1 font-semibold" style="color: var(--cns-text-2)">EXAMPLE ADW</div>
-              <div class="cns-cmd-chip inline-block">{@example_adw}</div>
-            </div>
+          <div class="mt-3 flex flex-col gap-2 text-[0.625rem]">
+            <.palette_row
+              id="slash"
+              label="SLASH"
+              chips={palette_chips(:slash_command, @slash_commands)}
+              empty_hint="none — add `.claude/commands/<name>.md`"
+            />
+            <.palette_row
+              id="agents"
+              label="AGENTS"
+              chips={palette_chips(:agent, @agent_defs)}
+              empty_hint="none — add `priv/orchestrator/agents/<name>/NNNN.md`"
+            />
+            <.palette_row
+              id="adws"
+              label="ADWS"
+              chips={palette_chips(:adw, @adws)}
+              empty_hint="none — add `adws/adw_*.py`"
+            />
           </div>
         </div>
 
@@ -2259,7 +2251,96 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     """
   end
 
+  attr :id, :string, required: true
+  attr :label, :string, required: true
+  attr :chips, :list, required: true, doc: "normalized %{token,label,source,description} maps"
+  attr :empty_hint, :string, required: true
+
+  @doc """
+  One collapsible row of the file-driven prompt palette. The toggle reveals a chip
+  per definition; each chip dispatches `rb:insert-token` (handled client-side by the
+  CommandPaste hook on the textarea) to append its token at the caret — no server
+  round-trip. An empty category renders an actionable hint instead.
+  """
+  @spec palette_row(map()) :: Phoenix.LiveView.Rendered.t()
+  def palette_row(assigns) do
+    ~H"""
+    <div>
+      <button
+        type="button"
+        id={"palette-toggle-#{@id}"}
+        phx-click={JS.toggle(to: "#palette-#{@id}")}
+        class="cns-cmd-chip font-semibold"
+        title={"Toggle #{@label} palette"}
+      >
+        {@label} ({length(@chips)})
+      </button>
+      <div id={"palette-#{@id}"} class="mt-1 flex flex-wrap gap-1" style="display:none">
+        <button
+          :for={chip <- @chips}
+          type="button"
+          class="cns-cmd-chip"
+          phx-click={
+            JS.dispatch("rb:insert-token", to: "#command-textarea", detail: %{token: chip.token})
+          }
+          title={chip.description || chip.token}
+        >
+          {chip.label}
+          <span
+            :if={chip.source == :working_dir}
+            class="cns-chip"
+            style="font-size: 0.5rem; padding: 0 3px; margin-left: 3px"
+            title="from the selected working directory"
+          >
+            wd
+          </span>
+        </button>
+        <span :if={@chips == []} style="color: var(--cns-text-3)">{@empty_hint}</span>
+      </div>
+    </div>
+    """
+  end
+
   # --- private helpers ------------------------------------------------------
+
+  # Normalize a file-derived definition list into chip render maps. The token is the
+  # exact text appended into the prompt: `/<name>` for slash commands, the bare name
+  # for agents, and a valid `start_adw` invocation for ADWs.
+  @spec palette_chips(:slash_command | :agent | :adw, [struct()]) :: [
+          %{token: String.t(), label: String.t(), source: atom(), description: String.t() | nil}
+        ]
+  defp palette_chips(:slash_command, list) do
+    Enum.map(list, fn cmd ->
+      %{
+        token: "/" <> cmd.name,
+        label: "/" <> cmd.name,
+        source: cmd.source,
+        description: cmd.description
+      }
+    end)
+  end
+
+  defp palette_chips(:agent, list) do
+    Enum.map(list, fn agent ->
+      %{
+        token: agent.name,
+        label: agent.name,
+        source: agent.source,
+        description: agent.description
+      }
+    end)
+  end
+
+  defp palette_chips(:adw, list) do
+    Enum.map(list, fn adw ->
+      %{
+        token: "start_adw workflow_type=" <> adw.name,
+        label: adw.name,
+        source: adw.source,
+        description: adw.description
+      }
+    end)
+  end
 
   @spec adw_step_hint(String.t()) :: String.t()
   defp adw_step_hint("plan"),

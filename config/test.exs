@@ -112,6 +112,11 @@ config :repo_builder, :orchestrator,
 # so it doesn't race the Ecto sandbox.
 config :repo_builder, :orphan_reaper, reap_on_boot: false
 
+# File-driven prompt palette (issue-prompt-adw-palette): disable the inotify watcher
+# and poll loop in the supervised instance so unit/LiveView tests are deterministic.
+# Tests that exercise the watch path start their own Definitions instance with polling.
+config :repo_builder, RepoBuilder.Definitions, watch_enabled?: false, poll_interval_ms: 30_000
+
 # Oban in manual testing mode: jobs are inserted (assert_enqueued) but not run by
 # queues/cron; execution tests use Oban.Testing helpers / perform_job.
 config :repo_builder, Oban, testing: :manual
