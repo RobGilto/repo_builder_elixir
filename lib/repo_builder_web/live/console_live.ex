@@ -1705,6 +1705,28 @@ defmodule RepoBuilderWeb.ConsoleLive do
     end
   end
 
+  # A worker the orchestrator updated in place (e.g. `clear_context` reset it to
+  # idle): refresh its status in the rail roster + swimlane row live. Idempotent for
+  # an unknown worker (the lane is re-inserted by stable id).
+  def handle_info({:agent_updated, %Agent{} = agent}, socket) do
+    lane = %{
+      id: "agent:#{agent.id}",
+      kind: :agent,
+      label: agent.name,
+      status: agent.status,
+      harness: agent.harness
+    }
+
+    {:noreply,
+     socket
+     |> assign(
+       :agents,
+       Enum.map(socket.assigns.agents, fn a -> if a.id == agent.id, do: agent, else: a end)
+     )
+     |> assign(:statuses, Map.put(socket.assigns.statuses, agent.id, agent.status))
+     |> stream_insert(:lanes, lane)}
+  end
+
   # A worker the orchestrator just deleted (issue agent-CRUD): drop it from the
   # rail roster + the swimlane stream live. Idempotent for an already-absent worker.
   def handle_info({:agent_deleted, %Agent{} = agent}, socket) do

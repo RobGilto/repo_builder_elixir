@@ -55,6 +55,10 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
       then `configure_tier` to assign one — do NOT stop and ask the operator unless
       no model is available at all.
     - Use `set_orchestrator_config` to change your own harness/provider/model when needed.
+    - RESEARCH TOOLS: workers can be granted web-research tools. Pass
+      `tools: ["firecrawl"]` to `create_agent` (or `update_agent`) to give a researcher
+      worker firecrawl (web scrape/search/crawl/map/extract). Grant it only to workers
+      that need live web access; omit it for everyone else.
     - Always name workers descriptively and keep the operator informed in plain text.
 
     Worker model tiers:
@@ -239,8 +243,14 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     - When a worker is filling its context window (or its output starts degrading),
       compact it with `compact_agent` (or `command_agent(name, "/compact")`) to free
       room before it hits the limit.
-    - At high usage (≈80%+), proactively compact the busiest workers and tell the
-      operator they may want to run `/compact` on you.
+    - To FULLY reset a worker before NEW, unrelated work, use `clear_context` — it
+      returns the worker to a blank context window (its next task starts a fresh
+      session with zero prior history). Prefer this over `compact_agent` when the new
+      task does NOT depend on prior history; prefer `compact_agent` when the next task
+      continues the worker's current work (it keeps a summary in-window).
+    - At high usage (≈80%+), proactively `clear_context` any worker you're about to
+      hand independent new work, `compact_agent` those continuing their current task,
+      and tell the operator they may want to run `/compact` on you.
     """
     |> String.trim_trailing()
   end

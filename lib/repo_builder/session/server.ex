@@ -27,6 +27,7 @@ defmodule RepoBuilder.Session.Server do
 
   alias RepoBuilder.{Agents, Logs}
   alias RepoBuilder.Harness.Event
+  alias RepoBuilder.Harness.McpTools
   alias RepoBuilder.Harness.Registry, as: HarnessRegistry
   alias RepoBuilder.Logs.AgentLog
   alias RepoBuilder.OsPidLedger
@@ -175,10 +176,14 @@ defmodule RepoBuilder.Session.Server do
     Map.merge(config_table, catalog_table)
   end
 
-  # Merge runtime-configured per-harness secrets (§6) with any explicit per-session
-  # overrides; drop unset (nil) env values so they never reach the child env.
+  # Merge runtime-configured per-harness secrets (§6) with the per-tool secrets the
+  # worker's config actually enables (issue firecrawl-grant), then any explicit
+  # per-session overrides (which win last); drop unset (nil) env values so they never
+  # reach the child env. Public (`@doc false`) as the hermetic test seam — it is a
+  # pure read with no process state.
+  @doc false
   @spec resolve_secrets(keyword(), String.t()) :: map()
-  defp resolve_secrets(opts, harness) do
+  def resolve_secrets(opts, harness) do
     configured =
       :repo_builder
       |> Application.get_env(:harness_secrets, %{})
@@ -186,8 +191,28 @@ defmodule RepoBuilder.Session.Server do
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
       |> Map.new()
 
-    Map.merge(configured, opts[:secrets] || %{})
+    configured
+    |> Map.merge(tool_secrets(opts[:config] || %{}))
+    |> Map.merge(opts[:secrets] || %{})
   end
+
+  # Fold in the env keys for the research tools enabled in this worker's config
+  # (`config["tools"]`), pulling each value from the `:tool_secrets` runtime block.
+  # Only enabled tools contribute, and unset (nil) values are dropped — so the key
+  # reaches firecrawl-granted workers and no others.
+  @spec tool_secrets(map()) :: %{optional(String.t()) => String.t()}
+  defp tool_secrets(config) when is_map(config) do
+    catalog = Application.get_env(:repo_builder, :tool_secrets, %{})
+    enabled = McpTools.enabled(config["tools"])
+
+    for {tool, env_key} <- McpTools.secret_keys(enabled),
+        value = get_in(catalog, [tool, env_key]),
+        not is_nil(value),
+        into: %{},
+        do: {env_key, value}
+  end
+
+  defp tool_secrets(_config), do: %{}
 
   @impl true
   def handle_continue(:spawn, %State{} = state) do

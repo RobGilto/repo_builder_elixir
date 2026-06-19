@@ -96,4 +96,23 @@ defmodule RepoBuilder.Orchestrator.SystemPromptTest do
     assert prompt =~ "compact_agent"
     assert prompt =~ "/compact"
   end
+
+  test "documents the firecrawl research-tools grant" do
+    prompt = SystemPrompt.build(orchestrator())
+
+    assert prompt =~ "RESEARCH TOOLS"
+    assert prompt =~ "firecrawl"
+    assert prompt =~ ~s(tools: ["firecrawl"])
+  end
+
+  test "documents clear_context and the clear-vs-compact distinction" do
+    prompt = SystemPrompt.build(orchestrator())
+
+    assert prompt =~ "clear_context"
+    # The clear-vs-compact distinction: blank window for NEW unrelated work.
+    assert prompt =~ "blank context window"
+    assert prompt =~ ~r/Prefer this over `compact_agent`/
+    # The proactive-at-80% rule still names both levers.
+    assert prompt =~ ~r/80%.*clear_context/s
+  end
 end

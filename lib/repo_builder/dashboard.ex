@@ -111,6 +111,18 @@ defmodule RepoBuilder.Dashboard do
   end
 
   @doc """
+  Announce that an orchestrator-owned worker was updated in place (e.g. its status
+  changed after a `clear_context` reset) so the roster + swimlane reflect it live.
+  Subscribers receive `{:agent_updated, agent}`. Additive seam (§9) — NOT a
+  canonical `Event` variant. Mirrors `broadcast_agent_created/1`.
+  """
+  @spec broadcast_agent_updated(RepoBuilder.Agents.Agent.t()) :: :ok
+  def broadcast_agent_updated(agent) do
+    _ = Phoenix.PubSub.broadcast(RepoBuilder.PubSub, @events_topic, {:agent_updated, agent})
+    :ok
+  end
+
+  @doc """
   Broadcast that the orchestrator record was updated so any connected ConsoleLive
   socket can refresh its assigns without a page reload.
   """

@@ -40,6 +40,15 @@ config :repo_builder, :harness_secrets, %{
   }
 }
 
+# Per-TOOL credentials (issue firecrawl-grant) — the single app-wide key for each
+# grantable worker research tool, sourced from the OS env at runtime, referenced by
+# name and NEVER persisted to the DB. `Session.Server.resolve_secrets/2` folds these
+# into the child env ONLY for the tools a worker actually has enabled, and drops unset
+# (nil) values. Mirrors `:harness_secrets` above.
+config :repo_builder, :tool_secrets, %{
+  "firecrawl" => %{"FIRECRAWL_API_KEY" => System.get_env("FIRECRAWL_API_KEY")}
+}
+
 # Orchestrator MCP base URL (issue-c) — the localhost-bound base the generated
 # `.mcp.json` / pi extension point at. Overridable per host; defaults to the local
 # endpoint. The orchestrator reuses the same per-harness `:harness_secrets` above.

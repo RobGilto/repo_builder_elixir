@@ -14,6 +14,7 @@ defmodule RepoBuilder.Orchestrator.Tools do
   alias RepoBuilder.{Agents, Logs, Orchestrators, Session, WorkflowEngine, Workflows}
   alias RepoBuilder.Dashboard
   alias RepoBuilder.Definitions
+  alias RepoBuilder.Harness.McpTools
   alias RepoBuilder.Harness.Pi.Models, as: PiModels
   alias RepoBuilder.Harness.Registry
   alias RepoBuilder.Orchestrator.{ContextWindow, Orchestrator, Template, Templates}
@@ -77,6 +78,7 @@ defmodule RepoBuilder.Orchestrator.Tools do
 
   defp dispatch("report_cost", orchestrator_id, _args), do: report_cost(orchestrator_id)
   defp dispatch("compact_agent", orchestrator_id, args), do: compact_agent(orchestrator_id, args)
+  defp dispatch("clear_context", orchestrator_id, args), do: clear_context(orchestrator_id, args)
 
   defp dispatch("list_agent_templates", _orchestrator_id, _args), do: list_agent_templates()
   defp dispatch("get_agent_template", _orchestrator_id, args), do: get_agent_template(args)
@@ -90,6 +92,7 @@ defmodule RepoBuilder.Orchestrator.Tools do
   defp create_agent(orchestrator_id, args) do
     with {:ok, name} <- fetch_string(args, "name"),
          {:ok, template} <- resolve_template(args),
+         {:ok, tools} <- resolve_tools(args),
          args = apply_template_args(args, template),
          {:ok, spec} <- resolve_agent_spec(orchestrator_id, args) do
       params = %{
@@ -99,8 +102,9 @@ defmodule RepoBuilder.Orchestrator.Tools do
         "system_prompt" => blank_to_nil(args["system_prompt"]),
         # The worker's `provider` column is a closed enum that can't hold pi's open
         # provider set, so the real provider rides in `config` and is threaded into
-        # the session at command time. Template provenance (name+version) rides here too.
-        "config" => agent_config(spec.provider, template)
+        # the session at command time. Template provenance (name+version) rides here too;
+        # a non-empty research-tool grant (issue firecrawl-grant) rides under `"tools"`.
+        "config" => spec.provider |> agent_config(template) |> maybe_put_tools(tools)
       }
 
       case Agents.create_worker(orchestrator_id, params) do
@@ -495,7 +499,8 @@ defmodule RepoBuilder.Orchestrator.Tools do
   defp update_agent(orchestrator_id, args) do
     with {:ok, name} <- fetch_string(args, "name"),
          {:ok, worker} <- Agents.get_by_name_for_orchestrator(orchestrator_id, name),
-         {:ok, params} <- worker_update_params(args) do
+         {:ok, tools} <- resolve_tools(args),
+         {:ok, params} <- worker_update_params(args, worker, tools) do
       case Agents.update_worker(worker, params) do
         {:ok, updated} ->
           {:ok,
@@ -780,6 +785,31 @@ defmodule RepoBuilder.Orchestrator.Tools do
     end
   end
 
+  # Fully reset a worker's context window (issue clear-context). Unlike `compact_agent`
+  # (which keeps a summary in-window), this reaps any live session and NULLS the
+  # worker's resumable `session_id`, so the next `command_agent` mints a fresh harness
+  # session with zero prior history. Worker scoping makes a cross-tenant clear impossible.
+  @spec clear_context(Ecto.UUID.t(), map()) :: result()
+  defp clear_context(orchestrator_id, args) do
+    with {:ok, name} <- fetch_string(args, "name"),
+         {:ok, worker} <- Agents.get_by_name_for_orchestrator(orchestrator_id, name) do
+      # Reap any live session first so the reset leaves no orphaned child; a worker
+      # with no live session returns `{:error, :not_found}`, ignored.
+      _ = Session.Supervisor.stop_session(worker.id)
+      # Null the resumable session so the next command_agent takes the fresh-session branch.
+      _ = Agents.set_session(worker.id, nil)
+
+      case Agents.set_status(worker.id, :idle) do
+        {:ok, idle} ->
+          _ = Dashboard.broadcast_agent_updated(idle)
+          {:ok, %{"status" => "cleared", "id" => worker.id, "name" => worker.name}}
+
+        {:error, reason} ->
+          {:error, normalize_reason(reason)}
+      end
+    end
+  end
+
   # --- subagent-template tools ---
 
   @spec list_agent_templates() :: result()
@@ -1029,18 +1059,64 @@ defmodule RepoBuilder.Orchestrator.Tools do
   defp non_neg_int(_n, default), do: default
 
   # Collect only the present, non-blank updatable worker fields; an empty change
-  # set is rejected so an `update_agent` with only `name` is a no-op error.
-  @spec worker_update_params(map()) ::
-          {:ok, %{optional(String.t()) => String.t()}} | {:error, reason()}
-  defp worker_update_params(args) do
+  # set is rejected so an `update_agent` with only `name` is a no-op error. A `tools`
+  # grant change (issue firecrawl-grant) is merged into the worker's existing config
+  # under `"tools"`, preserving its other keys (provider/template provenance).
+  @spec worker_update_params(map(), Agents.Agent.t(), [String.t()] | nil) ::
+          {:ok, %{optional(String.t()) => term()}} | {:error, reason()}
+  defp worker_update_params(args, worker, tools) do
     params =
       %{}
       |> put_present("harness", blank_to_nil(args["harness"]))
       |> put_present("model", blank_to_nil(args["model"]))
       |> put_present("system_prompt", blank_to_nil(args["system_prompt"]))
+      |> maybe_put_config_tools(worker, tools)
 
     if params == %{}, do: {:error, "no updatable fields provided"}, else: {:ok, params}
   end
+
+  # `nil` ⇒ the caller passed no `tools` key, so leave config untouched. A list (even
+  # the empty list, an explicit revoke) replaces only the `"tools"` key in the worker's
+  # existing config so provider/template provenance is preserved.
+  @spec maybe_put_config_tools(map(), Agents.Agent.t(), [String.t()] | nil) :: map()
+  defp maybe_put_config_tools(params, _worker, nil), do: params
+
+  defp maybe_put_config_tools(params, worker, tools),
+    do: Map.put(params, "config", Map.put(worker.config, "tools", tools))
+
+  # Validate an optional `tools` grant against the known research tools. Absent ⇒
+  # `{:ok, nil}` (don't touch). Explicit `[]` ⇒ `{:ok, []}` (none / revoke). A
+  # non-empty list keeps only the known names (deduped); an all-unknown list errors
+  # with the known set. A non-list value is rejected.
+  @spec resolve_tools(map()) :: {:ok, [String.t()] | nil} | {:error, reason()}
+  defp resolve_tools(args) do
+    case Map.get(args, "tools") do
+      nil ->
+        {:ok, nil}
+
+      [] ->
+        {:ok, []}
+
+      list when is_list(list) ->
+        known = McpTools.known()
+        valid = list |> Enum.filter(&(is_binary(&1) and &1 in known)) |> Enum.uniq()
+
+        if valid == [],
+          do: {:error, "unknown tools #{inspect(list)}; available: #{Enum.join(known, ", ")}"},
+          else: {:ok, valid}
+
+      _other ->
+        {:error, "tools must be an array of tool names"}
+    end
+  end
+
+  # Fold a non-empty research-tool grant into a worker's config at create time; `nil`
+  # or `[]` leaves the config untouched (no grant). Inference-only spec (mirrors
+  # `agent_config/2`): the concrete map narrows below a hand-written `map()` spec.
+  defp maybe_put_tools(config, tools) when is_list(tools) and tools != [],
+    do: Map.put(config, "tools", tools)
+
+  defp maybe_put_tools(config, _tools), do: config
 
   # Inference-only spec — callers pass literal string keys, which dialyzer narrows
   # below a hand-written `String.t()` second arg (mirrors `positive_int/2`).

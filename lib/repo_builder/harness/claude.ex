@@ -11,7 +11,7 @@ defmodule RepoBuilder.Harness.Claude do
   @behaviour RepoBuilder.Harness
   @behaviour RepoBuilder.Harness.Orchestrating
 
-  alias RepoBuilder.Harness.Event
+  alias RepoBuilder.Harness.{Event, McpTools}
 
   @ctx %{harness: :claude}
 
@@ -91,9 +91,46 @@ defmodule RepoBuilder.Harness.Claude do
       |> append_arg(opts[:model], fn model -> ["--model", model] end)
       |> append_flags(permission_args(opts))
       |> append_flags(effort_args(opts[:reasoning_effort]))
+      |> append_flags(worker_mcp_args(opts))
 
     {"claude", args, env(opts), @ctx}
   end
+
+  # Worker MCP binding (issue firecrawl-grant): when a non-orchestrator worker's
+  # config grants research tools, write a `.mcp.json` into the session cwd declaring
+  # their stdio servers (key referenced as `${FIRECRAWL_API_KEY}`, never inlined) and
+  # return `--mcp-config <abs path> --strict-mcp-config --allowedTools <patterns>` so
+  # the autonomous worker can call them without an interactive prompt. The orchestrator
+  # path (config carries `:orchestrator`) declares MCP via `orchestrator_spawn/2`, so
+  # it is skipped here. No tools ⇒ `[]` (a plain worker is byte-for-byte unchanged).
+  @spec worker_mcp_args(RepoBuilder.Harness.start_opts()) :: [String.t()]
+  defp worker_mcp_args(opts) do
+    config = Map.get(opts, :config, %{})
+
+    if orchestrator_config?(config) do
+      []
+    else
+      case McpTools.enabled(config["tools"]) do
+        [] ->
+          []
+
+        tools ->
+          cwd = Path.expand(opts.cwd)
+          path = Path.join(cwd, ".mcp.json")
+          File.mkdir_p!(cwd)
+          File.write!(path, Jason.encode!(%{"mcpServers" => McpTools.mcp_servers(tools)}))
+
+          ["--mcp-config", path, "--strict-mcp-config"] ++
+            ["--allowedTools" | McpTools.allowed_tools(tools)]
+      end
+    end
+  end
+
+  @spec orchestrator_config?(map()) :: boolean()
+  defp orchestrator_config?(config) when is_map(config),
+    do: Map.get(config, :orchestrator) == true
+
+  defp orchestrator_config?(_config), do: false
 
   # Map the harness-blind reasoning effort to Claude's `--effort` flag (print-mode,
   # model-dependent levels). Claude has NO `off` — the lowest level is `low`, so both

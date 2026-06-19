@@ -21,7 +21,7 @@ defmodule RepoBuilder.Harness.Pi do
   @behaviour RepoBuilder.Harness
   @behaviour RepoBuilder.Harness.Orchestrating
 
-  alias RepoBuilder.Harness.{Event, Pricing}
+  alias RepoBuilder.Harness.{Event, McpTools, Pricing}
 
   # The pi extension that registers the orchestrator tools (pi ships no MCP, §10).
   @pi_extension Path.join(:code.priv_dir(:repo_builder), "orchestrator/pi_extension")
@@ -74,12 +74,62 @@ defmodule RepoBuilder.Harness.Pi do
       |> append_model(model)
       |> append_approve(Map.get(opts, :config, %{}))
       |> append_thinking(opts[:reasoning_effort])
+      |> append_flags(worker_mcp_args(opts))
 
     # Thread model + price table into the session_ctx so normalize/2 can derive cost
     # (pi reports no USD in its stream — §4.3).
     ctx = %{harness: :pi, model: model, price_table: Map.get(opts, :price_table, %{})}
     {"pi", args ++ [opts.prompt], env(opts), ctx}
   end
+
+  @spec append_flags([String.t()], [String.t()]) :: [String.t()]
+  defp append_flags(args, flags), do: args ++ flags
+
+  # Worker MCP binding (issue firecrawl-grant). pi speaks MCP only through the
+  # operator's auto-loaded `pi-mcp-adapter` extension, so gating is by EXTENSION
+  # LOADING, not config files:
+  #
+  #   * ungated worker (no tools) → `--no-extensions` (`-ne`) suppresses the adapter
+  #     entirely, so the worker has no `mcp` tool at all (a deliberate tightening over
+  #     today's ambient inheritance of every operator MCP server);
+  #   * granted worker → write a dedicated `.pi-mcp.json` declaring the stdio servers
+  #     and pass `--mcp-config <abs path>` WITHOUT `-ne` (the adapter must auto-load to
+  #     honor the flag). `FIRECRAWL_API_KEY` rides in the pi process env (`env/1` ←
+  #     `resolve_secrets/2`); it is never written into the file or argv.
+  #
+  # The orchestrator path (config carries `:orchestrator`) uses `orchestrator_spawn/2`
+  # and must keep its `-e` extension with no `-ne`/`--mcp-config`, so it is skipped here.
+  #
+  # Accepted caveat: the adapter still merges `~/.config/mcp/mcp.json`, so a granted pi
+  # worker may also see the operator's other global servers (lazy, operator-owned — not
+  # a security exposure for this single-operator tool). Ungated workers are cleanly
+  # denied via `-ne`.
+  @spec worker_mcp_args(RepoBuilder.Harness.start_opts()) :: [String.t()]
+  defp worker_mcp_args(opts) do
+    config = Map.get(opts, :config, %{})
+
+    if orchestrator_config?(config) do
+      []
+    else
+      case McpTools.enabled(config["tools"]) do
+        [] ->
+          ["--no-extensions"]
+
+        tools ->
+          cwd = Path.expand(opts.cwd)
+          path = Path.join(cwd, ".pi-mcp.json")
+          File.mkdir_p!(cwd)
+          File.write!(path, Jason.encode!(%{"mcpServers" => McpTools.mcp_servers(tools)}))
+          ["--mcp-config", path]
+      end
+    end
+  end
+
+  @spec orchestrator_config?(map()) :: boolean()
+  defp orchestrator_config?(config) when is_map(config),
+    do: Map.get(config, :orchestrator) == true
+
+  defp orchestrator_config?(_config), do: false
 
   @spec append_provider([String.t()], term()) :: [String.t()]
   defp append_provider(args, provider) when is_binary(provider) and provider != "",

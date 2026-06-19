@@ -170,6 +170,7 @@ The `/dev/*` routes exist only when `:dev_routes` is enabled (development).
 | `WEBHOOK_SECRET` | all | HMAC secret for webhook signature verification. When unset, signed triggers are rejected. |
 | `ANTHROPIC_API_KEY` | all | Passed to the `claude` and `pi` harnesses. |
 | `OPENAI_API_KEY` | all | Passed to the `pi` harness. |
+| `FIRECRAWL_API_KEY` | all | One app-wide key for the firecrawl web-research MCP tool. Injected into the child env of workers the orchestrator grants `tools: ["firecrawl"]`; never persisted, never in argv. Requires `npx`/Node on PATH (`npx -y firecrawl-mcp`); the pi path also needs the operator's `pi-mcp-adapter` extension. |
 | `DATABASE_URL` | prod | Production database URL (required; raises if missing). |
 | `POOL_SIZE` | prod | DB connection pool size (default `10`). |
 | `ECTO_IPV6` | prod | Use IPv6 for the DB socket when set to `true` or `1`. |

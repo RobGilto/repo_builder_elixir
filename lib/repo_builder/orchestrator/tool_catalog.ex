@@ -47,6 +47,12 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
               "type" => "string",
               "description" =>
                 "Optional name of a saved subagent template (see `list_agent_templates`). Applies the template's current body as the worker's system prompt and its model/category. An explicit `system_prompt`/`model` overrides the template; the template's name+version are recorded on the worker."
+            },
+            "tools" => %{
+              "type" => "array",
+              "items" => %{"type" => "string", "enum" => ["firecrawl"]},
+              "description" =>
+                "Grant MCP research tools to this worker, e.g. firecrawl web scrape/search/crawl/map/extract. Grant only to workers that need live web access. Omit for none."
             }
           },
           "required" => ["name"]
@@ -131,6 +137,12 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
             "harness" => %{
               "type" => "string",
               "description" => "New registered harness (e.g. claude, pi)."
+            },
+            "tools" => %{
+              "type" => "array",
+              "items" => %{"type" => "string", "enum" => ["firecrawl"]},
+              "description" =>
+                "Replace the worker's granted MCP research tools (e.g. firecrawl). Pass an empty array to revoke all. Other config (provider/template) is preserved."
             }
           },
           "required" => ["name"]
@@ -244,6 +256,18 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
         name: "compact_agent",
         description:
           "Compact a worker's context by dispatching `/compact` to it (sugar over command_agent). Use it on a worker approaching its context-window limit to free up room before its output degrades.",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "name" => %{"type" => "string", "description" => "Target worker name."}
+          },
+          "required" => ["name"]
+        }
+      },
+      %{
+        name: "clear_context",
+        description:
+          "Fully reset a worker's context window to blank — reaps its live session and drops its resumable session id so its next task starts a fresh harness session with zero prior history. Use this (not compact_agent) before handing a worker NEW, unrelated work, especially when its context usage is high. Use compact_agent instead when the next task continues prior work.",
         input_schema: %{
           "type" => "object",
           "properties" => %{
