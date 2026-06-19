@@ -26,22 +26,11 @@ defmodule RepoBuilder.Orchestrator.Tools do
   # other harness keeps the in-app WorkflowEngine catalog path (Fake-testable fallback).
   @adw_harness "adw"
 
-  # Standard reporting clause appended to every spawned worker's system prompt
-  # (issue-2541). The orchestrator can only read a worker's findings via
-  # `check_agent_status`'s `final_message` field — i.e. the worker's final turn — so a
-  # worker that buries its conclusion mid-transcript is effectively silent. This clause
-  # makes every worker end with a concise, self-contained, retrievable summary.
-  @worker_reporting_clause """
-  ## Reporting results
-  Only your FINAL message is surfaced to the coordinator that dispatched you — it is
-  read back via the orchestrator's `check_agent_status` tool. End every turn with a
-  concise, self-contained summary of your results and findings (what you did, what you
-  found, any conclusions). Do not bury the outcome mid-transcript; restate it at the end.
-  """
-
   # Max characters of worker text surfaced through `check_agent_status` (issue-2541).
   # Bounded to keep the tool result small even at limit=20 (the platform has a known
-  # large-tool-result stdout-overflow concern — see issue-log-2389).
+  # large-tool-result stdout-overflow concern — see issue-log-2389). The reporting clause
+  # (`worker_reporting_clause/0`) interpolates this so the documented limit never drifts
+  # from the enforced one.
   @worker_text_cap 2_000
 
   # Changeset failures are stringified at the boundary (`changeset_reason/1`), so a
@@ -329,7 +318,8 @@ defmodule RepoBuilder.Orchestrator.Tools do
       limit = positive_int(args["limit"], 20)
       logs = Logs.list_recent(worker.id, limit)
       tail = Enum.map(logs, &log_summary/1)
-      final_message = logs |> worker_final_message() |> truncate_or_nil()
+      full = worker_final_message_with_log(logs)
+      final_message = full |> full_message_text() |> truncate_or_nil()
       cost = worker.id |> Logs.cost_rollup!() |> Decimal.to_string()
 
       {:ok,
@@ -339,7 +329,8 @@ defmodule RepoBuilder.Orchestrator.Tools do
          "status" => to_string(worker.status),
          "cost_usd" => cost,
          "final_message" => final_message,
-         "recent_events" => tail
+         "recent_events" => tail,
+         "report_file" => maybe_spill_report(orchestrator_id, worker, full)
        }}
     end
   end
@@ -1091,19 +1082,115 @@ defmodule RepoBuilder.Orchestrator.Tools do
   # Append the standard reporting clause to a worker's system prompt (issue-2541).
   # Uses the clause alone when the orchestrator passes no prompt.
   @spec with_reporting_clause(String.t() | nil) :: String.t()
-  defp with_reporting_clause(nil), do: String.trim(@worker_reporting_clause)
+  defp with_reporting_clause(nil), do: String.trim(worker_reporting_clause())
 
   defp with_reporting_clause(prompt),
-    do: prompt <> "\n\n" <> String.trim(@worker_reporting_clause)
+    do: prompt <> "\n\n" <> String.trim(worker_reporting_clause())
+
+  # Standard reporting clause appended to every spawned worker's system prompt
+  # (issue-2541, overflow path added in this fix). The orchestrator can only read a
+  # worker's findings via `check_agent_status`'s `final_message` field — i.e. the
+  # worker's final turn — and that field is hard-capped at `@worker_text_cap` chars, so a
+  # worker that inlines a long report has its tail silently amputated and there is no
+  # second channel to recover it. The clause therefore (a) tells the worker the surfaced
+  # window is finite, (b) keeps the final message a concise self-contained summary, and
+  # (c) gives an explicit overflow path: write the full result to an `ai_docs/` markdown
+  # file in the shared working directory and cite that relative path. `@worker_text_cap`
+  # is interpolated so the documented limit can never drift from the enforced one.
+  @spec worker_reporting_clause() :: String.t()
+  defp worker_reporting_clause do
+    """
+    ## Reporting results
+    Only your FINAL message is surfaced to the coordinator that dispatched you — it is
+    read back via the orchestrator's `check_agent_status` tool, which truncates it to the
+    first ~#{@worker_text_cap} characters. Keep that final message a concise,
+    self-contained summary of your results (what you did, what you found, any
+    conclusions). Do not bury the outcome mid-transcript; restate it at the end.
+
+    If your full result would exceed that ~#{@worker_text_cap}-character budget (e.g. a
+    multi-section report or detailed analysis), write the complete content to a markdown
+    file at `ai_docs/<descriptive-name>.md` inside the working directory and reference
+    that relative path (e.g. `ai_docs/elixir-port-report.md`) in your final summary so the
+    coordinator can open and read it in full.
+    """
+  end
 
   # The worker's most recent NON-thinking result text (issue-2541): prefer the latest
   # terminal `:done` payload (`"result"`/`"final_text"`, harness-defensive), else the
   # latest finalized `:text_delta` that is not thinking. `nil` when none exists.
-  @spec worker_final_message([Logs.AgentLog.t()]) :: String.t() | nil
-  defp worker_final_message(logs) do
+  # Returns the worker's most recent NON-thinking result text together with the source log
+  # it came from (the log gives an idempotent spill filename). `nil` when none exists.
+  @spec worker_final_message_with_log([Logs.AgentLog.t()]) ::
+          {String.t(), Logs.AgentLog.t()} | nil
+  defp worker_final_message_with_log(logs) do
     logs
     |> Enum.reverse()
-    |> Enum.find_value(fn log -> result_text(log) end)
+    |> Enum.find_value(fn log ->
+      case result_text(log) do
+        nil -> nil
+        text -> {text, log}
+      end
+    end)
+  end
+
+  @spec full_message_text({String.t(), Logs.AgentLog.t()} | nil) :: String.t() | nil
+  defp full_message_text({text, _log}), do: text
+  defp full_message_text(nil), do: nil
+
+  # Deterministic, platform-side overflow spill (issue worker-report-truncation): when the
+  # worker's FULL final message exceeds `@worker_text_cap`, the surfaced `final_message` is
+  # only a capped preview, so write the complete, untruncated text to a markdown file the
+  # orchestrator can read and return its path as `report_file`. This removes all dependence
+  # on the worker voluntarily writing an `ai_docs/` file (`worker_reporting_clause/0` stays
+  # as cooperative guidance, but this is the guarantee). `nil` when no overflow occurred or
+  # the write failed — the tool always still returns the preview.
+  @spec maybe_spill_report(Ecto.UUID.t(), Agents.Agent.t(), {String.t(), Logs.AgentLog.t()} | nil) ::
+          String.t() | nil
+  defp maybe_spill_report(orchestrator_id, worker, {text, log}) do
+    if String.length(text) > @worker_text_cap,
+      do: spill_report(orchestrator_id, worker, text, log),
+      else: nil
+  end
+
+  defp maybe_spill_report(_orchestrator_id, _worker, nil), do: nil
+
+  # Write the full message to `ai_docs/worker-reports/<worker-slug>-<log_no>.md` under the
+  # orchestrator working dir (or platform root when none is set). Idempotent: the filename
+  # is keyed on the source log, so repeated `check_agent_status` polls overwrite the same
+  # path. Returns the path RELATIVE to the working dir when one is set (the orchestrator can
+  # `Read ai_docs/worker-reports/...`), ABSOLUTE on the platform-root fallback. Never raises:
+  # any write failure yields `nil` so the caller still returns the preview.
+  @spec spill_report(Ecto.UUID.t(), Agents.Agent.t(), String.t(), Logs.AgentLog.t()) ::
+          String.t() | nil
+  defp spill_report(orchestrator_id, worker, text, log) do
+    working_dir = orchestrator_working_dir(orchestrator_id)
+    root = working_dir || File.cwd!()
+    rel = Path.join("ai_docs/worker-reports", report_filename(worker, log))
+    abs = Path.join(root, rel)
+
+    with :ok <- File.mkdir_p(Path.dirname(abs)),
+         :ok <- File.write(abs, report_body(worker, text)) do
+      if working_dir, do: rel, else: abs
+    else
+      {:error, _reason} -> nil
+    end
+  end
+
+  @spec report_filename(Agents.Agent.t(), Logs.AgentLog.t()) :: String.t()
+  defp report_filename(worker, log) do
+    slug =
+      worker.name
+      |> String.downcase()
+      |> String.replace(~r/[^a-z0-9]+/, "-")
+      |> String.trim("-")
+
+    slug = if slug == "", do: "worker", else: slug
+    "#{slug}-#{log.log_no || log.id}.md"
+  end
+
+  @spec report_body(Agents.Agent.t(), String.t()) :: String.t()
+  defp report_body(worker, text) do
+    "# Worker report: #{worker.name} (#{worker.status})\n\n#{text}\n"
   end
 
   @spec result_text(Logs.AgentLog.t()) :: String.t() | nil
@@ -1122,8 +1209,17 @@ defmodule RepoBuilder.Orchestrator.Tools do
   defp truncate_text(text, cap) do
     if String.length(text) <= cap,
       do: text,
-      else: String.slice(text, 0, cap) <> "… (truncated)"
+      else: String.slice(text, 0, cap) <> truncation_marker(cap)
   end
+
+  # Actionable truncation marker: when `final_message` overflows, the platform spills the
+  # full text to a file and returns its path as `report_file` (issue worker-report-
+  # truncation) — point the coordinator there rather than at a re-dispatch loop. Kept short
+  # so it does not itself bloat the tool result. Inference-only spec (the lone caller passes
+  # the literal @worker_text_cap), matching the neighboring `truncate_text/2` form.
+  defp truncation_marker(cap),
+    do:
+      "… (truncated at #{cap} chars — read this result's `report_file` path for the full output, or ask the worker for an ai_docs/ file)"
 
   defp truncate_or_nil(nil), do: nil
   defp truncate_or_nil(text), do: truncate_text(text, @worker_text_cap)

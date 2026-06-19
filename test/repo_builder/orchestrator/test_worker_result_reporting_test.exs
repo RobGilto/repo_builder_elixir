@@ -80,8 +80,11 @@ defmodule RepoBuilder.Orchestrator.TestWorkerResultReportingTest do
     assert result["final_message"] == nil
   end
 
-  test "surfaced text is truncated to keep the tool result bounded" do
+  @tag :tmp_dir
+  test "surfaced text is truncated to keep the tool result bounded", %{tmp_dir: tmp_dir} do
     orch = orchestrator()
+    # A working dir keeps the deterministic overflow spill out of the repo's platform root.
+    {:ok, _} = Orchestrators.set_working_dir(orch.id, tmp_dir)
     {name, agent} = worker(orch)
 
     long = String.duplicate("x", 5_000)
@@ -92,7 +95,8 @@ defmodule RepoBuilder.Orchestrator.TestWorkerResultReportingTest do
     )
 
     assert {:ok, result} = Tools.call("check_agent_status", orch.id, %{"name" => name})
-    assert String.ends_with?(result["final_message"], "… (truncated)")
+    assert result["final_message"] =~ "(truncated at 2000 chars"
+    assert result["final_message"] =~ "ai_docs/"
     assert String.length(result["final_message"]) < 5_000
   end
 end
