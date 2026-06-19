@@ -259,6 +259,7 @@ defmodule RepoBuilder.Orchestrator.Tools do
         prompt: prompt,
         model: worker.model,
         provider: worker_provider(worker),
+        config: worker_session_config(worker),
         # Run the worker in the orchestrator's working directory so it operates on the
         # same project (nil ⇒ the worker's own isolated scratch workspace).
         cwd: orchestrator_working_dir(orchestrator_id)
@@ -937,6 +938,19 @@ defmodule RepoBuilder.Orchestrator.Tools do
 
   @spec worker_provider(Agents.Agent.t()) :: String.t() | nil
   defp worker_provider(%{config: config}), do: blank_to_nil(config["provider"])
+
+  @doc """
+  The harness session config for an orchestrator-spawned worker: the worker's own
+  persisted config plus the autonomous flag.
+
+  Orchestrator workers run headless (no TTY to answer interactive permission
+  prompts), so the session is autonomous — the Claude adapter then emits
+  `--dangerously-skip-permissions`. The flag is the ATOM key `:autonomous` because
+  the adapter's `autonomous?/1` matches atom keys, whereas `worker.config` is JSONB
+  with string keys.
+  """
+  @spec worker_session_config(Agents.Agent.t()) :: map()
+  def worker_session_config(%{config: config}), do: Map.put(config, :autonomous, true)
 
   # The orchestrator's configured working directory (the cwd its workers run in), or
   # nil when unset/unknown — in which case the worker gets an isolated workspace.

@@ -13,6 +13,19 @@ defmodule RepoBuilderWeb.ConsoleComponents do
 
   import RepoBuilderWeb.DashboardComponents, only: [cost_badge: 1]
 
+  alias RepoBuilder.Agents.Agent
+
+  # A normalized prompt-palette chip. `:status` is optional — file-derived chips
+  # (slash/agents/adws) omit it; live-agent chips carry the worker's runtime status
+  # so the row can render a status dot.
+  @type chip :: %{
+          required(:token) => String.t(),
+          required(:label) => String.t(),
+          required(:source) => atom(),
+          required(:description) => String.t() | nil,
+          optional(:status) => atom()
+        }
+
   # Lifecycle statuses an agent may display. Superset of the closed `Agent.status`
   # enum because the live `statuses` map also tracks terminal outcomes
   # (succeeded/failed) derived from canonical Done/Error events (§4.1).
@@ -1982,6 +1995,8 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   attr :adw_steps, :list, default: []
   attr :adw_name, :string, default: ""
   attr :adw_local?, :boolean, default: false
+  attr :agents, :list, default: [], doc: "live %Agent{} workers shown in the left rail"
+  attr :statuses, :map, default: %{}, doc: "agent id => live runtime status"
 
   @doc "Bottom-anchored ⌘K command-input modal with a system-info panel (harnesses/agents/example ADW)."
   @spec global_command_input(map()) :: Phoenix.LiveView.Rendered.t()
@@ -2119,6 +2134,12 @@ defmodule RepoBuilderWeb.ConsoleComponents do
               label="ADWS"
               chips={palette_chips(:adw, @adws)}
               empty_hint="none — add `adws/adw_*.py`"
+            />
+            <.palette_row
+              id="live"
+              label="LIVE AGENTS"
+              chips={live_agent_chips(@agents, @statuses)}
+              empty_hint="no live agents — create one, then click to reference it"
             />
           </div>
         </div>
@@ -2285,6 +2306,14 @@ defmodule RepoBuilderWeb.ConsoleComponents do
           }
           title={chip.description || chip.token}
         >
+          <span
+            :if={chip[:status]}
+            class={[
+              "inline-block size-1.5 rounded-full align-middle",
+              status_dot_class(chip[:status])
+            ]}
+            style="margin-right: 4px"
+          />
           {chip.label}
           <span
             :if={chip.source == :working_dir}
@@ -2306,9 +2335,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   # Normalize a file-derived definition list into chip render maps. The token is the
   # exact text appended into the prompt: `/<name>` for slash commands, the bare name
   # for agents, and a valid `start_adw` invocation for ADWs.
-  @spec palette_chips(:slash_command | :agent | :adw, [struct()]) :: [
-          %{token: String.t(), label: String.t(), source: atom(), description: String.t() | nil}
-        ]
+  @spec palette_chips(:slash_command | :agent | :adw, [struct()]) :: [chip()]
   defp palette_chips(:slash_command, list) do
     Enum.map(list, fn cmd ->
       %{
@@ -2338,6 +2365,28 @@ defmodule RepoBuilderWeb.ConsoleComponents do
         label: adw.name,
         source: adw.source,
         description: adw.description
+      }
+    end)
+  end
+
+  # Build chips for the live workers shown in the left rail. The token is the worker's
+  # exact `name` — the string `Agents.get_by_name_for_orchestrator/2` (`Repo.get_by(name:)`)
+  # matches — so a clicked chip lands a name the orchestrator resolves the first time.
+  # Only active workers (`:idle`/`:running`) are listed, idle-first then alphabetical,
+  # and each chip carries its resolved status for the row's status dot.
+  @spec live_agent_chips([Agent.t()], %{optional(Ecto.UUID.t()) => atom()}) :: [chip()]
+  defp live_agent_chips(agents, statuses) do
+    agents
+    |> Enum.map(fn agent -> {agent, Map.get(statuses, agent.id, agent.status)} end)
+    |> Enum.filter(fn {_agent, status} -> status in [:idle, :running] end)
+    |> Enum.sort_by(fn {agent, status} -> {status != :idle, agent.name} end)
+    |> Enum.map(fn {agent, status} ->
+      %{
+        token: agent.name,
+        label: agent.name,
+        source: :live,
+        description: "#{status} · click to reference #{agent.name} in the prompt",
+        status: status
       }
     end)
   end

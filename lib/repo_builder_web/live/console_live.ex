@@ -196,6 +196,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
         socket
         |> load_agents()
         |> seed_agent_costs()
+        |> seed_context_tokens()
+        |> seed_counters()
         |> seed_lanes()
         |> seed_workflow_progress()
         |> seed_cost()
@@ -372,6 +374,22 @@ defmodule RepoBuilderWeb.ConsoleLive do
   @spec nilify_zero(Decimal.t()) :: Decimal.t() | nil
   defp nilify_zero(%Decimal{} = d), do: if(Decimal.equal?(d, 0), do: nil, else: d)
 
+  # Seed each agent card's CONTEXT WINDOW bar from the latest persisted `usage` row,
+  # mirroring `seed_agent_costs/1`. Without this an agent whose work predates the
+  # mount (or any reconnect) shows an empty bar even though its logs are backfilled.
+  @spec seed_context_tokens(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp seed_context_tokens(socket) do
+    assign(socket, :context_tokens, Logs.context_tokens_by_agent())
+  end
+
+  # Seed the per-card category counters (responses/tools/hooks/thinking) from
+  # persisted logs so a reconnect restores them; the seeded shape matches what
+  # `bump_counter/3` expects, so later live increments merge cleanly.
+  @spec seed_counters(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp seed_counters(socket) do
+    assign(socket, :counters, Logs.event_counts_by_agent())
+  end
+
   # Only AGENT lanes go into the flat lane stream now; workflow runs render as rich
   # per-step swimlanes from `@workflow_progress` (seeded by `seed_workflow_progress/1`).
   @spec seed_lanes(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
@@ -494,6 +512,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
     # drop any selection referencing the now-reset row ids (issue-explain).
     |> assign(streaming: %{}, stream_pending: %{}, stream_flush_ref: nil)
     |> assign(selected_ids: MapSet.new())
+    # Re-seed the per-card context bar + counters from persisted logs so a reconnect
+    # restores them alongside the re-streamed history (issue-per-agent token/context).
+    |> seed_context_tokens()
+    |> seed_counters()
     |> stream(:events, rows, reset: true)
   end
 
@@ -565,7 +587,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
   # changing the harness clears provider+model; changing the provider clears model.
   # On success: transiently set `agent_model_saved: true` for the "Saved ✓" chip.
   def handle_event("set_agent_model", %{"category" => category} = params, socket) do
-    attrs = agent_model_attrs(params)
+    stored = Enum.find(socket.assigns.agent_model_rows, %{}, &(&1.category == category))
+    attrs = agent_model_attrs(params, stored)
 
     case socket.assigns.orchestrator_id do
       nil ->
@@ -1335,22 +1358,39 @@ defmodule RepoBuilderWeb.ConsoleLive do
   @spec absolute_path?(String.t()) :: boolean()
   defp absolute_path?(path), do: Path.type(path) == :absolute
 
-  # Cascade an agent-models row change: changing harness clears provider+model;
-  # changing provider clears model; changing model keeps the row as posted.
-  @spec agent_model_attrs(map()) :: %{optional(String.t()) => String.t() | nil}
-  defp agent_model_attrs(%{"_target" => ["harness" | _]} = params) do
-    %{"harness" => nilify_blank(params["harness"]), "provider" => nil, "model" => nil}
+  # Cascade an agent-models row change, driven by an *actual* value change against
+  # the tier's currently-stored entry (`stored`) — not merely by which input fired.
+  # Changing the harness clears provider+model; changing the provider clears model;
+  # a no-op `change` event (LiveView reconnect reconciliation, or re-picking the same
+  # option) preserves the stored downstream fields so a saved model is never wiped.
+  @spec agent_model_attrs(map(), map()) :: %{optional(String.t()) => String.t() | nil}
+  defp agent_model_attrs(%{"_target" => ["harness" | _]} = params, stored) do
+    submitted = nilify_blank(params["harness"])
+
+    if submitted == stored[:harness] do
+      # Harness unchanged: spurious cascade. Keep the stored row intact.
+      %{
+        "harness" => stored[:harness],
+        "provider" => stored[:provider],
+        "model" => stored[:model]
+      }
+    else
+      %{"harness" => submitted, "provider" => nil, "model" => nil}
+    end
   end
 
-  defp agent_model_attrs(%{"_target" => ["provider" | _]} = params) do
+  defp agent_model_attrs(%{"_target" => ["provider" | _]} = params, stored) do
+    submitted = nilify_blank(params["provider"])
+
     %{
       "harness" => nilify_blank(params["harness"]),
-      "provider" => nilify_blank(params["provider"]),
-      "model" => nil
+      "provider" => submitted,
+      # Provider unchanged: keep the stored model; otherwise clear the now-invalid model.
+      "model" => if(submitted == stored[:provider], do: stored[:model], else: nil)
     }
   end
 
-  defp agent_model_attrs(params) do
+  defp agent_model_attrs(params, _stored) do
     %{
       "harness" => nilify_blank(params["harness"]),
       "provider" => nilify_blank(params["provider"]),
@@ -1531,7 +1571,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
      socket
      |> add_cost(event.cost_usd)
      |> add_agent_cost(agent_id, event.cost_usd)
-     |> put_context(agent_id, event.input_tokens + event.output_tokens)
+     |> put_context(agent_id, context_size(event))
      |> record_event(
        agent_id,
        %{
@@ -1955,6 +1995,21 @@ defmodule RepoBuilderWeb.ConsoleLive do
   defp counter_key(:thinking), do: :thinking
   defp counter_key(:hook), do: :hooks
 
+  # Context-window occupancy of a live usage event: the prompt side only
+  # (`input + cache_read + cache_creation`, nil-safe). `cache_read` dominates a
+  # resumed Claude prompt, so counting only `input+output` left the bar dead for
+  # exactly the long sessions where it matters. Mirrors `Logs.context_size/1`.
+  @spec context_size(Event.Usage.t()) :: non_neg_integer()
+  defp context_size(%Event.Usage{} = event) do
+    nz(event.input_tokens) + nz(event.cache_read) + nz(event.cache_creation)
+  end
+
+  # Nil-safe non-negative-integer coalesce; the guard keeps the sum integral so the
+  # context bar's `non_neg_integer()` contract holds (cache fields may be nil).
+  @spec nz(integer() | nil) :: non_neg_integer()
+  defp nz(n) when is_integer(n) and n >= 0, do: n
+  defp nz(_n), do: 0
+
   @spec put_context(Phoenix.LiveView.Socket.t(), String.t(), non_neg_integer()) ::
           Phoenix.LiveView.Socket.t()
   defp put_context(socket, agent_id, tokens),
@@ -2252,6 +2307,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
         adw_steps={@adw_steps}
         adw_name={@adw_name}
         adw_local?={@adw_local?}
+        agents={@agents}
+        statuses={@statuses}
       />
 
       <.dir_picker_modal
