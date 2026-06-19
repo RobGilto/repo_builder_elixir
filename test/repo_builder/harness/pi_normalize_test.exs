@@ -10,6 +10,23 @@ defmodule RepoBuilder.Harness.PiNormalizeTest do
     %{frames: HarnessFixtures.frames("pi_stream.jsonl")}
   end
 
+  test "cache tokens contribute to the derived cost when a price table is supplied" do
+    ctx = %{harness: :pi, model: "glm-4.6", price_table: %{"glm-4.6" => 6.0}}
+
+    base = %{"type" => "turn_end", "message" => %{"usage" => %{"input" => 10, "output" => 5}}}
+
+    cached =
+      put_in(base["message"]["usage"]["cache_read"], 1_000_000)
+
+    assert {:ok, [%Event.Usage{cost_usd: base_cost}]} = Pi.normalize(base, ctx)
+    assert {:ok, [%Event.Usage{cost_usd: cached_cost}]} = Pi.normalize(cached, ctx)
+    assert cached_cost > base_cost
+
+    # Unpriced still yields nil even with cache tokens present.
+    assert {:ok, [%Event.Usage{cost_usd: nil}]} =
+             Pi.normalize(cached, %{harness: :pi, model: "x", price_table: %{}})
+  end
+
   test "command/1 builds the --mode json argv" do
     {exe, args, _env, ctx} = Pi.command(%{prompt: "go", model: nil, cwd: ".", sink: self()})
     assert exe == "pi"

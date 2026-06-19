@@ -14,6 +14,7 @@ defmodule RepoBuilder.Workflows.WorkflowRun do
   @type t :: %__MODULE__{
           id: Ecto.UUID.t() | nil,
           workflow_id: Ecto.UUID.t() | nil,
+          orchestrator_id: Ecto.UUID.t() | nil,
           status: status() | nil,
           current_step: String.t() | nil,
           artifacts: map(),
@@ -28,6 +29,9 @@ defmodule RepoBuilder.Workflows.WorkflowRun do
 
   schema "workflow_runs" do
     field :workflow_id, :binary_id
+    # The orchestrator that launched this run (issue-fallback), or nil when not
+    # orchestrator-launched. Drives the terminal holding-pattern resume emit.
+    field :orchestrator_id, :binary_id
     field :status, Ecto.Enum, values: @statuses, default: :queued
     field :current_step, :string
     field :artifacts, :map, default: %{}
@@ -47,6 +51,7 @@ defmodule RepoBuilder.Workflows.WorkflowRun do
     run
     |> cast(params, [
       :workflow_id,
+      :orchestrator_id,
       :status,
       :current_step,
       :artifacts,
@@ -55,5 +60,6 @@ defmodule RepoBuilder.Workflows.WorkflowRun do
     ])
     |> validate_required([:workflow_id, :status])
     |> foreign_key_constraint(:workflow_id)
+    |> foreign_key_constraint(:orchestrator_id)
   end
 end

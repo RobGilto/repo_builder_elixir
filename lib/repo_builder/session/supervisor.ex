@@ -8,19 +8,35 @@ defmodule RepoBuilder.Session.Supervisor do
   `Session.Server` child (releasing the slot if the start itself fails). All
   targeting (`stop`, `send_stdin`, `interrupt`) is by the registered agent id.
   """
+  alias RepoBuilder.Budget
+  alias RepoBuilder.Budget.Scope
   alias RepoBuilder.Session.{Admission, Server}
 
   @sup RepoBuilder.SessionSupervisor
   @registry RepoBuilder.SessionRegistry
 
-  @type start_error :: :at_capacity | term()
+  @type start_error :: :at_capacity | {:budget_exceeded, Budget.Cap.t()} | term()
 
   @doc """
   Start a live session for `opts` (`:agent_id`, `:harness`, `:prompt`, and the
   optional `:session_id`/`:model`/`:config`/`:secrets`/`:agent_db_id`).
+
+  Before acquiring an admission slot it consults the budget breaker
+  (issue-budget-guardrails) for the session's scopes (global + any
+  `:orchestrator_id`/`:workflow_run_id` in `opts`); a tripped `:pause`/`:hard_stop`
+  cap refuses the start with `{:error, {:budget_exceeded, cap}}` (an `:alert` cap never
+  refuses, preserving back-compat).
   """
   @spec start_session(keyword()) :: {:ok, pid()} | {:error, start_error()}
   def start_session(opts) do
+    case Budget.Guard.check(scopes_for(opts)) do
+      :ok -> acquire_and_start(opts)
+      {:error, _budget} = error -> error
+    end
+  end
+
+  @spec acquire_and_start(keyword()) :: {:ok, pid()} | {:error, start_error()}
+  defp acquire_and_start(opts) do
     case Admission.acquire() do
       :ok ->
         case DynamicSupervisor.start_child(@sup, {Server, opts}) do
@@ -39,6 +55,14 @@ defmodule RepoBuilder.Session.Supervisor do
       {:error, :at_capacity} = error ->
         error
     end
+  end
+
+  @spec scopes_for(keyword()) :: [Scope.scope_ref()]
+  defp scopes_for(opts) do
+    Scope.scopes_for(%{
+      orchestrator_id: opts[:orchestrator_id],
+      workflow_run_id: opts[:workflow_run_id]
+    })
   end
 
   @doc "Stop a live session by agent id."

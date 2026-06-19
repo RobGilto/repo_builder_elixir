@@ -28,7 +28,7 @@ defmodule RepoBuilder.Session.BroadcastFeedTest do
     assert_receive {:harness_event, %Event.Done{}}, 5_000
 
     # The global console feed received nothing for this agent.
-    refute_received {:agent_event, ^agent_id, _event, _seq_no}
+    refute_received {:agent_event, ^agent_id, _event, _log_no}
 
     # And nothing was persisted for it.
     refute Enum.any?(Logs.list_recent_global(500, true), fn log ->
@@ -49,6 +49,6 @@ defmodule RepoBuilder.Session.BroadcastFeedTest do
         model: "fake-model-1"
       )
 
-    assert_receive {:agent_event, ^agent_id, _event, _seq_no}, 5_000
+    assert_receive {:agent_event, ^agent_id, _event, _log_no}, 5_000
   end
 end

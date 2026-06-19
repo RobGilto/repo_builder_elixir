@@ -39,7 +39,7 @@ defmodule RepoBuilder.Orchestrator.ServerTest do
     assert is_binary(agent_id)
 
     # Orchestrator text streams onto the global console feed.
-    assert_receive {:agent_event, ^agent_id, %Event.TextDelta{}, _seq_no}, 5_000
+    assert_receive {:agent_event, ^agent_id, %Event.TextDelta{}, _log_no}, 5_000
 
     # The in-process tool dispatch creates a worker and announces it on the feed.
     assert_receive {:agent_created, worker}, 5_000
@@ -51,7 +51,7 @@ defmodule RepoBuilder.Orchestrator.ServerTest do
 
     # command_agent dispatched a session for the worker — its events also reach the
     # global feed under the worker's id (a different agent id than the orchestrator).
-    assert_receive {:agent_event, worker_event_id, %Event.SessionStarted{}, _seq_no}
+    assert_receive {:agent_event, worker_event_id, %Event.SessionStarted{}, _log_no}
                    when worker_event_id != agent_id,
                    5_000
   end

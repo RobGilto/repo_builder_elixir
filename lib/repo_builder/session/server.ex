@@ -29,7 +29,6 @@ defmodule RepoBuilder.Session.Server do
   alias RepoBuilder.Harness.Event
   alias RepoBuilder.Harness.McpTools
   alias RepoBuilder.Harness.Registry, as: HarnessRegistry
-  alias RepoBuilder.Logs.AgentLog
   alias RepoBuilder.OsPidLedger
   alias RepoBuilder.Session.Admission
 
@@ -160,7 +159,7 @@ defmodule RepoBuilder.Session.Server do
   # default, with the operator-editable `model_prices` catalog merged OVER it so edits
   # in the Cost Center tab affect future cost without a redeploy (issue-cost-center). A
   # pure read; any error falls back to the config table so a session start never crashes.
-  @spec resolve_price_table(String.t(), map()) :: %{optional(String.t()) => number()}
+  @spec resolve_price_table(String.t(), map()) :: RepoBuilder.Harness.Pricing.price_table()
   defp resolve_price_table(harness, config) do
     config_table = Map.get(config, :price_table, %{})
 
@@ -348,7 +347,13 @@ defmodule RepoBuilder.Session.Server do
     bin = state.buf <> chunk
 
     if no_newline?(bin) and byte_size(bin) > state.max_line_bytes do
-      state = dispatch(error_event(state, "stdout overflow", :provider_error), state)
+      Logger.warning(
+        "session #{state.session_id}: stdout overflow — single line exceeded " <>
+          "#{state.max_line_bytes} bytes; killing child"
+      )
+
+      message = "stdout overflow (line exceeded #{state.max_line_bytes} bytes)"
+      state = dispatch(error_event(state, message, :provider_error), state)
       _ = :exec.stop(os_pid)
       {:stop, :normal, %{state | buf: ""}}
     else
@@ -443,44 +448,60 @@ defmodule RepoBuilder.Session.Server do
 
   @spec dispatch(Event.t(), State.t()) :: State.t()
   defp dispatch(event, %State{agent_id: agent_id} = state) do
-    # Persist the REDACTED event (Logs.persist_event scrubs `raw`); broadcast the FULL
-    # event for the live UI (§4.1). Persistence only applies when the session is tied
-    # to a durable agent row. Capture the inserted log so the global feed can carry its
-    # durable `seq_no` (the `log-<n>` drilldown number).
-    log =
-      if state.agent_db_id do
-        update_status_quietly(event, state)
-        if persist?(event), do: persist_quietly(event, state)
-      end
-
-    # Independent orchestrator persistence gate (issue-d): an orchestrator session
-    # carries `orchestrator_db_id` (never `agent_db_id`), so its events persist to
-    # `agent_logs` keyed by `orchestrator_id` — observability parity with workers,
-    # with the worker path above untouched.
-    log =
-      if state.orchestrator_db_id && persist?(event) do
-        persist_orchestrator_quietly(event, state)
-      else
-        log
-      end
-
-    seq_no = log && log.seq_no
-
-    # The per-agent topic broadcast is UNCONDITIONAL: it is the private channel an
-    # ephemeral run (issue-explain, `broadcast_feed?: false`) subscribes to observe
-    # its own output. Only the global feed + swimlanes below are gated.
+    # The per-agent topic broadcast is UNCONDITIONAL and FIRST: it serves the
+    # timing-sensitive subscribers (Orchestrator.Server + the focused agent view) and
+    # the ephemeral run (issue-explain, `broadcast_feed?: false`) observing its own
+    # output — none of which need the DB. It must never wait on a write.
     _ = Phoenix.PubSub.broadcast(@pubsub, "agent:#{agent_id}:events", {:harness_event, event})
 
+    # Persistence (REDACTED row via Logs.persist_event) + the `log_no`-bearing global
+    # feed broadcast move OFF this hot path to a per-row async writer (issue
+    # hot-path-writes Part A): a slow/contended `agent_logs` insert no longer
+    # head-of-line-blocks this serial session's next event. Same durable row → same
+    # writer partition → FIFO `log_no`; different rows persist in parallel. The
+    # broadcast_feed? gate is applied inside the writer.
+    _ = Logs.Writer.record(record_for(event, state))
+
+    # Lifecycle-only swimlane updates stay synchronous here (start/terminal, rare).
     if state.broadcast_feed? do
-      # Additive global feed for the multi-layered console (§9): one unified stream
-      # across all agents. Per-agent topic above is unchanged.
-      _ = RepoBuilder.Dashboard.broadcast_event(agent_id, event, seq_no)
       _ = maybe_broadcast_lane(event, state)
     end
 
     _ = maybe_emit_worker_terminal(event, state)
     %{state | saw_output?: true, saw_terminal?: state.saw_terminal? or terminal?(event)}
   end
+
+  # Build the deferred-persistence Record cast to the per-row Logs.Writer. The durable
+  # target is an agent row (`agent_db_id`) OR an orchestrator row (`orchestrator_db_id`)
+  # — exactly one is present (app-enforced); a session with neither (ephemeral) persists
+  # nothing but may still broadcast to the global feed.
+  @spec record_for(Event.t(), State.t()) :: Logs.Writer.Record.t()
+  defp record_for(event, %State{} = state) do
+    %Logs.Writer.Record{
+      event: event,
+      agent_id: state.agent_id,
+      broadcast_feed?: state.broadcast_feed?,
+      persist: persist_target(state)
+    }
+  end
+
+  @spec persist_target(State.t()) :: {:agent | :orchestrator, map()} | nil
+  defp persist_target(%State{agent_db_id: id} = state) when is_binary(id) do
+    {:agent,
+     %{agent_id: id, session_id: state.session_id, provider: state.provider, model: state.model}}
+  end
+
+  defp persist_target(%State{orchestrator_db_id: id} = state) when is_binary(id) do
+    {:orchestrator,
+     %{
+       orchestrator_id: id,
+       session_id: state.session_id,
+       provider: state.provider,
+       model: state.model
+     }}
+  end
+
+  defp persist_target(_state), do: nil
 
   # Holding pattern (issue message-queue): when a WORKER session (one tied to a durable
   # agent row) reaches a terminal event, signal the owning orchestrator's Queue on
@@ -528,7 +549,7 @@ defmodule RepoBuilder.Session.Server do
   defp maybe_broadcast_lane(%Event.Error{}, state), do: lane(state, :failed, state.session_id)
   defp maybe_broadcast_lane(_event, _state), do: :ok
 
-  @spec lane(State.t(), atom(), String.t()) :: :ok
+  @spec lane(State.t(), :running | :succeeded | :failed, String.t()) :: :ok
   defp lane(state, status, label) do
     RepoBuilder.Dashboard.broadcast_lane(%{
       id: "agent:#{state.agent_id}",
@@ -537,73 +558,6 @@ defmodule RepoBuilder.Session.Server do
       status: status,
       harness: to_string(state.harness)
     })
-  end
-
-  # Token-level partial text deltas are broadcast for the live UI but never written
-  # to `agent_logs` (§4) — so an N-token turn persists exactly one finalized row and
-  # reconnect backfill renders one clean message instead of replaying token shards.
-  @spec persist?(Event.t()) :: boolean()
-  defp persist?(%Event.TextDelta{partial?: true}), do: false
-  defp persist?(_event), do: true
-
-  # Returns the inserted log so the global feed can broadcast its durable `seq_no`;
-  # any failure (changeset error, rescue, catch) degrades to `nil` → the drilldown
-  # shows "—" for that row, never crashing the dispatch path.
-  @spec persist_quietly(Event.t(), State.t()) :: AgentLog.t() | nil
-  defp persist_quietly(event, %State{} = state) do
-    case Logs.persist_event(event, %{
-           agent_id: state.agent_db_id,
-           session_id: state.session_id,
-           provider: state.provider,
-           model: state.model
-         }) do
-      {:ok, %AgentLog{} = log} -> log
-      {:error, _changeset} -> nil
-    end
-  rescue
-    error ->
-      Logger.warning("persist_event failed: #{inspect(error)}")
-      nil
-  catch
-    _kind, _reason -> nil
-  end
-
-  @spec persist_orchestrator_quietly(Event.t(), State.t()) :: AgentLog.t() | nil
-  defp persist_orchestrator_quietly(event, %State{} = state) do
-    case Logs.persist_orchestrator_event(event, %{
-           orchestrator_id: state.orchestrator_db_id,
-           session_id: state.session_id,
-           provider: state.provider,
-           model: state.model
-         }) do
-      {:ok, %AgentLog{} = log} -> log
-      {:error, _changeset} -> nil
-    end
-  rescue
-    error ->
-      Logger.warning("persist_orchestrator_event failed: #{inspect(error)}")
-      nil
-  catch
-    _kind, _reason -> nil
-  end
-
-  @spec update_status_quietly(Event.t(), State.t()) :: :ok
-  defp update_status_quietly(event, %State{agent_db_id: agent_id}) do
-    status =
-      case event do
-        %Event.SessionStarted{} -> :running
-        %Event.Done{ok: true} -> :idle
-        %Event.Done{ok: false} -> :error
-        %Event.Error{} -> :error
-        _ -> nil
-      end
-
-    _ = if status, do: Agents.set_status(agent_id, status)
-    :ok
-  rescue
-    _error -> :ok
-  catch
-    _kind, _reason -> :ok
   end
 
   @spec terminal?(Event.t()) :: boolean()

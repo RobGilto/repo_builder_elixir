@@ -448,4 +448,32 @@ And **never** do this:
 - **Never** use `<.form let={f} ...>` in the template, instead **always use `<.form for={@form} ...>`**, then drive all form references from the form assign as in `@form[:field]`. The UI should **always** be driven by a `to_form/2` assigned in the LiveView module that is derived from a changeset
 <!-- phoenix:liveview-end -->
 
+## Troubleshooting: finding a log by its number
+
+Every persisted canonical event is one `agent_logs` row carrying a durable,
+human-readable identifier `log_no`, rendered in the console event-detail drilldown as
+`log-<n>` (e.g. `log-12`). The name is the **same end-to-end** — DB column, Ecto field
+(`RepoBuilder.Logs.AgentLog.log_no`), the global feed broadcast, and the UI all use
+`log_no`. (Partial `text_delta` token shards are never persisted, so they have no
+`log_no` and render `"—"`.)
+
+All `agent_logs` access goes through the `RepoBuilder.Logs` context (§8) — a
+LiveView/controller/OTP process **never** touches `Repo`/`Ecto.Query` directly.
+
+To find a log by its `log-<n>` number at runtime (via Tidewave):
+
+- `execute_sql_query`:
+  ```sql
+  SELECT log_no, agent_id, orchestrator_id, event_type, inserted_at
+    FROM agent_logs WHERE log_no = <n>;
+  ```
+- `project_eval`:
+  ```elixir
+  RepoBuilder.Logs.list_recent_global(50) |> Enum.map(&{&1.log_no, &1.event_type})
+  RepoBuilder.Logs.log_label(<n>)   # => "log-<n>" (or "—" for nil)
+  ```
+
+Where it surfaces in the UI: the **event-detail drilldown panel** (open by clicking a
+stream square). It is deliberately **not** shown in the center stream, chat, or roster.
+
 <!-- usage-rules-end -->

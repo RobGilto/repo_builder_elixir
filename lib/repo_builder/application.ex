@@ -23,6 +23,13 @@ defmodule RepoBuilder.Application do
       # FileSystem, and broadcasts changes over PubSub. After PubSub (it broadcasts),
       # independent of Repo. The watcher/poll loop is disabled in test config.
       RepoBuilder.Definitions,
+      # Off-hot-path canonical-event persistence (issue hot-path-writes Part A): a
+      # PartitionSupervisor of Logs.Writer GenServers. Session.Server.dispatch/2 fans
+      # out the per-agent broadcast synchronously then casts persistence here, so a slow
+      # `agent_logs` insert never head-of-line-blocks the next event. After Repo/PubSub
+      # (it persists + broadcasts), before the session runtime that casts to it.
+      {PartitionSupervisor,
+       child_spec: RepoBuilder.Logs.Writer, name: RepoBuilder.LogsWriterSupervisor},
       # Durable jobs / cron / webhook triggers (needs Repo).
       {Oban, Application.fetch_env!(:repo_builder, Oban)},
       # --- Live session runtime (BUILD_PROMPT.md §5), after PubSub / before Endpoint ---
@@ -30,6 +37,10 @@ defmodule RepoBuilder.Application do
       {Registry, keys: :unique, name: RepoBuilder.SessionRegistry},
       # Live-session concurrency gate (admission control).
       RepoBuilder.Session.Admission,
+      # Live budget circuit breaker (issue-budget-guardrails): loads caps + reconciles
+      # spent-so-far from CostCenter on init, so it starts AFTER Repo and before the
+      # Endpoint. Enforcement fails open if it is mid-restart.
+      RepoBuilder.Budget.Guard,
       # One :temporary child per live harness session; max_children bounds OS pids/fds.
       {DynamicSupervisor,
        name: RepoBuilder.SessionSupervisor,

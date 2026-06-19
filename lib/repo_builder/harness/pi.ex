@@ -350,21 +350,32 @@ defmodule RepoBuilder.Harness.Pi do
       in_tokens = input || 0
       out_tokens = output || 0
 
+      cache_read =
+        first_present_int(usage, ["cache_read", "cacheRead", "cache_read_input_tokens"])
+
+      cache_creation =
+        first_present_int(usage, ["cache_creation", "cacheWrite", "cache_creation_input_tokens"])
+
+      derived =
+        Pricing.derive(
+          Map.get(ctx, :model),
+          %{
+            input: in_tokens,
+            output: out_tokens,
+            cache_read: cache_read,
+            cache_creation: cache_creation
+          },
+          Map.get(ctx, :price_table, %{})
+        )
+
       %Event.Usage{
         harness: :pi,
         input_tokens: in_tokens,
         output_tokens: out_tokens,
-        cache_read:
-          first_present_int(usage, ["cache_read", "cacheRead", "cache_read_input_tokens"]),
-        cache_creation:
-          first_present_int(usage, ["cache_creation", "cacheWrite", "cache_creation_input_tokens"]),
-        cost_usd:
-          Pricing.derive(
-            Map.get(ctx, :model),
-            in_tokens,
-            out_tokens,
-            Map.get(ctx, :price_table, %{})
-          ),
+        cache_read: cache_read,
+        cache_creation: cache_creation,
+        cost_usd: derived,
+        estimated_cost_usd: derived,
         raw: raw
       }
     end

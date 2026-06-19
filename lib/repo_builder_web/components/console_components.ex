@@ -102,10 +102,17 @@ defmodule RepoBuilderWeb.ConsoleComponents do
         <.stat_pill id="stat-running" label="Running" value={@running_count} />
         <.stat_pill id="stat-logs" label="Logs" value={@log_count} />
         <.stat_pill id="stat-ws" label="WS Events" value={@ws_count} />
-        <span id="stat-cost" class="cns-pill">
+        <button
+          type="button"
+          id="stat-cost"
+          phx-click={show_budget()}
+          class="cns-pill"
+          style="cursor: pointer"
+          title="Budget guardrails"
+        >
           <span class="cns-pill__label">Cost</span>
           <.cost_badge cost={@cost} />
-        </span>
+        </button>
       </div>
 
       <div class="flex items-center gap-3">
@@ -133,7 +140,12 @@ defmodule RepoBuilderWeb.ConsoleComponents do
           phx-change="set_provider"
           title="Orchestrator provider"
         >
-          <select id="orchestrator-provider" name="provider" class="cns-chip">
+          <select
+            id="orchestrator-provider"
+            name="provider"
+            class="cns-chip"
+            aria-label="Orchestrator provider"
+          >
             <option value="" selected={@orchestrator_provider in [nil, ""]}>provider…</option>
             <option
               :for={p <- @provider_options}
@@ -146,7 +158,13 @@ defmodule RepoBuilderWeb.ConsoleComponents do
         </form>
 
         <form id="orchestrator-model-form" phx-change="set_model" title="Orchestrator model">
-          <select id="orchestrator-model" name="model" class="cns-chip" style="width: 11rem">
+          <select
+            id="orchestrator-model"
+            name="model"
+            class="cns-chip"
+            style="width: 11rem"
+            aria-label="Orchestrator model"
+          >
             <option value="" selected={@orchestrator_model in [nil, ""]}>model…</option>
             <optgroup :if={@model_extra != []} label="Current">
               <option :for={m <- @model_extra} value={m} selected>{m}</option>
@@ -223,6 +241,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   attr :harness, :string, default: nil
   attr :model, :string, default: nil
   attr :cost, :any, default: nil
+  attr :estimate, :any, default: nil, doc: "token-derived live cost estimate (display-only)"
   attr :color, :string, required: true, doc: "the agent's deterministic hex color"
   attr :selected?, :boolean, default: false
   attr :pulse?, :boolean, default: false
@@ -288,7 +307,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
         style="color: var(--cns-text-2)"
       >
         <span class="truncate">{@model || @harness || "—"}</span>
-        <.cost_badge cost={@cost} />
+        <.cost_badge cost={@cost} estimated={@estimate} />
       </div>
     </button>
     """
@@ -485,9 +504,17 @@ defmodule RepoBuilderWeb.ConsoleComponents do
         checked={@selected?}
         phx-click="toggle_select"
         phx-value-id={@id}
+        data-row-id={@id}
         aria-label={"Select log row #{@id}"}
       />
-      <span class="cns-event-row__ln" title="durable log number">
+      <%!-- Fixed-width log chip: the visible text truncates (CSS), but the full
+      `log-#{@log_no}` rides on `data-log` (for the LogCopy hook) and `title` (hover).
+      Emit `data-log` only for real log numbers so the hook ignores `@line` fallbacks. --%>
+      <span
+        class="cns-event-row__ln"
+        data-log={if @log_no, do: "log-#{@log_no}"}
+        title={if @log_no, do: "log-#{@log_no}", else: "durable log number"}
+      >
         {if @log_no, do: "log-#{@log_no}", else: @line}
       </span>
       <span class={["cns-cat", "cns-cat--#{@category}"]}>{category_label(@category)}</span>
@@ -712,6 +739,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
 
   attr :chat_width, :atom, default: :sm, values: [:sm, :md, :lg]
   attr :cost, :any, default: nil
+  attr :estimate, :any, default: nil, doc: "token-derived live cost estimate (display-only)"
   attr :typing?, :boolean, default: false
   attr :auto_follow?, :boolean, default: true
   slot :messages, doc: "rendered chat bubbles"
@@ -729,7 +757,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
           ORCHESTRATOR <.activity_orb variant={:orchestrator} active?={@typing?} />
         </span>
         <div class="flex items-center gap-2">
-          <.cost_badge cost={@cost} />
+          <.cost_badge cost={@cost} estimated={@estimate} />
           <div class="cns-toggle">
             <button
               :for={w <- [:sm, :md, :lg]}
@@ -749,6 +777,9 @@ defmodule RepoBuilderWeb.ConsoleComponents do
         id="chat-log"
         phx-hook="AutoScroll"
         data-auto-follow={to_string(@auto_follow?)}
+        tabindex="0"
+        role="log"
+        aria-label="Chat log"
         class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-1"
       >
         {render_slot(@messages)}
@@ -954,6 +985,14 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   @spec hide_settings(JS.t()) :: JS.t()
   def hide_settings(js \\ %JS{}), do: JS.hide(js, to: "#settings-modal")
 
+  @doc "Open the budget modal (client-side; always in the DOM, just hidden)."
+  @spec show_budget(JS.t()) :: JS.t()
+  def show_budget(js \\ %JS{}), do: JS.show(js, to: "#budget-modal", display: "flex")
+
+  @doc "Close the budget modal (client-side)."
+  @spec hide_budget(JS.t()) :: JS.t()
+  def hide_budget(js \\ %JS{}), do: JS.hide(js, to: "#budget-modal")
+
   attr :settings_tab, :atom,
     default: :general,
     values: [:general, :appearance, :about, :prompt, :templates, :cost_center]
@@ -997,19 +1036,22 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     <div
       id="settings-modal"
       class="cns-cmd-overlay"
-      style="display:none"
+      style="display:none; align-items: center"
       phx-window-keydown={hide_settings()}
       phx-key="Escape"
     >
-      <div class="cns-cmd-panel" style="max-width: 44rem">
-        <div class="mb-3 flex items-center justify-between">
+      <div
+        class="cns-cmd-panel flex flex-col"
+        style="max-width: 48rem; height: 80vh; margin-bottom: 0; overflow: hidden"
+      >
+        <div class="mb-3 flex shrink-0 items-center justify-between">
           <span class="text-xs font-semibold" style="color: var(--cns-cyan)">SETTINGS</span>
           <button type="button" phx-click={hide_settings()} class="cns-chip">Done</button>
         </div>
 
-        <div class="flex gap-4" style="min-height: 16rem">
+        <div class="flex min-h-0 flex-1 gap-4" style="min-height: 16rem">
           <nav
-            class="flex w-36 shrink-0 flex-col gap-1 border-r pr-2"
+            class="cns-no-scrollbar flex w-36 shrink-0 flex-col gap-1 overflow-y-auto border-r pr-2"
             style="border-color: var(--cns-border)"
           >
             <.settings_tab_button tab={:general} active={@settings_tab} label="General" />
@@ -1020,7 +1062,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
             <.settings_tab_button tab={:about} active={@settings_tab} label="About" />
           </nav>
 
-          <div class="min-w-0 flex-1">
+          <div class="cns-no-scrollbar min-w-0 flex-1 overflow-y-auto pr-1">
             <div :if={@settings_tab == :general} class="flex flex-col gap-4">
               <.settings_field label="View mode">
                 <div id="settings-view-toggle" class="cns-toggle" phx-click="toggle_view">
@@ -1696,7 +1738,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
             <th class="py-1 pr-2 text-right font-medium">In</th>
             <th class="py-1 pr-2 text-right font-medium">Out</th>
             <th class="py-1 pr-2 text-right font-medium">Source</th>
-            <th class="py-1"></th>
+            <th class="py-1"><span class="sr-only">Actions</span></th>
           </tr>
         </thead>
         <tbody>
@@ -1738,6 +1780,274 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     </div>
     """
   end
+
+  # --- budget guardrails (issue-budget-guardrails) ---
+
+  attr :state, :map, required: true, doc: "Budget.Guard.snapshot/0 result"
+
+  @doc "Compact spend/cap budget badge — color-coded by the worst breaker state."
+  @spec budget_badge(map()) :: Phoenix.LiveView.Rendered.t()
+  def budget_badge(assigns) do
+    assigns = assign(assigns, :worst, budget_worst_state(assigns.state))
+
+    ~H"""
+    <span
+      id="budget-badge"
+      class="badge badge-outline"
+      data-budget-state={to_string(@worst)}
+      title="Budget guardrails"
+    >
+      <%= case @worst do %>
+        <% :tripped -> %>
+          ⛔ budget
+        <% :warning -> %>
+          ⚠ budget
+        <% _ -> %>
+          ✓ budget
+      <% end %>
+    </span>
+    """
+  end
+
+  attr :state, :map, required: true
+
+  @doc """
+  Tripped/kill-switch banner — rendered only when the kill switch is engaged or a cap is
+  tripped. Names the offending cap(s) and offers a per-cap reset affordance.
+  """
+  @spec budget_banner(map()) :: Phoenix.LiveView.Rendered.t()
+  def budget_banner(assigns) do
+    assigns = assign(assigns, :tripped, Enum.filter(assigns.state.caps, &(&1.state == :tripped)))
+
+    ~H"""
+    <div
+      :if={@state.kill_switch? or @tripped != []}
+      id="budget-banner"
+      class="flex flex-col gap-1 border px-3 py-2 text-[0.75rem]"
+      style="border-color: #b91c1c; background: rgba(185,28,28,0.12); color: #fca5a5"
+    >
+      <div :if={@state.kill_switch?} class="font-semibold">
+        🛑 KILL SWITCH ENGAGED — all new spend is blocked and live sessions were interrupted.
+      </div>
+      <div :for={row <- @tripped} class="flex items-center justify-between gap-2">
+        <span>
+          ⛔ {budget_scope_label(row.cap)} budget tripped — spent {budget_cost(row.spent)} of {budget_cost(
+            row.cap.limit_usd
+          )} ({budget_action_label(row.cap.action)})
+        </span>
+        <button
+          type="button"
+          id={"budget-reset-#{row.cap.id}"}
+          phx-click="reset_budget"
+          phx-value-id={row.cap.id}
+          class="cns-chip"
+        >
+          Reset
+        </button>
+      </div>
+    </div>
+    """
+  end
+
+  attr :state, :map, required: true
+
+  @doc "The manual global kill-switch button (engage / release)."
+  @spec kill_switch(map()) :: Phoenix.LiveView.Rendered.t()
+  def kill_switch(assigns) do
+    ~H"""
+    <button
+      type="button"
+      id="kill-switch"
+      phx-click="toggle_kill_switch"
+      data-engaged={to_string(@state.kill_switch?)}
+      class="cns-chip"
+      style={if @state.kill_switch?, do: "color: #fca5a5; border-color: #b91c1c", else: ""}
+    >
+      {if @state.kill_switch?, do: "Release kill switch", else: "🛑 Kill switch"}
+    </button>
+    """
+  end
+
+  attr :state, :map, required: true
+  attr :caps, :list, required: true, doc: "all caps (Budget.list_caps/0) for the table"
+  attr :form, :any, required: true
+
+  @doc """
+  Budget guardrails as a popup modal (opened from the header `#stat-cost` pill). Shown
+  and hidden client-side like the other console modals; wraps the existing live
+  `budget_badge` + `budget_panel` so there is a single source of truth for the markup.
+  """
+  @spec budget_modal(map()) :: Phoenix.LiveView.Rendered.t()
+  def budget_modal(assigns) do
+    ~H"""
+    <div
+      id="budget-modal"
+      class="cns-cmd-overlay"
+      style="display:none"
+      phx-window-keydown={hide_budget()}
+      phx-key="Escape"
+    >
+      <div class="cns-cmd-panel" style="max-width: 40rem">
+        <div class="mb-3 flex items-center justify-between">
+          <span class="text-xs font-semibold" style="color: var(--cns-cyan)">BUDGET</span>
+          <div class="flex items-center gap-2">
+            <.budget_badge state={@state} />
+            <button type="button" phx-click={hide_budget()} class="cns-chip">Done</button>
+          </div>
+        </div>
+
+        <.budget_panel state={@state} caps={@caps} form={@form} />
+      </div>
+    </div>
+    """
+  end
+
+  attr :state, :map, required: true
+  attr :caps, :list, required: true, doc: "all caps (Budget.list_caps/0) for the table"
+  attr :form, :any, required: true
+
+  @doc """
+  Budget panel: live spend-vs-cap progress bars + a create/edit form + per-cap delete.
+  Caps CRUD goes through the `RepoBuilder.Budget` context (the web layer never touches
+  `Repo`); spend bars reflect the live `Budget.Guard` snapshot.
+  """
+  @spec budget_panel(map()) :: Phoenix.LiveView.Rendered.t()
+  def budget_panel(assigns) do
+    ~H"""
+    <div id="budget-panel" class="flex flex-col gap-2">
+      <div class="flex items-center justify-between">
+        <span class="text-[0.625rem] font-semibold uppercase" style="color: var(--cns-text-2)">
+          Budget guardrails
+        </span>
+        <.kill_switch state={@state} />
+      </div>
+
+      <div :if={@state.caps == []} class="text-[0.625rem]" style="color: var(--cns-text-2)">
+        No budget caps yet — spend is unbounded. Add a cap below.
+      </div>
+
+      <div :for={row <- @state.caps} id={"budget-cap-#{row.cap.id}"} class="flex flex-col gap-0.5">
+        <div class="flex items-center justify-between text-[0.6875rem]">
+          <span>{budget_scope_label(row.cap)} · {row.cap.period} · {budget_action_label(
+            row.cap.action
+          )}</span>
+          <span data-budget-state={to_string(row.state)}>
+            {budget_cost(row.spent)} / {budget_cost(row.cap.limit_usd)}
+          </span>
+        </div>
+        <div class="h-1.5 w-full overflow-hidden rounded" style="background: var(--cns-border)">
+          <div
+            class="h-full"
+            style={"width: #{budget_pct(row.ratio)}%; background: #{budget_bar_color(row.state)}"}
+          />
+        </div>
+      </div>
+
+      <.form
+        :if={@form}
+        id="budget-form"
+        for={@form}
+        phx-submit="save_budget"
+        class="flex flex-wrap items-end gap-2"
+      >
+        <.input
+          field={@form[:scope]}
+          label="Scope"
+          type="select"
+          options={[{"Global", "global"}, {"Orchestrator", "orchestrator"}, {"Workflow", "workflow"}]}
+          class="cns-input w-28"
+        />
+        <.input field={@form[:scope_id]} label="Scope id" class="cns-input w-32" />
+        <.input
+          field={@form[:period]}
+          label="Period"
+          type="select"
+          options={[{"Total", "total"}, {"Daily", "daily"}, {"Monthly", "monthly"}]}
+          class="cns-input w-24"
+        />
+        <.input
+          field={@form[:limit_usd]}
+          label="Limit $"
+          type="number"
+          step="any"
+          class="cns-input w-24"
+        />
+        <.input
+          field={@form[:action]}
+          label="Action"
+          type="select"
+          options={[{"Alert", "alert"}, {"Pause", "pause"}, {"Hard stop", "hard_stop"}]}
+          class="cns-input w-28"
+        />
+        <button id="budget-form-submit" type="submit" class="cns-chip">Add cap</button>
+      </.form>
+
+      <table :if={@caps != []} id="budget-caps-table" class="w-full text-[0.6875rem]">
+        <tbody>
+          <tr
+            :for={cap <- @caps}
+            id={"budget-row-#{cap.id}"}
+            style="border-top: 1px solid var(--cns-border)"
+          >
+            <td class="py-1 pr-2">{budget_scope_label(cap)}</td>
+            <td class="py-1 pr-2">{cap.period}</td>
+            <td class="py-1 pr-2 text-right">{budget_cost(cap.limit_usd)}</td>
+            <td class="py-1 pr-2">{budget_action_label(cap.action)}</td>
+            <td class="py-1 text-right">
+              <button
+                type="button"
+                id={"budget-delete-#{cap.id}"}
+                phx-click="delete_budget"
+                phx-value-id={cap.id}
+                data-confirm="Delete this budget cap?"
+                class="cns-chip"
+              >
+                Delete
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    """
+  end
+
+  @spec budget_worst_state(map()) :: :ok | :warning | :tripped
+  defp budget_worst_state(%{kill_switch?: true}), do: :tripped
+
+  defp budget_worst_state(%{caps: caps}) do
+    states = Enum.map(caps, & &1.state)
+
+    cond do
+      :tripped in states -> :tripped
+      :warning in states -> :warning
+      true -> :ok
+    end
+  end
+
+  @spec budget_scope_label(RepoBuilder.Budget.Cap.t()) :: String.t()
+  defp budget_scope_label(%{scope: :global}), do: "Global"
+  defp budget_scope_label(%{scope: scope, scope_id: id}), do: "#{scope}:#{id}"
+
+  # Inference-only spec — the concrete action atoms narrow below `atom()`.
+  defp budget_action_label(:alert), do: "alert"
+  defp budget_action_label(:pause), do: "pause"
+  defp budget_action_label(:hard_stop), do: "hard-stop"
+
+  @spec budget_cost(Decimal.t() | nil) :: String.t()
+  defp budget_cost(%Decimal{} = cost), do: "$" <> Decimal.to_string(Decimal.round(cost, 2))
+  defp budget_cost(_other), do: "—"
+
+  @spec budget_pct(float()) :: integer()
+  defp budget_pct(ratio) when is_float(ratio),
+    do: ratio |> Kernel.*(100) |> min(100) |> max(0) |> round()
+
+  defp budget_pct(_other), do: 0
+
+  @spec budget_bar_color(atom()) :: String.t()
+  defp budget_bar_color(:tripped), do: "#b91c1c"
+  defp budget_bar_color(:warning), do: "#d97706"
+  defp budget_bar_color(_ok), do: "#16a34a"
 
   # Stable DOM id for a rollup row (the dimension key; nil model/provider → "_").
   @spec cost_rollup_row_id(RepoBuilder.CostCenter.Rollup.t()) :: String.t()

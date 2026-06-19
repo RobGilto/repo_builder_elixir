@@ -19,6 +19,7 @@ defmodule RepoBuilder.WorkflowEngine do
   def start_workflow(%Workflow{} = workflow, opts \\ []) do
     case Workflows.create_run(%{
            workflow_id: workflow.id,
+           orchestrator_id: opts[:orchestrator_id],
            status: :queued,
            current_step: first_step_name(workflow.steps)
          }) do
@@ -118,6 +119,43 @@ defmodule RepoBuilder.WorkflowEngine do
         run
     end
   end
+
+  @doc """
+  Re-engage the launching orchestrator when an engine ADW run reaches a terminal state
+  (issue-fallback). When `run.orchestrator_id` is set, broadcast the holding-pattern
+  worker-terminal wakeup the `Queue` already consumes (`%{worker_id, name, ok?}` on the
+  `orchestrator:<id>:workers` topic). A `nil` `orchestrator_id` is a no-op (the run was
+  not orchestrator-launched). Wrapped defensively so a DB blip never breaks the run's
+  terminal path. The SHARED seam called by BOTH the live Runner and durable StepWorker.
+  """
+  @spec emit_orchestrator_resume(WorkflowRun.t(), boolean()) :: :ok
+  def emit_orchestrator_resume(%WorkflowRun{orchestrator_id: nil}, _ok?), do: :ok
+
+  def emit_orchestrator_resume(%WorkflowRun{orchestrator_id: orchestrator_id} = run, ok?)
+      when is_binary(orchestrator_id) do
+    label = resume_label(run)
+
+    Dashboard.broadcast_worker_terminal(orchestrator_id, %{
+      worker_id: run.id,
+      name: label,
+      ok?: ok?
+    })
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
+
+  @spec resume_label(WorkflowRun.t()) :: String.t()
+  defp resume_label(%WorkflowRun{workflow_id: workflow_id}) when is_binary(workflow_id) do
+    case Workflows.get_workflow(workflow_id) do
+      %Workflow{type: type} when is_binary(type) -> type
+      %Workflow{name: name} when is_binary(name) -> name
+      _ -> "workflow"
+    end
+  end
+
+  defp resume_label(_run), do: "workflow"
 
   @doc "An ISO-8601 UTC timestamp for per-step `started_at`/`finished_at` fields."
   @spec now_iso() :: String.t()

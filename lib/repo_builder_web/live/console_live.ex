@@ -37,6 +37,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   alias RepoBuilder.{
     Agents,
+    Budget,
     CostCenter,
     Dashboard,
     Definitions,
@@ -49,6 +50,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
   }
 
   alias RepoBuilder.Agents.Agent
+  alias RepoBuilder.Budget.Cap
   alias RepoBuilder.CostCenter.ModelPrice
   alias RepoBuilder.FileBrowser
   alias RepoBuilder.Harness.Event
@@ -82,6 +84,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
         agent_names: %{},
         statuses: %{},
         agent_costs: %{},
+        # Per-agent live cost ESTIMATE (token-derived, display-only, REPLACE-latest — NOT
+        # additive into `agent_costs`). nil ⇒ unpriced/no estimate yet. Superseded by the
+        # authoritative `agent_costs` value when the harness reports the billed amount.
+        agent_est_costs: %{},
         orchestrator_id: nil,
         # FIFO turn-queue snapshot (issue message-queue): busy?/current/queued/depth.
         # Safe idle default for the disconnected render; reseeded on the connected mount.
@@ -167,6 +173,14 @@ defmodule RepoBuilderWeb.ConsoleLive do
         # nil (unpriced) is NEVER coerced to Decimal.new(0): the cost pill renders
         # "—" until a priced amount arrives (§ edge cases).
         cost: nil,
+        # Global live cost ESTIMATE: sum of per-agent latest estimates (display-only,
+        # REPLACE-latest). Shown as "~$…" until the authoritative `cost` lands.
+        cost_estimate: nil,
+        # The orchestrator's OWN spend (its own turns only, distinct from the workers it
+        # owns) — feeds the ORCHESTRATOR panel badge so `Σ workers + orchestrator == total`.
+        # nil (unpriced/no signal) renders "—".
+        orchestrator_cost: nil,
+        orchestrator_est_cost: nil,
         connected?: connected?(socket),
         harness_options: HarnessRegistry.known(),
         # File-driven prompt palette (issue-prompt-adw-palette): live, file-derived
@@ -176,6 +190,12 @@ defmodule RepoBuilderWeb.ConsoleLive do
         slash_commands: [],
         agent_defs: [],
         adws: [],
+        # Budget guardrails (issue-budget-guardrails): live breaker snapshot + caps + form.
+        # Safe disconnected defaults; reseeded from Budget.Guard.snapshot/0 on connect and
+        # updated live over the "budget:events" topic.
+        budget_state: %{kill_switch?: false, caps: []},
+        budget_caps: [],
+        budget_form: to_form(Cap.changeset(%Cap{}, %{}), as: :budget),
         # ADW Builder mode
         adw_builder?: false,
         adw_steps: [],
@@ -200,10 +220,13 @@ defmodule RepoBuilderWeb.ConsoleLive do
         |> seed_counters()
         |> seed_lanes()
         |> seed_workflow_progress()
-        |> seed_cost()
+        |> seed_budget()
         # assign_orchestrator must precede backfill_events: it reads the persisted
         # display timezone into assigns, which backfill_events uses to format row times.
+        # It must also precede seed_cost/seed_orchestrator_cost, which read orchestrator_id.
         |> assign_orchestrator()
+        |> seed_cost()
+        |> seed_orchestrator_cost()
         |> backfill_events()
         |> assign_template_rows()
         |> seed_definitions()
@@ -338,8 +361,23 @@ defmodule RepoBuilderWeb.ConsoleLive do
     # File-driven prompt palette: receive {:definitions_changed, category, list}.
     :ok = Definitions.subscribe()
 
+    # Budget guardrails: receive {:budget_tripped, ...} / {:budget_warning, ...} /
+    # {:budget_reset, ...} / {:kill_switch, ...} to re-render the panel/banner/badge live.
+    :ok = Phoenix.PubSub.subscribe(RepoBuilder.PubSub, Budget.Guard.topic())
+
     socket
   end
+
+  # Seed the budget breaker snapshot + caps on the connected mount (and on reconnect,
+  # §9). The snapshot reads the live Guard; caps read the durable context.
+  @spec seed_budget(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp seed_budget(socket) do
+    assign(socket, budget_state: Budget.Guard.snapshot(), budget_caps: Budget.list_caps())
+  end
+
+  # Re-read the live snapshot + durable caps after a breaker event or operator action.
+  @spec refresh_budget(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp refresh_budget(socket), do: seed_budget(socket)
 
   # Seed the three file-derived palette assigns from the merged (app + working-dir)
   # root for the orchestrator's current working dir. Re-run when the working dir
@@ -473,14 +511,34 @@ defmodule RepoBuilderWeb.ConsoleLive do
     }
   end
 
+  # The header grand total = Σ worker-own spend + the orchestrator's OWN spend. The
+  # orchestrator term was previously omitted, so a reconnect under-counted by the
+  # orchestrator's own turns until new live events arrived.
   @spec seed_cost(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp seed_cost(socket) do
-    cost =
+    workers =
       Enum.reduce(socket.assigns.agents, nil, fn agent, acc ->
         accumulate_cost(acc, Logs.cost_rollup!(agent.id))
       end)
 
+    cost = accumulate_cost(workers, orchestrator_own_cost(socket))
     assign(socket, :cost, nilify_acc(cost))
+  end
+
+  # The orchestrator's OWN spend (`agent_logs` keyed by `orchestrator_id`, not
+  # `agent_id`) — disjoint from the worker rollups, distinct from the whole-tree budget
+  # scope. Feeds the ORCHESTRATOR panel badge so the three badges reconcile.
+  @spec seed_orchestrator_cost(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp seed_orchestrator_cost(socket) do
+    assign(socket, :orchestrator_cost, nilify_acc(orchestrator_own_cost(socket)))
+  end
+
+  @spec orchestrator_own_cost(Phoenix.LiveView.Socket.t()) :: Decimal.t() | nil
+  defp orchestrator_own_cost(socket) do
+    case socket.assigns.orchestrator_id do
+      id when is_binary(id) -> Logs.orchestrator_cost_rollup!(id)
+      _ -> nil
+    end
   end
 
   @spec nilify_acc(Decimal.t() | nil) :: Decimal.t() | nil
@@ -1037,6 +1095,41 @@ defmodule RepoBuilderWeb.ConsoleLive do
     {:noreply, socket}
   end
 
+  # --- budget guardrails (issue-budget-guardrails) ---
+
+  def handle_event("save_budget", %{"budget" => params}, socket) do
+    case Budget.upsert_cap(params) do
+      {:ok, _cap} ->
+        # A new/edited cap changes the live policy; force the Guard to reload + reconcile.
+        _ = Budget.Guard.refresh()
+        {:noreply, socket |> refresh_budget() |> reset_budget_form()}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply, assign(socket, :budget_form, to_form(changeset, as: :budget))}
+    end
+  end
+
+  def handle_event("delete_budget", %{"id" => id}, socket) do
+    _ = Budget.delete_cap(id)
+    _ = Budget.Guard.refresh()
+    {:noreply, refresh_budget(socket)}
+  end
+
+  def handle_event("reset_budget", %{"id" => id}, socket) do
+    _ = Budget.Guard.reset_cap(id)
+    {:noreply, refresh_budget(socket)}
+  end
+
+  def handle_event("toggle_kill_switch", _params, socket) do
+    if socket.assigns.budget_state.kill_switch? do
+      _ = Budget.Guard.release_all()
+    else
+      _ = Budget.Guard.engage_kill_switch()
+    end
+
+    {:noreply, refresh_budget(socket)}
+  end
+
   # Reset every filter AND clear the log view. Empties the in-memory event buffer + the
   # rendered stream (and collapses expanded rows) AND soft-hides the persisted rows, so
   # the cleared state survives a reconnect. Nothing is deleted — the settings "show
@@ -1111,6 +1204,14 @@ defmodule RepoBuilderWeb.ConsoleLive do
       nil -> {:noreply, socket}
       row -> {:noreply, stream_insert(socket, :events, row)}
     end
+  end
+
+  # Range selection committed by the DragSelect JS hook (issue drag-select): ADD or
+  # REMOVE the dragged ids (additive/subtractive over the existing selection, honoring
+  # `mode`) in a SINGLE round-trip, then re-stream only the rows whose membership actually
+  # changed so authoritative checkbox state reconciles the hook's optimistic paint.
+  def handle_event("select_drag", %{"ids" => ids, "mode" => mode}, socket) do
+    {:noreply, apply_drag_selection(socket, parse_ids(ids), normalize_mode(mode))}
   end
 
   def handle_event("clear_selection", _params, socket),
@@ -1443,7 +1544,14 @@ defmodule RepoBuilderWeb.ConsoleLive do
     end
   end
 
-  def handle_info({:agent_event, agent_id, %Event.SessionStarted{} = event, seq_no}, socket) do
+  # Budget guardrails: any breaker event re-seeds the snapshot + caps so the panel,
+  # banner, and badge re-render live (issue-budget-guardrails).
+  def handle_info({:budget_tripped, _cap, _spent}, socket), do: {:noreply, refresh_budget(socket)}
+  def handle_info({:budget_warning, _cap, _spent}, socket), do: {:noreply, refresh_budget(socket)}
+  def handle_info({:budget_reset, _cap}, socket), do: {:noreply, refresh_budget(socket)}
+  def handle_info({:kill_switch, _state}, socket), do: {:noreply, refresh_budget(socket)}
+
+  def handle_info({:agent_event, agent_id, %Event.SessionStarted{} = event, log_no}, socket) do
     {:noreply,
      socket
      |> set_status(agent_id, :running)
@@ -1455,14 +1563,14 @@ defmodule RepoBuilderWeb.ConsoleLive do
          body: "session #{event.session_id}",
          payload: event.raw
        },
-       seq_no
+       log_no
      )}
   end
 
   # Incremental token delta — coalesce into the per-agent streaming buffer (no
   # center-log row, no per-token counter); a throttled flush commits it to render.
   def handle_info(
-        {:agent_event, agent_id, %Event.TextDelta{partial?: true} = event, _seq_no},
+        {:agent_event, agent_id, %Event.TextDelta{partial?: true} = event, _log_no},
         socket
       ) do
     # Only the orchestrator's in-flight text feeds the chat streaming buffer; worker
@@ -1477,7 +1585,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
   # Finalized thinking block — clear the in-flight thinking buffer, then record the
   # one permanent thinking message + center row.
   def handle_info(
-        {:agent_event, agent_id, %Event.TextDelta{thinking?: true} = event, seq_no},
+        {:agent_event, agent_id, %Event.TextDelta{thinking?: true} = event, log_no},
         socket
       ) do
     socket = finalize_stream_channel(socket, agent_id, :thinking)
@@ -1493,13 +1601,13 @@ defmodule RepoBuilderWeb.ConsoleLive do
          thinking?: true,
          payload: event.raw
        },
-       seq_no
+       log_no
      )}
   end
 
   # Finalized text block — clear the in-flight text buffer, then record the one
   # permanent orchestrator message + center row.
-  def handle_info({:agent_event, agent_id, %Event.TextDelta{} = event, seq_no}, socket) do
+  def handle_info({:agent_event, agent_id, %Event.TextDelta{} = event, log_no}, socket) do
     socket = finalize_stream_channel(socket, agent_id, :text)
 
     chat =
@@ -1524,7 +1632,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
          payload: event.raw,
          chat: chat
        },
-       seq_no
+       log_no
      )}
   end
 
@@ -1536,7 +1644,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
     {:noreply, assign(socket, streaming: streaming, stream_pending: %{}, stream_flush_ref: nil)}
   end
 
-  def handle_info({:agent_event, agent_id, %Event.ToolCall{} = event, seq_no}, socket) do
+  def handle_info({:agent_event, agent_id, %Event.ToolCall{} = event, log_no}, socket) do
     {:noreply,
      record_event(
        socket,
@@ -1547,11 +1655,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
          body: "#{event.name} #{inspect(event.input)}",
          payload: event.raw
        },
-       seq_no
+       log_no
      )}
   end
 
-  def handle_info({:agent_event, agent_id, %Event.ToolResult{} = event, seq_no}, socket) do
+  def handle_info({:agent_event, agent_id, %Event.ToolResult{} = event, log_no}, socket) do
     {:noreply,
      record_event(
        socket,
@@ -1562,15 +1670,16 @@ defmodule RepoBuilderWeb.ConsoleLive do
          body: inspect(event.content),
          payload: event.raw
        },
-       seq_no
+       log_no
      )}
   end
 
-  def handle_info({:agent_event, agent_id, %Event.Usage{} = event, seq_no}, socket) do
+  def handle_info({:agent_event, agent_id, %Event.Usage{} = event, log_no}, socket) do
     {:noreply,
      socket
      |> add_cost(event.cost_usd)
-     |> add_agent_cost(agent_id, event.cost_usd)
+     |> add_owned_cost(agent_id, event.cost_usd)
+     |> put_owned_estimate(agent_id, event.estimated_cost_usd)
      |> put_context(agent_id, context_size(event))
      |> record_event(
        agent_id,
@@ -1581,11 +1690,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
          tokens: "#{event.input_tokens + event.output_tokens}t",
          payload: event.raw
        },
-       seq_no
+       log_no
      )}
   end
 
-  def handle_info({:agent_event, agent_id, %Event.Status{} = event, seq_no}, socket) do
+  def handle_info({:agent_event, agent_id, %Event.Status{} = event, log_no}, socket) do
     {:noreply,
      record_event(
        socket,
@@ -1596,11 +1705,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
          body: "#{event.kind} #{inspect(event.detail)}",
          payload: event.raw
        },
-       seq_no
+       log_no
      )}
   end
 
-  def handle_info({:agent_event, agent_id, %Event.Done{} = event, seq_no}, socket) do
+  def handle_info({:agent_event, agent_id, %Event.Done{} = event, log_no}, socket) do
     status = if event.ok, do: :succeeded, else: :failed
 
     {:noreply,
@@ -1608,7 +1717,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
      |> flush_streaming_agent(agent_id)
      |> set_status(agent_id, status)
      |> add_cost(event.cost_usd)
-     |> add_agent_cost(agent_id, event.cost_usd)
+     |> add_owned_cost(agent_id, event.cost_usd)
      |> record_event(
        agent_id,
        %{
@@ -1617,11 +1726,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
          body: "reason=#{event.reason}",
          payload: event.raw
        },
-       seq_no
+       log_no
      )}
   end
 
-  def handle_info({:agent_event, agent_id, %Event.Error{} = event, seq_no}, socket) do
+  def handle_info({:agent_event, agent_id, %Event.Error{} = event, log_no}, socket) do
     {:noreply,
      socket
      |> flush_streaming_agent(agent_id)
@@ -1634,7 +1743,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
          body: "#{event.reason}: #{event.message}",
          payload: event.raw
        },
-       seq_no
+       log_no
      )}
   end
 
@@ -1730,11 +1839,23 @@ defmodule RepoBuilderWeb.ConsoleLive do
   # A worker the orchestrator just deleted (issue agent-CRUD): drop it from the
   # rail roster + the swimlane stream live. Idempotent for an already-absent worker.
   def handle_info({:agent_deleted, %Agent{} = agent}, socket) do
+    # A worker delete is a hard `Repo.delete`; the `agent_logs.agent_id` FK is
+    # `on_delete: :delete_all`, so the durable side cascade-removes the worker's spend.
+    # Reconcile the live total to match (Option A): subtract the worker's cost/estimate
+    # and drop its per-agent entries, so `Σ workers + orchestrator == total` stays equal
+    # to what a reconnect/reseed would compute. The orchestrator-own assign is unaffected.
+    removed = Map.get(socket.assigns.agent_costs, agent.id)
+    removed_est = Map.get(socket.assigns.agent_est_costs, agent.id)
+
     {:noreply,
      socket
      |> assign(:agents, Enum.reject(socket.assigns.agents, &(&1.id == agent.id)))
      |> assign(:agent_names, Map.delete(socket.assigns.agent_names, agent.id))
      |> assign(:statuses, Map.delete(socket.assigns.statuses, agent.id))
+     |> assign(:cost, subtract_cost(socket.assigns.cost, removed))
+     |> assign(:cost_estimate, subtract_cost(socket.assigns.cost_estimate, removed_est))
+     |> assign(:agent_costs, Map.delete(socket.assigns.agent_costs, agent.id))
+     |> assign(:agent_est_costs, Map.delete(socket.assigns.agent_est_costs, agent.id))
      |> stream_delete(:lanes, %{id: "agent:#{agent.id}"})}
   end
 
@@ -1760,15 +1881,15 @@ defmodule RepoBuilderWeb.ConsoleLive do
   # entry where one applies.
   # Inference-only spec — dialyzer narrows `attrs` to the specific per-variant map
   # shapes, which a hand-written map() spec would supertype under :underspecs.
-  # `seq_no` is the persisted row's DURABLE `log-<n>` number (nil for non-persisted
+  # `log_no` is the persisted row's DURABLE `log-<n>` number (nil for non-persisted
   # shards), distinct from the in-memory per-socket `seq` that ids/orders the stream row.
-  defp record_event(socket, agent_id, attrs, seq_no) do
+  defp record_event(socket, agent_id, attrs, log_no) do
     seq = socket.assigns.seq + 1
 
     row = %{
       id: seq,
       line: seq,
-      log_no: seq_no,
+      log_no: log_no,
       agent: agent_label(socket, agent_id),
       agent_key: agent_id,
       color: AgentColors.hex(to_string(agent_id)),
@@ -2057,6 +2178,40 @@ defmodule RepoBuilderWeb.ConsoleLive do
     assign(socket, :agent_costs, Map.put(costs, agent_id, updated))
   end
 
+  # Route owner-scoped cost accumulation: an orchestrator's own turn carries the
+  # synthetic `"orch-<id>-<n>"` agent_id (minted in `Orchestrator.Server.do_start_turn/2`,
+  # server.ex:153), so it accumulates into the single `:orchestrator_cost` assign; a real
+  # worker (UUID agent_id) accumulates into its `:agent_costs` entry. The grand-total
+  # `add_cost/2` still runs for every event upstream.
+  @spec add_owned_cost(Phoenix.LiveView.Socket.t(), String.t(), float() | nil) ::
+          Phoenix.LiveView.Socket.t()
+  defp add_owned_cost(socket, agent_id, cost_usd) do
+    if orchestrator_owned?(agent_id),
+      do: add_orchestrator_cost(socket, cost_usd),
+      else: add_agent_cost(socket, agent_id, cost_usd)
+  end
+
+  @spec add_orchestrator_cost(Phoenix.LiveView.Socket.t(), float() | nil) ::
+          Phoenix.LiveView.Socket.t()
+  defp add_orchestrator_cost(socket, nil), do: socket
+
+  defp add_orchestrator_cost(socket, cost_usd) do
+    assign(
+      socket,
+      :orchestrator_cost,
+      accumulate_cost(socket.assigns.orchestrator_cost, cost_usd)
+    )
+  end
+
+  # An orchestrator-owned live event keys off the `"orch-"` agent_id prefix
+  # (`Orchestrator.Server`, server.ex:101/:153). A worker's binary-id agent_id is a UUID
+  # and never starts with `"orch-"`, so this predicate is unambiguous.
+  @spec orchestrator_owned?(String.t()) :: boolean()
+  defp orchestrator_owned?(agent_id) when is_binary(agent_id),
+    do: String.starts_with?(agent_id, "orch-")
+
+  defp orchestrator_owned?(_agent_id), do: false
+
   # nil never coerced to 0 (preserves the unpriced distinction); a float crosses the
   # float→Decimal boundary here, a Decimal (seed rollup) accumulates directly.
   @spec accumulate_cost(Decimal.t() | nil, Decimal.t() | float() | nil) :: Decimal.t() | nil
@@ -2068,6 +2223,59 @@ defmodule RepoBuilderWeb.ConsoleLive do
   defp accumulate_cost(current, cost) when is_float(cost),
     do: accumulate_cost(current, Decimal.from_float(cost))
 
+  # Record an agent's latest live cost ESTIMATE (REPLACE-latest, NOT additive — the
+  # estimate is a running snapshot, never summed into `agent_costs`). A nil estimate
+  # (unpriced model) leaves the prior estimate untouched. Recomputes the global estimate
+  # as the sum of all per-agent latest estimates.
+  @spec put_agent_estimate(Phoenix.LiveView.Socket.t(), String.t(), float() | nil) ::
+          Phoenix.LiveView.Socket.t()
+  defp put_agent_estimate(socket, _agent_id, nil), do: socket
+
+  defp put_agent_estimate(socket, agent_id, estimate) when is_float(estimate) do
+    estimates = Map.put(socket.assigns.agent_est_costs, agent_id, Decimal.from_float(estimate))
+
+    global =
+      Enum.reduce(estimates, nil, fn {_id, est}, acc -> accumulate_cost(acc, est) end)
+
+    socket
+    |> assign(:agent_est_costs, estimates)
+    |> assign(:cost_estimate, global)
+  end
+
+  # Route the live ESTIMATE by owner (panel parity): an orchestrator turn updates the
+  # orchestrator-own replace-latest estimate; a worker turn the per-agent map. This stops
+  # each unique synthetic `"orch-…"` key from leaving stale per-turn entries that would
+  # over-sum the worker estimate.
+  @spec put_owned_estimate(Phoenix.LiveView.Socket.t(), String.t(), float() | nil) ::
+          Phoenix.LiveView.Socket.t()
+  defp put_owned_estimate(socket, agent_id, estimate) do
+    if orchestrator_owned?(agent_id),
+      do: put_orchestrator_estimate(socket, estimate),
+      else: put_agent_estimate(socket, agent_id, estimate)
+  end
+
+  # The orchestrator's latest own estimate (REPLACE-latest Decimal; nil leaves the prior
+  # untouched, mirroring `put_agent_estimate/3`).
+  @spec put_orchestrator_estimate(Phoenix.LiveView.Socket.t(), float() | nil) ::
+          Phoenix.LiveView.Socket.t()
+  defp put_orchestrator_estimate(socket, nil), do: socket
+
+  defp put_orchestrator_estimate(socket, estimate) when is_float(estimate) do
+    assign(socket, :orchestrator_est_cost, Decimal.from_float(estimate))
+  end
+
+  # Subtract a removed worker's contribution from a running total (mirrors
+  # `accumulate_cost/2`): nil subtrahend ⇒ no-op; a residual <= 0 collapses back to nil to
+  # preserve the unpriced "—" convention (consistent with `nilify_acc/1`).
+  @spec subtract_cost(Decimal.t() | nil, Decimal.t() | nil) :: Decimal.t() | nil
+  defp subtract_cost(current, nil), do: current
+  defp subtract_cost(nil, %Decimal{}), do: nil
+
+  defp subtract_cost(%Decimal{} = current, %Decimal{} = amount) do
+    result = Decimal.sub(current, amount)
+    if Decimal.compare(result, 0) == :gt, do: result, else: nil
+  end
+
   # --- render ---
 
   @impl true
@@ -2076,6 +2284,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
     ~H"""
     <div class="console flex h-screen flex-col" data-theme="dark">
+      <h1 class="sr-only">Repo Builder orchestration console</h1>
       <Layouts.flash_group flash={@flash} />
 
       <.header_bar
@@ -2095,11 +2304,14 @@ defmodule RepoBuilderWeb.ConsoleLive do
         recent_models={@recent_models}
       />
 
+      <.budget_banner state={@budget_state} />
+
       <div
         class="grid min-h-0 flex-1"
         style={"grid-template-columns: #{rail_width(@rail_collapsed?)} 1fr #{chat_col(@chat_width)}"}
       >
         <aside
+          aria-label="Agents"
           class="flex min-h-0 flex-col gap-2 overflow-y-auto border-r p-2"
           style="border-color: var(--cns-border)"
         >
@@ -2138,7 +2350,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
                   name={agent.name}
                   status={Map.get(@statuses, agent.id, agent.status)}
                   harness={agent.harness}
+                  model={agent.model}
                   cost={Map.get(@agent_costs, agent.id)}
+                  estimate={Map.get(@agent_est_costs, agent.id)}
                   color={AgentColors.hex(agent.id)}
                   selected?={agent.id in @active_agents}
                   pulse?={@pulsed_id == agent.id}
@@ -2161,7 +2375,14 @@ defmodule RepoBuilderWeb.ConsoleLive do
           <%!-- Both stream containers stay mounted (toggled via `hidden`): a
           `phx-update="stream"` container must exist when items are inserted, else
           rows pushed while it was absent are dropped on the next render cycle. --%>
-          <div class={["flex min-h-0 flex-1 flex-col", @view_mode != :logs && "hidden"]}>
+          <%!-- LogCopy hosts here (not on #event-stream-wrap, which already owns the
+          single permitted phx-hook DragSelect): it delegates from `.cns-event-row__ln`
+          cells via document listeners, so a stable ancestor of the stream suffices. --%>
+          <div
+            id="logs-pane"
+            phx-hook="LogCopy"
+            class={["flex min-h-0 flex-1 flex-col", @view_mode != :logs && "hidden"]}
+          >
             <.filter_bar
               active_categories={@active_categories}
               active_agents={@active_agents}
@@ -2174,29 +2395,34 @@ defmodule RepoBuilderWeb.ConsoleLive do
               selected_count={MapSet.size(@selected_ids)}
               copy_payload={selected_copy_payload(@event_buffer, @selected_ids)}
             />
-            <div
-              id="event-stream"
-              phx-update="stream"
-              phx-hook="AutoScroll"
-              data-auto-follow={to_string(@auto_follow?)}
-              class="min-h-0 flex-1 overflow-y-auto"
-            >
-              <div :for={{dom_id, row} <- @streams.events} id={dom_id}>
-                <.event_row
-                  id={row.id}
-                  line={row.line}
-                  log_no={row.log_no}
-                  agent={row.agent}
-                  color={row.color}
-                  category={row.category}
-                  kind={row.kind}
-                  body={row.body}
-                  thinking?={row.thinking?}
-                  tokens={row.tokens}
-                  time={row.time}
-                  expanded?={MapSet.member?(@expanded_ids, row.id)}
-                  selected?={MapSet.member?(@selected_ids, row.id)}
-                />
+            <%!-- DragSelect owns this STABLE wrapper (display:contents), not the
+              phx-update="stream" node: one phx-hook per element, and AutoScroll must keep
+              #event-stream. The hook reads row ids from each checkbox's data-row-id. --%>
+            <div id="event-stream-wrap" phx-hook="DragSelect" class="contents">
+              <div
+                id="event-stream"
+                phx-update="stream"
+                phx-hook="AutoScroll"
+                data-auto-follow={to_string(@auto_follow?)}
+                class="min-h-0 flex-1 overflow-y-auto"
+              >
+                <div :for={{dom_id, row} <- @streams.events} id={dom_id}>
+                  <.event_row
+                    id={row.id}
+                    line={row.line}
+                    log_no={row.log_no}
+                    agent={row.agent}
+                    color={row.color}
+                    category={row.category}
+                    kind={row.kind}
+                    body={row.body}
+                    thinking?={row.thinking?}
+                    tokens={row.tokens}
+                    time={row.time}
+                    expanded?={MapSet.member?(@expanded_ids, row.id)}
+                    selected?={MapSet.member?(@selected_ids, row.id)}
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -2265,10 +2491,15 @@ defmodule RepoBuilderWeb.ConsoleLive do
           </div>
         </main>
 
-        <aside class="min-h-0 overflow-hidden border-l p-2" style="border-color: var(--cns-border)">
+        <aside
+          aria-label="Orchestrator console"
+          class="min-h-0 overflow-hidden border-l p-2"
+          style="border-color: var(--cns-border)"
+        >
           <.command_panel
             chat_width={@chat_width}
-            cost={@cost}
+            cost={@orchestrator_cost}
+            estimate={@orchestrator_est_cost}
             typing?={@typing? || Map.get(@statuses, @orchestrator_id) == :running}
             auto_follow?={@auto_follow?}
           >
@@ -2349,6 +2580,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
       <.explain_modal status={@explain.status} count={@explain.count} />
 
+      <.budget_modal state={@budget_state} caps={@budget_caps} form={@budget_form} />
+
       <.settings_modal
         settings_tab={@settings_tab}
         view_mode={@view_mode}
@@ -2402,6 +2635,57 @@ defmodule RepoBuilderWeb.ConsoleLive do
     socket = assign(socket, :selected_ids, MapSet.new())
     Enum.reduce(rows, socket, &stream_insert(&2, :events, &1))
   end
+
+  # Apply a drag-committed range to the selection and re-stream ONLY the rows whose
+  # membership actually flipped (symmetric difference of old vs new), mirroring the
+  # single-row `toggle_select` re-stream pattern.
+  @spec apply_drag_selection(
+          Phoenix.LiveView.Socket.t(),
+          [non_neg_integer()],
+          :select | :deselect
+        ) ::
+          Phoenix.LiveView.Socket.t()
+  defp apply_drag_selection(socket, [], _mode), do: socket
+
+  defp apply_drag_selection(socket, ids, mode) do
+    current = socket.assigns.selected_ids
+    delta = MapSet.new(ids)
+
+    next =
+      case mode do
+        :select -> MapSet.union(current, delta)
+        :deselect -> MapSet.difference(current, delta)
+      end
+
+    changed = MapSet.symmetric_difference(current, next)
+    socket = assign(socket, :selected_ids, next)
+
+    socket.assigns.event_buffer
+    |> Enum.filter(&MapSet.member?(changed, &1.id))
+    |> Enum.reduce(socket, &stream_insert(&2, :events, &1))
+  end
+
+  # Guarded parse of the drag payload's ids: keep only well-formed non-negative integers,
+  # dropping any non-numeric/stale entries.
+  @spec parse_ids(term()) :: [non_neg_integer()]
+  defp parse_ids(ids) when is_list(ids), do: Enum.flat_map(ids, &parse_one_id/1)
+  defp parse_ids(_ids), do: []
+
+  @spec parse_one_id(term()) :: [non_neg_integer()]
+  defp parse_one_id(id) when is_integer(id) and id >= 0, do: [id]
+
+  defp parse_one_id(id) when is_binary(id) do
+    case Integer.parse(id) do
+      {n, ""} when n >= 0 -> [n]
+      _ -> []
+    end
+  end
+
+  defp parse_one_id(_id), do: []
+
+  @spec normalize_mode(term()) :: :select | :deselect
+  defp normalize_mode("deselect"), do: :deselect
+  defp normalize_mode(_mode), do: :select
 
   @spec explain_selected(Phoenix.LiveView.Socket.t(), [map()]) ::
           {:noreply, Phoenix.LiveView.Socket.t()}
@@ -2522,7 +2806,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
     %{
       id: seq,
       line: seq,
-      log_no: log.seq_no,
+      log_no: log.log_no,
       agent: Map.get(names, log.agent_id, short_id(agent_key)),
       agent_key: agent_key,
       color: AgentColors.hex(to_string(agent_key)),
@@ -2634,6 +2918,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
       editing_price_id: nil,
       price_form: to_form(ModelPrice.changeset(%ModelPrice{}, %{}), as: :model_price)
     )
+  end
+
+  @spec reset_budget_form(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp reset_budget_form(socket) do
+    assign(socket, :budget_form, to_form(Cap.changeset(%Cap{}, %{}), as: :budget))
   end
 
   # Guard operator-supplied mode string into the closed atom set (never

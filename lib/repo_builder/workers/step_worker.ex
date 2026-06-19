@@ -153,12 +153,16 @@ defmodule RepoBuilder.Workers.StepWorker do
   defp advance(run, _workflow, :done, artifacts) do
     {:ok, run} = Workflows.update_run(run, %{status: :succeeded, artifacts: artifacts})
     broadcast_lane(run, :succeeded)
+    # Parity with the live Runner terminal: re-engage the launching orchestrator
+    # (no-op when not orchestrator-launched). See issue-fallback.
+    _ = WorkflowEngine.emit_orchestrator_resume(run, true)
     :ok
   end
 
   defp advance(run, _workflow, :abort, artifacts) do
     {:ok, run} = Workflows.update_run(run, %{status: :failed, artifacts: artifacts})
     broadcast_lane(run, :failed)
+    _ = WorkflowEngine.emit_orchestrator_resume(run, false)
     :ok
   end
 
@@ -176,6 +180,7 @@ defmodule RepoBuilder.Workers.StepWorker do
     else
       {:ok, run} = Workflows.update_run(run, %{status: :failed, artifacts: artifacts})
       broadcast_lane(run, :failed)
+      _ = WorkflowEngine.emit_orchestrator_resume(run, false)
       :ok
     end
   end

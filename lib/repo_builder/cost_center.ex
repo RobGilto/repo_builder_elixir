@@ -16,11 +16,13 @@ defmodule RepoBuilder.CostCenter do
   """
   import Ecto.Query, only: [from: 2, where: 3]
 
+  alias RepoBuilder.Agents.Agent
   alias RepoBuilder.CostCenter.{ModelPrice, Rollup, SpendRow, SpendSummary}
   alias RepoBuilder.Harness.Pricing
   alias RepoBuilder.Logs.AgentLog
   alias RepoBuilder.Repo
   alias RepoBuilder.Timezones
+  alias RepoBuilder.Workflows
 
   @default_rollup_limit 50
   @max_rollup_limit 200
@@ -96,22 +98,22 @@ defmodule RepoBuilder.CostCenter do
   end
 
   @doc """
-  Build the combined per-Mtok `%{model => rate}` table for a harness from the catalog,
-  in the shape `Pricing.derive/4` consumes.
+  Build the per-Mtok `%{model => Pricing.Rate.t()}` table for a harness from the catalog,
+  in the shape `Pricing.derive/3` consumes (separate input/output rates so cache tokens
+  can be priced against the input rate).
 
-  `Pricing.derive/4` uses a single combined rate over `input + output` tokens; a catalog
-  row stores separate input/output rates, so this collapses to a representative combined
-  rate — preferring `output_price_per_mtok`, falling back to `input_price_per_mtok`.
-  Rows with no usable rate are omitted.
+  A catalog row stores separate input/output rates. When only one column is present, the
+  missing rate falls back to the other so both fields are populated. Rows with neither
+  rate are omitted.
   """
-  @spec price_table_for(String.t()) :: %{optional(String.t()) => number()}
+  @spec price_table_for(String.t()) :: Pricing.price_table()
   def price_table_for(harness) do
     from(p in ModelPrice, where: p.harness == ^harness)
     |> Repo.all()
     |> Enum.reduce(%{}, fn price, acc ->
-      case combined_rate(price) do
+      case rate_for(price) do
         nil -> acc
-        rate -> Map.put(acc, price.model, rate)
+        %Pricing.Rate{} = rate -> Map.put(acc, price.model, rate)
       end
     end)
   end
@@ -170,6 +172,8 @@ defmodule RepoBuilder.CostCenter do
           actual_cost_usd: sum(fragment("(?->>'cost_usd')::numeric", l.usage)),
           input_tokens: fragment("COALESCE(SUM((?->>'input_tokens')::bigint), 0)", l.usage),
           output_tokens: fragment("COALESCE(SUM((?->>'output_tokens')::bigint), 0)", l.usage),
+          cache_read: fragment("COALESCE(SUM((?->>'cache_read')::bigint), 0)", l.usage),
+          cache_creation: fragment("COALESCE(SUM((?->>'cache_creation')::bigint), 0)", l.usage),
           event_count: count(l.id),
           last_used_at: max(l.inserted_at)
         }
@@ -245,18 +249,31 @@ defmodule RepoBuilder.CostCenter do
           actual_cost_usd: sum(fragment("(?->>'cost_usd')::numeric", l.usage)),
           input_tokens: fragment("COALESCE(SUM((?->>'input_tokens')::bigint), 0)", l.usage),
           output_tokens: fragment("COALESCE(SUM((?->>'output_tokens')::bigint), 0)", l.usage),
+          cache_read: fragment("COALESCE(SUM((?->>'cache_read')::bigint), 0)", l.usage),
+          cache_creation: fragment("COALESCE(SUM((?->>'cache_creation')::bigint), 0)", l.usage),
           event_count: count(l.id)
         }
     )
   end
 
-  @spec derive_spend_row(map()) :: map()
+  @typep derived_row :: %{
+           harness: String.t(),
+           provider: String.t(),
+           actual_cost_usd: Decimal.t(),
+           estimated_cost_usd: Decimal.t() | nil,
+           estimated?: boolean(),
+           input_tokens: non_neg_integer(),
+           output_tokens: non_neg_integer(),
+           event_count: non_neg_integer()
+         }
+
+  @spec derive_spend_row(map()) :: derived_row()
   defp derive_spend_row(row) do
     harness = row.harness || "unknown"
     provider = row.provider || ""
 
     {actual, estimated_cost, estimated?} =
-      derive_costs(harness, row.model, row.actual_cost_usd, row.input_tokens, row.output_tokens)
+      derive_costs(harness, row.model, row.actual_cost_usd, token_map(row))
 
     %{
       harness: harness,
@@ -315,6 +332,72 @@ defmodule RepoBuilder.CostCenter do
     Decimal.add(actual, estimated || Decimal.new(0))
   end
 
+  # --- scope spend (issue-budget-guardrails: Budget.Guard reconciliation source) ---
+
+  @doc """
+  Actual + estimated spend (a single `Decimal`, hidden rows INCLUDED — real money) for
+  one budget scope over an optional `since` window, used by `Budget.Guard` to reconcile
+  its in-memory accumulators on boot/refresh so a restart cannot zero an over-cap budget.
+
+    * `:global`       — all spend platform-wide.
+    * `:orchestrator` — the orchestrator's own turns plus every worker it owns.
+    * `:workflow`     — the run's `total_cost_usd` (no agent_logs link; `since` ignored).
+
+  Unpriced (NULL-cost) rows contribute their *estimated* cost (so a runaway on an
+  unpriced harness is still capped), preserving the nil-vs-0 convention via `derive_costs/5`.
+  """
+  @spec scope_spend(:global | :orchestrator | :workflow, String.t(), DateTime.t() | nil) ::
+          Decimal.t()
+  def scope_spend(:workflow, run_id, _since), do: Workflows.run_cost(run_id)
+
+  def scope_spend(scope, scope_id, since) when scope in [:global, :orchestrator] do
+    scope
+    |> scope_window_rows(scope_id, since)
+    |> Enum.map(&derive_spend_row/1)
+    |> Enum.reduce(Decimal.new(0), fn row, acc ->
+      Decimal.add(acc, Decimal.add(row.actual_cost_usd, row.estimated_cost_usd || Decimal.new(0)))
+    end)
+  end
+
+  # Windowed (harness, provider, model) rollup filtered to a scope (NO hidden filter —
+  # real money), mirroring `window_rows/1` so `derive_spend_row/1` applies unchanged.
+  @spec scope_window_rows(:global | :orchestrator, String.t(), DateTime.t() | nil) :: [map()]
+  defp scope_window_rows(scope, scope_id, since) do
+    base =
+      from l in AgentLog,
+        where: not is_nil(l.usage),
+        group_by: [l.harness, l.provider, l.model],
+        select: %{
+          harness: l.harness,
+          provider: l.provider,
+          model: l.model,
+          actual_cost_usd: sum(fragment("(?->>'cost_usd')::numeric", l.usage)),
+          input_tokens: fragment("COALESCE(SUM((?->>'input_tokens')::bigint), 0)", l.usage),
+          output_tokens: fragment("COALESCE(SUM((?->>'output_tokens')::bigint), 0)", l.usage),
+          cache_read: fragment("COALESCE(SUM((?->>'cache_read')::bigint), 0)", l.usage),
+          cache_creation: fragment("COALESCE(SUM((?->>'cache_creation')::bigint), 0)", l.usage),
+          event_count: count(l.id)
+        }
+
+    base
+    |> scope_filter(scope, scope_id)
+    |> since_filter(since)
+    |> Repo.all()
+  end
+
+  @spec scope_filter(Ecto.Queryable.t(), :global | :orchestrator, String.t()) ::
+          Ecto.Queryable.t()
+  defp scope_filter(query, :global, _scope_id), do: query
+
+  defp scope_filter(query, :orchestrator, id) do
+    worker_ids = from(a in Agent, where: a.orchestrator_id == ^id, select: a.id)
+    where(query, [l], l.orchestrator_id == ^id or l.agent_id in subquery(worker_ids))
+  end
+
+  @spec since_filter(Ecto.Queryable.t(), DateTime.t() | nil) :: Ecto.Queryable.t()
+  defp since_filter(query, nil), do: query
+  defp since_filter(query, %DateTime{} = since), do: where(query, [l], l.inserted_at >= ^since)
+
   # --- private: rollup mapping ---
 
   @spec to_rollup(map()) :: Rollup.t()
@@ -323,7 +406,7 @@ defmodule RepoBuilder.CostCenter do
     provider = row.provider || ""
 
     {actual, estimated_cost, estimated?} =
-      derive_costs(harness, row.model, row.actual_cost_usd, row.input_tokens, row.output_tokens)
+      derive_costs(harness, row.model, row.actual_cost_usd, token_map(row))
 
     %Rollup{
       harness: harness,
@@ -342,17 +425,28 @@ defmodule RepoBuilder.CostCenter do
   # A NULL SUM means NO priced rows existed (every `cost_usd` was NULL) — only then do we
   # attempt a catalog estimate. A non-NULL SUM (including a priced `0`) is a real billed
   # amount and never gets an estimate, keeping priced-at-zero distinct from unpriced.
-  @spec derive_costs(String.t(), String.t() | nil, Decimal.t() | nil, term(), term()) ::
+  @spec derive_costs(String.t(), String.t() | nil, Decimal.t() | nil, Pricing.tokens()) ::
           {Decimal.t(), Decimal.t() | nil, boolean()}
-  defp derive_costs(_harness, _model, %Decimal{} = actual, _input, _output) do
+  defp derive_costs(_harness, _model, %Decimal{} = actual, _tokens) do
     {actual, nil, false}
   end
 
-  defp derive_costs(harness, model, nil, input, output) do
-    case Pricing.derive(model, to_int(input), to_int(output), price_table_for(harness)) do
+  defp derive_costs(harness, model, nil, tokens) do
+    case Pricing.derive(model, tokens, price_table_for(harness)) do
       nil -> {Decimal.new(0), nil, false}
       cost when is_float(cost) -> {Decimal.new(0), Decimal.from_float(cost), true}
     end
+  end
+
+  # Build the cache-aware token map `Pricing.derive/3` consumes from an aggregation row.
+  @spec token_map(map()) :: Pricing.tokens()
+  defp token_map(row) do
+    %{
+      input: to_int(row.input_tokens),
+      output: to_int(row.output_tokens),
+      cache_read: to_int(Map.get(row, :cache_read)),
+      cache_creation: to_int(Map.get(row, :cache_creation))
+    }
   end
 
   @spec to_int(term()) :: non_neg_integer()
@@ -370,14 +464,21 @@ defmodule RepoBuilder.CostCenter do
 
   # --- private: catalog/seed helpers ---
 
-  @spec combined_rate(ModelPrice.t()) :: float() | nil
-  defp combined_rate(%ModelPrice{output_price_per_mtok: %Decimal{} = rate}),
-    do: Decimal.to_float(rate)
+  # Build a `Pricing.Rate` from a catalog row, falling back input↔output when only one
+  # column is populated; nil when neither rate is present.
+  @spec rate_for(ModelPrice.t()) :: Pricing.Rate.t() | nil
+  defp rate_for(%ModelPrice{input_price_per_mtok: input, output_price_per_mtok: output}) do
+    case {decimal_to_float(input), decimal_to_float(output)} do
+      {nil, nil} -> nil
+      {in_rate, nil} -> %Pricing.Rate{input: in_rate, output: in_rate}
+      {nil, out_rate} -> %Pricing.Rate{input: out_rate, output: out_rate}
+      {in_rate, out_rate} -> %Pricing.Rate{input: in_rate, output: out_rate}
+    end
+  end
 
-  defp combined_rate(%ModelPrice{input_price_per_mtok: %Decimal{} = rate}),
-    do: Decimal.to_float(rate)
-
-  defp combined_rate(%ModelPrice{}), do: nil
+  @spec decimal_to_float(Decimal.t() | nil) :: float() | nil
+  defp decimal_to_float(%Decimal{} = value), do: Decimal.to_float(value)
+  defp decimal_to_float(_value), do: nil
 
   @spec seed_one(ModelPrice.t() | nil, map(), non_neg_integer()) :: non_neg_integer()
   defp seed_one(existing, attrs, acc) do

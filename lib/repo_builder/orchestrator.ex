@@ -30,9 +30,10 @@ defmodule RepoBuilder.Orchestrators do
   def config, do: Application.get_env(:repo_builder, :orchestrator, [])
 
   @doc """
-  Whether the holding pattern is enabled: when a dispatched worker returns and the
-  orchestrator is otherwise idle, the `Queue` enqueues a low-priority auto-resume
-  turn. Defaults to `false` (issue message-queue).
+  Whether the holding pattern is enabled: when a dispatched worker returns, the `Queue`
+  re-engages the orchestrator with a low-priority auto-resume turn (started when idle, or
+  recorded and run once the queue drains). Defaults to `true` (issue
+  holding-pattern-followup); the test env opts out for determinism.
   """
   @spec auto_resume?() :: boolean()
   def auto_resume?, do: config()[:auto_resume_on_worker_return] == true
@@ -389,8 +390,92 @@ defmodule RepoBuilder.Orchestrators do
         {:error, :not_found}
 
       %Orchestrator{total_cost_usd: current} = orchestrator ->
-        total = Decimal.add(current, to_decimal(amount))
+        # Emit the live cost telemetry AND get the Decimal delta back in one call.
+        delta = emit_cost_recorded(id, amount)
+        total = Decimal.add(current, delta)
         update_record(orchestrator, %{total_cost_usd: total})
+    end
+  end
+
+  @doc """
+  Fire the shared cost telemetry (`[:repo_builder, :cost, :recorded]`) for one
+  increment WITHOUT touching the DB, returning the Decimal delta so the caller can
+  accumulate it. This is the per-event budget-enforcement seam (issue hot-path-writes
+  Part B): `Orchestrator.Server` coalesces the `orchestrators` row write to one flush
+  per turn, but must still emit this telemetry per `Usage` so `Budget.Guard`
+  (issue-budget-guardrails) enforces live caps on every increment.
+
+  A `nil` amount is a no-op: it emits nothing (parity with `add_cost/2`'s nil clause)
+  and returns `Decimal.new(0)`.
+  """
+  @spec emit_cost_recorded(Ecto.UUID.t(), float() | Decimal.t() | nil) :: Decimal.t()
+  def emit_cost_recorded(_id, nil), do: Decimal.new(0)
+
+  def emit_cost_recorded(id, amount) do
+    delta = to_decimal(amount)
+
+    # Emit on the shared cost event so Budget.Guard (issue-budget-guardrails) can
+    # attribute orchestrator spend to the {:global} and {:orchestrator, id} scopes.
+    :telemetry.execute(
+      [:repo_builder, :cost, :recorded],
+      %{amount: Decimal.to_float(delta)},
+      %{orchestrator_id: id, run_id: nil}
+    )
+
+    delta
+  end
+
+  @doc """
+  Flush an ENTIRE orchestrator turn's accumulated cost/usage in ONE `Repo.update`
+  (issue hot-path-writes Part B), replacing the per-`Usage` write storm of three
+  separate `add_cost`/`add_usage`/`set_estimated_cost` round-trips.
+
+  `acc` carries the in-memory turn accumulation:
+
+    * `:cost` (Decimal) — summed billed cost this turn, ADDED to `total_cost_usd`;
+    * `:input`/`:output` (non_neg integers) — summed tokens, ADDED to the lifetime
+      cumulative counters;
+    * `:context` (integer | nil) — the LAST frame's `input + output` occupancy, which
+      OVERWRITES `context_tokens` (nil ⇒ no usage seen ⇒ left untouched);
+    * `:estimate` (float | Decimal | nil) — the LAST frame's token-derived estimate,
+      which OVERWRITES `estimated_cost_usd` (nil ⇒ untouched, float→Decimal here, §8);
+    * `:status` (`:idle | :error | nil`) — final status (nil ⇒ untouched, e.g. a
+      best-effort crash flush leaves the running status as-is).
+  """
+  @spec flush_turn(Ecto.UUID.t(), map()) :: {:ok, Orchestrator.t()} | {:error, :not_found}
+  def flush_turn(id, acc) when is_map(acc) do
+    case Repo.get(Orchestrator, id) do
+      nil ->
+        {:error, :not_found}
+
+      %Orchestrator{} = orchestrator ->
+        update_record(orchestrator, flush_params(orchestrator, acc))
+    end
+  end
+
+  @doc """
+  Record the live token-derived cost ESTIMATE (display-only). OVERWRITES the latest
+  snapshot — it is NOT additive and is strictly separate from the authoritative
+  `total_cost_usd`. A `nil` amount is a no-op (unpriced turn leaves the prior estimate
+  in place). The estimate is superseded by `add_cost/2` when the harness reports the
+  real billed amount on the terminal event.
+  """
+  @spec set_estimated_cost(Ecto.UUID.t(), float() | Decimal.t() | nil) ::
+          {:ok, Orchestrator.t()} | {:error, :not_found}
+  def set_estimated_cost(id, nil) do
+    case Repo.get(Orchestrator, id) do
+      nil -> {:error, :not_found}
+      %Orchestrator{} = orchestrator -> {:ok, orchestrator}
+    end
+  end
+
+  def set_estimated_cost(id, amount) do
+    case Repo.get(Orchestrator, id) do
+      nil ->
+        {:error, :not_found}
+
+      %Orchestrator{} = orchestrator ->
+        update_record(orchestrator, %{estimated_cost_usd: to_decimal(amount)})
     end
   end
 
@@ -484,6 +569,30 @@ defmodule RepoBuilder.Orchestrators do
       %Orchestrator{} = orchestrator -> update_record(orchestrator, params)
     end
   end
+
+  # Build the single coalesced flush params from the pre-turn row + the turn accumulator
+  # (see flush_turn/2): cost + tokens ACCUMULATE onto the row; context/estimate/status
+  # are replace-latest and are only written when present (nil ⇒ leave the column as-is).
+  @spec flush_params(Orchestrator.t(), map()) :: map()
+  defp flush_params(%Orchestrator{} = o, acc) do
+    %{
+      total_cost_usd: Decimal.add(o.total_cost_usd, Map.get(acc, :cost) || Decimal.new(0)),
+      input_tokens: (o.input_tokens || 0) + non_neg(Map.get(acc, :input)),
+      output_tokens: (o.output_tokens || 0) + non_neg(Map.get(acc, :output))
+    }
+    |> maybe_put(:context_tokens, Map.get(acc, :context))
+    |> maybe_put(:estimated_cost_usd, decimal_or_nil(Map.get(acc, :estimate)))
+    |> maybe_put(:status, Map.get(acc, :status))
+  end
+
+  # Inference-only (no @spec): a generic "put unless nil" map-builder — a hand-written
+  # contract would only be a supertype of dialyzer's success typing.
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  @spec decimal_or_nil(float() | Decimal.t() | nil) :: Decimal.t() | nil
+  defp decimal_or_nil(nil), do: nil
+  defp decimal_or_nil(amount), do: to_decimal(amount)
 
   @spec update_record(Orchestrator.t(), map()) ::
           {:ok, Orchestrator.t()} | {:error, :not_found}

@@ -695,7 +695,7 @@ end
 | Table | Purpose | Key fields (types) |
 |---|---|---|
 | `agents` | durable agent definitions | `name :string`, `harness :string` (validated vs registry), `provider Ecto.Enum[:anthropic,:openai,:local]`, `status Ecto.Enum[:idle,:running,:error]`, `config :map` |
-| `agent_logs` | one row per canonical event for an agent/session | `agent_id` (FK), `session_id :string`, `event_type Ecto.Enum[:session_started,:text_delta,:tool_call,:tool_result,:usage,:status,:done,:error]`, `harness :string`, `payload :map` (JSONB, **secret-redacted** `raw`), `usage :map` (JSONB, nullable) |
+| `agent_logs` | one row per canonical event for an agent/session | `agent_id` (FK), `session_id :string`, `event_type Ecto.Enum[:session_started,:text_delta,:tool_call,:tool_result,:usage,:status,:done,:error]`, `harness :string`, `payload :map` (JSONB, **secret-redacted** `raw`), `usage :map` (JSONB, nullable), `log_no :integer` (durable readable per-row identifier surfaced in the console drilldown as `log-<n>`; sequence-backed, `read_after_writes`) |
 | `system_logs` | app-level/system events | `level Ecto.Enum[:debug,:info,:warn,:error]`, `message :string`, `metadata :map` |
 | `prompts` | reusable prompt templates | `name :string`, `body :text`, `variables :map` |
 | `chat` | conversational turns (user/assistant) | `agent_id` (FK), `role Ecto.Enum[:user,:assistant,:system]`, `content :text`, `usage :map` |

@@ -85,14 +85,16 @@ defmodule RepoBuilder.Harness.ClaudeNormalizeTest do
     assert String.contains?(text, "🌍")
   end
 
-  test "result success -> [Usage, Done] with cost and ok=true", %{frames: frames} do
+  test "result success -> [Usage, Done] with cost on Done only and ok=true", %{frames: frames} do
+    # Single-carrier invariant (issue-claude-cost): the authoritative cost lives on Done
+    # only; the terminal Usage carries cost_usd: nil (token-derived estimate preserved).
     assert {:ok,
             [
               %Event.Usage{
                 input_tokens: 120,
                 output_tokens: 45,
                 cache_read: 10,
-                cost_usd: 0.0123
+                cost_usd: nil
               },
               done
             ]} =

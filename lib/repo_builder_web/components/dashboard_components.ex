@@ -193,13 +193,31 @@ defmodule RepoBuilderWeb.DashboardComponents do
   end
 
   attr :cost, :any, default: nil
+  attr :estimated, :any, default: nil
 
-  @doc "Cost badge — distinguishes unpriced (nil → “—”) from a priced amount."
+  @doc """
+  Cost badge — renders the authoritative billed amount when present (`$X.XX`),
+  otherwise a token-derived live ESTIMATE marked with `~` (`~$X.XX`), otherwise
+  `—` (unpriced / no signal yet). The estimate is superseded the instant an
+  authoritative `cost` arrives.
+  """
   @spec cost_badge(map()) :: Phoenix.LiveView.Rendered.t()
   def cost_badge(assigns) do
     ~H"""
-    <span class="badge badge-outline">
-      {if @cost, do: "$" <> Decimal.to_string(Decimal.round(@cost, 2)), else: "—"}
+    <span class="badge badge-outline" style="color: var(--cns-text-1)">
+      <%= cond do %>
+        <% @cost -> %>
+          {"$" <> Decimal.to_string(Decimal.round(@cost, 2))}
+        <% @estimated -> %>
+          <span
+            style="color: var(--cns-text-2)"
+            title="Live estimate from tokens — billed amount pending"
+          >
+            {"~$" <> Decimal.to_string(Decimal.round(@estimated, 2))}
+          </span>
+        <% true -> %>
+          —
+      <% end %>
     </span>
     """
   end

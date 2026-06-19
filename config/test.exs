@@ -114,6 +114,8 @@ config :repo_builder, :orchestrator,
   # auto_resume_on_worker_return to true via app-env for its own scope.
   auto_resume_on_worker_return: false,
   max_queue_depth: 50,
+  # Config parity with prod; idle-timeout tests override this per-scope to a tiny value.
+  turn_idle_ms: 120_000,
   # Per-run tmp root so template tests are hermetic and never touch the real
   # ~/.repo_builder/agents. Each test may further override this via app-env.
   agents_dir: Path.join(System.tmp_dir!(), "repo_builder_agents_test")
@@ -121,6 +123,12 @@ config :repo_builder, :orchestrator,
 # Don't reap on boot in tests — the suite drives OrphanReaper.reap_node/1 explicitly
 # so it doesn't race the Ecto sandbox.
 config :repo_builder, :orphan_reaper, reap_on_boot: false
+
+# Budget.Guard: don't touch the Repo on boot in tests (no default-cap seed, no
+# CostCenter reconcile) so the supervised singleton doesn't race the Ecto sandbox.
+# Guard unit tests start their own instance with injected caps; seam/LiveView tests
+# drive the in-memory kill switch. A long refresh keeps the periodic timer dormant.
+config :repo_builder, :budget, refresh_ms: 3_600_000, reconcile_on_boot?: false
 
 # File-driven prompt palette (issue-prompt-adw-palette): disable the inotify watcher
 # and poll loop in the supervised instance so unit/LiveView tests are deterministic.

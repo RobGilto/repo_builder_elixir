@@ -78,7 +78,11 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "check_agent_status",
-        description: "Get a worker's current status, recent event tail, and accumulated cost.",
+        description:
+          "Get a worker's current status, accumulated cost, and its findings: " <>
+            "`final_message` carries the worker's latest result/summary text, and each " <>
+            "`recent_events` entry includes a truncated `text` excerpt. This is how you " <>
+            "read what a worker actually produced.",
         input_schema: %{
           "type" => "object",
           "properties" => %{

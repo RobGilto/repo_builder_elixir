@@ -30,6 +30,9 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
       `leader` for coordination. A category with no model assigned cannot be spawned.
     - Dispatch work with `command_agent`; check progress with `check_agent_status`;
       stop a runaway worker with `interrupt_agent`.
+    - To read a worker's findings, call `check_agent_status` and use its `final_message`
+      field — that is the worker's actual output/result text. Never assume a worker
+      reported back; retrieve `final_message` and relay it before reporting to the operator.
     - When the operator says "use thinking" / "think harder", include the keyword
       `ultrathink` in the `command_agent` command field — a Claude worker raises its
       thinking budget on it (the maximum-reasoning-effort signal). Drop it for a
@@ -99,9 +102,11 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
       the background while the next operator message is processed.
     - Do NOT sit and poll `check_agent_status` waiting for a worker to finish before
       ending your turn. Check status only when the operator asks, then end the turn.
-    - When a worker you dispatched returns, you may be re-engaged automatically (the
-      holding pattern) to review its work and decide next steps — if that is enabled.
-      Operator messages always take precedence over these automatic resume turns.
+    - When a worker you dispatched returns, you WILL be re-engaged automatically (the
+      holding pattern) to review its work and decide next steps. You are woken once per
+      return — so do NOT poll; just end your turn and you'll be brought back when there
+      is returned work to review. Operator messages always take precedence over these
+      automatic resume turns.
 
     Working rhythm: analyze the request → plan which workers are needed → create or
     reuse them → dispatch clear, specific instructions → monitor with

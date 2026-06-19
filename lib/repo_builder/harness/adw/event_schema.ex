@@ -214,14 +214,25 @@ defmodule RepoBuilder.Harness.Adw.EventSchema do
     else
       in_tokens = input || 0
       out_tokens = output || 0
+      cache_read = non_neg_int(Map.get(raw, "cache_read"))
+      cache_creation = non_neg_int(Map.get(raw, "cache_creation"))
+
+      tokens = %{
+        input: in_tokens,
+        output: out_tokens,
+        cache_read: cache_read,
+        cache_creation: cache_creation
+      }
 
       %Event.Usage{
         harness: @harness,
         input_tokens: in_tokens,
         output_tokens: out_tokens,
-        cache_read: non_neg_int(Map.get(raw, "cache_read")),
-        cache_creation: non_neg_int(Map.get(raw, "cache_creation")),
-        cost_usd: usage_cost(raw, in_tokens, out_tokens, ctx),
+        cache_read: cache_read,
+        cache_creation: cache_creation,
+        cost_usd: usage_cost(raw, tokens, ctx),
+        estimated_cost_usd:
+          Pricing.derive(Map.get(ctx, :model), tokens, Map.get(ctx, :price_table, %{})),
         raw: raw
       }
     end
@@ -229,16 +240,11 @@ defmodule RepoBuilder.Harness.Adw.EventSchema do
 
   # Prefer an explicit per-event USD cost (the ADW reports Claude's cost directly);
   # otherwise derive from the price table for the run's model (nil ⇒ unpriced).
-  @spec usage_cost(map(), non_neg_integer(), non_neg_integer(), ctx()) :: float() | nil
-  defp usage_cost(raw, in_tokens, out_tokens, ctx) do
+  @spec usage_cost(map(), Pricing.tokens(), ctx()) :: float() | nil
+  defp usage_cost(raw, tokens, ctx) do
     case float_or_nil(Map.get(raw, "cost_usd")) do
       nil ->
-        Pricing.derive(
-          Map.get(ctx, :model),
-          in_tokens,
-          out_tokens,
-          Map.get(ctx, :price_table, %{})
-        )
+        Pricing.derive(Map.get(ctx, :model), tokens, Map.get(ctx, :price_table, %{}))
 
       cost ->
         cost

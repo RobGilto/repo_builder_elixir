@@ -122,8 +122,10 @@
   /* text */
   --cns-text-0: #ffffff;
   --cns-text-1: #b0b0b0;
-  --cns-text-2: #6b7280;
-  --cns-text-3: #4b5563;
+  /* text-2/3 lifted to meet WCAG 2 AA (4.5:1) on the --cns-bg-0/1/2 surfaces;
+     the prior gray-500/600 values fell to ~3:1 on dark backgrounds. */
+  --cns-text-2: #9ca3af;
+  --cns-text-3: #8b919b;
   /* accents */
   --cns-cyan: #06b6d4;
   --cns-teal: #14b8a6;
@@ -258,10 +260,27 @@
 .cns-event-row__select { align-self: center; cursor: pointer; opacity: 0.3; transition: opacity 120ms; }
 .cns-event-row:hover .cns-event-row__select,
 .cns-event-row__select:checked { opacity: 1; }
+/* While a drag-select sweep is active, suppress text selection (issue drag-select). */
+.cns-dragging, .cns-dragging * { user-select: none; }
 /* Lightweight spinner for the explain modal's running state. */
 .cns-spinner { display: inline-block; animation: cns-spin 1s linear infinite; color: var(--cns-cyan); }
 @keyframes cns-spin { to { transform: rotate(360deg); } }
-.cns-event-row__ln { color: var(--cns-text-3); text-align: right; }
+/* Fixed-width log-number chip (issue log-copy-chip): truncate to a constant width
+   so large magnitudes render as `log-NNN…` instead of widening the column. The full
+   value stays reachable via data-log/title + the LogCopy hook. `--copied` flashes the
+   transient confirmation; `cursor`/`:hover` signal it is click/drag-to-copy. */
+.cns-event-row__ln {
+  color: var(--cns-text-3);
+  text-align: right;
+  display: block;
+  max-width: 7ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.cns-event-row__ln:hover { color: var(--cns-text-2); }
+.cns-event-row__ln--copied { color: var(--cns-cyan); }
 .cns-event-row__agent { color: var(--agent-color, var(--cns-text-1)); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cns-event-row__body { color: var(--cns-text-0); word-break: break-word; }
 .cns-event-row__meta { color: var(--cns-text-2); white-space: nowrap; font-size: 0.6875rem; }
@@ -411,6 +430,11 @@
   width: 100%;
   max-width: 48rem;
   margin-bottom: 2rem;
+  /* Never taller than the viewport; overflow scrolls instead of pushing
+     content (e.g. Save buttons) off-screen. Modals that manage their own
+     internal scroll override `overflow` locally. */
+  max-height: calc(100vh - 4rem);
+  overflow-y: auto;
   background-color: var(--cns-bg-1);
   border: 1px solid var(--cns-border-2);
   border-radius: 0.5rem;
@@ -429,6 +453,23 @@
   resize: vertical;
 }
 .cns-cmd-textarea:focus { outline: none; border-color: var(--cns-cyan); }
+/* Text/number inputs in console forms (e.g. the price catalog). Without this the
+   `cns-input` class was undefined, so fields rendered with no background/border. */
+.cns-input {
+  width: 100%;
+  background-color: var(--cns-bg-2);
+  border: 1px solid var(--cns-border-2);
+  border-radius: 0.375rem;
+  color: var(--cns-text-0);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  padding: 0.3rem 0.5rem;
+}
+.cns-input:focus { outline: none; border-color: var(--cns-cyan); }
+.cns-input[readonly] { opacity: 0.6; cursor: not-allowed; }
+/* Scrollable but with no visible scrollbar (still keyboard/wheel/touch scrollable). */
+.cns-no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.cns-no-scrollbar::-webkit-scrollbar { width: 0; height: 0; display: none; }
 .cns-cmd-chip {
   padding: 0.125rem 0.5rem;
   border-radius: 0.25rem;

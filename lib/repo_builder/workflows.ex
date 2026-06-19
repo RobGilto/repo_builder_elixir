@@ -64,12 +64,27 @@ defmodule RepoBuilder.Workflows do
   def add_run_cost(%WorkflowRun{} = run, nil), do: {:ok, run}
 
   def add_run_cost(%WorkflowRun{} = run, %Decimal{} = cost) do
+    # Metadata carries the scope keys so Budget.Guard (issue-budget-guardrails) can
+    # attribute this spend to the {:global} and {:workflow, run_id} scopes; the
+    # alert-only Telemetry.Alerting consumer still reads `run_id` unchanged.
     :telemetry.execute([:repo_builder, :cost, :recorded], %{amount: Decimal.to_float(cost)}, %{
-      run_id: run.id
+      run_id: run.id,
+      workflow_run_id: run.id,
+      workflow_id: run.workflow_id,
+      orchestrator_id: nil
     })
 
     current = run.total_cost_usd || Decimal.new(0)
     update_run(run, %{total_cost_usd: Decimal.add(current, cost)})
+  end
+
+  @doc "A run's accumulated authoritative cost as a `Decimal` (0 when unpriced/unknown)."
+  @spec run_cost(Ecto.UUID.t()) :: Decimal.t()
+  def run_cost(run_id) do
+    case Repo.get(WorkflowRun, run_id) do
+      %WorkflowRun{total_cost_usd: %Decimal{} = cost} -> cost
+      _ -> Decimal.new(0)
+    end
   end
 
   @doc "Runs that are still in flight (no live Runner survives a restart) — the resume reconciler's input (M5)."

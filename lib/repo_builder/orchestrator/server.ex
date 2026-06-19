@@ -41,6 +41,18 @@ defmodule RepoBuilder.Orchestrator.Server do
       field :prompt, String.t()
       field :harness, String.t()
       field :in_process?, boolean()
+      # Per-turn cost/usage accumulator (issue hot-path-writes Part B): the Usage
+      # handler folds each streamed frame into these in-memory fields and emits the
+      # live cost telemetry, then ONE coalesced row write flushes on Done/Error/
+      # terminate — instead of ~6 DB round-trips per Usage frame.
+      field :acc_cost, Decimal.t(), default: Decimal.new(0)
+      field :in_tokens, non_neg_integer(), default: 0
+      field :out_tokens, non_neg_integer(), default: 0
+      field :last_context, non_neg_integer() | nil, default: nil
+      field :last_estimate, float() | Decimal.t() | nil, default: nil
+      # Guards against a double flush: set once a terminal event flushed, so the
+      # terminate/2 crash-safety flush becomes a no-op.
+      field :flushed?, boolean(), default: false
     end
   end
 
@@ -96,19 +108,19 @@ defmodule RepoBuilder.Orchestrator.Server do
     }
 
     # Persist first so the global feed broadcast can carry the persisted row's durable
-    # `seq_no` (the `log-<n>` drilldown number) — parity with the session path.
-    seq_no =
+    # `log_no` (the `log-<n>` drilldown number) — parity with the session path.
+    log_no =
       case Logs.persist_orchestrator_event(event, %{
              orchestrator_id: orchestrator.id,
              session_id: agent_id,
              provider: orchestrator.provider,
              model: orchestrator.model
            }) do
-        {:ok, log} -> log.seq_no
+        {:ok, log} -> log.log_no
         {:error, _changeset} -> nil
       end
 
-    _ = Dashboard.broadcast_event(agent_id, event, seq_no)
+    _ = Dashboard.broadcast_event(agent_id, event, log_no)
 
     _ = Orchestrators.set_status(orchestrator.id, :error)
     {:error, :no_model_selected}
@@ -191,6 +203,10 @@ defmodule RepoBuilder.Orchestrator.Server do
       # Operator-chosen working directory (nil ⇒ managed per-orchestrator workspace).
       # The runtime writes `.mcp.json`/per-session config here and resumes turns in it.
       cwd: orchestrator.working_dir,
+      # Interactive orchestrator turns get a shorter idle watchdog than the worker-grade
+      # session default (5 min): a byte-silent orchestrator turn beyond this is treated as
+      # stalled and surfaced/recovered via the session's idle-timeout → Event.Error path.
+      idle_ms: orchestrator_idle_ms(),
       config: %{orchestrator: true},
       orchestrator_ctx: tool_ctx(orchestrator, token),
       orchestrator_db_id: orchestrator.id
@@ -220,26 +236,90 @@ defmodule RepoBuilder.Orchestrator.Server do
   end
 
   def handle_info({:harness_event, %Event.Usage{} = event}, %State{} = state) do
-    _ = Orchestrators.add_cost(state.orchestrator_id, event.cost_usd)
-    _ = Orchestrators.add_usage(state.orchestrator_id, event.input_tokens, event.output_tokens)
+    # Coalesce the per-Usage write storm (issue hot-path-writes Part B): accumulate
+    # in-memory and emit the live cost telemetry per frame (so Budget.Guard enforces
+    # caps on every increment), but DO NOT write the `orchestrators` row here — the
+    # single flush happens on the terminal event / terminate.
+    ni = non_neg(event.input_tokens)
+    no = non_neg(event.output_tokens)
+    delta = Orchestrators.emit_cost_recorded(state.orchestrator_id, event.cost_usd)
+
+    state = %State{
+      state
+      | acc_cost: Decimal.add(state.acc_cost, delta),
+        in_tokens: state.in_tokens + ni,
+        out_tokens: state.out_tokens + no,
+        last_context: ni + no,
+        last_estimate: replace_latest(state.last_estimate, event.estimated_cost_usd)
+    }
+
     {:noreply, state}
   end
 
   def handle_info({:harness_event, %Event.Done{} = event}, %State{} = state) do
-    _ = Orchestrators.add_cost(state.orchestrator_id, event.cost_usd)
-    _ = Orchestrators.set_status(state.orchestrator_id, if(event.ok, do: :idle, else: :error))
-    {:stop, :normal, state}
+    # Fold the terminal frame's billed cost (still emitting telemetry) into the
+    # accumulator, then flush the whole turn in ONE write with the final status.
+    delta = Orchestrators.emit_cost_recorded(state.orchestrator_id, event.cost_usd)
+    state = %State{state | acc_cost: Decimal.add(state.acc_cost, delta)}
+    _ = flush(state, if(event.ok, do: :idle, else: :error))
+    {:stop, :normal, %State{state | flushed?: true}}
   end
 
   def handle_info({:harness_event, %Event.Error{}}, %State{} = state) do
-    _ = Orchestrators.set_status(state.orchestrator_id, :error)
-    {:stop, :normal, state}
+    _ = flush(state, :error)
+    {:stop, :normal, %State{state | flushed?: true}}
   end
 
   def handle_info({:harness_event, _event}, %State{} = state), do: {:noreply, state}
   def handle_info(_msg, %State{} = state), do: {:noreply, state}
 
+  @impl true
+  def terminate(_reason, %State{flushed?: true}), do: :ok
+
+  def terminate(_reason, %State{} = state) do
+    # Crash safety (issue hot-path-writes Part B): a turn that dies before a terminal
+    # event still persists its accumulated cost — matching the old incremental-write
+    # durability. Best-effort + guarded so a flush failure never masks the original
+    # crash reason; status is left as-is (no terminal seen ⇒ no status change).
+    _ = flush(state, nil)
+    :ok
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
+
   # --- helpers ---
+
+  # One coalesced row write for the whole turn: accumulated cost/usage + replace-latest
+  # context/estimate + final status (nil status ⇒ leave as-is). Replaces the three
+  # separate get+update pairs that ran per Usage frame.
+  @spec flush(State.t(), :idle | :error | nil) :: :ok
+  defp flush(%State{} = state, status) do
+    _ =
+      Orchestrators.flush_turn(state.orchestrator_id, %{
+        cost: state.acc_cost,
+        input: state.in_tokens,
+        output: state.out_tokens,
+        context: state.last_context,
+        estimate: state.last_estimate,
+        status: status
+      })
+
+    :ok
+  end
+
+  # Mirror Orchestrators.add_usage's nil/negative-safe token clamp so coalescing keeps
+  # identical cumulative/context semantics.
+  @spec non_neg(integer() | nil) :: non_neg_integer()
+  defp non_neg(value) when is_integer(value) and value > 0, do: value
+  defp non_neg(_value), do: 0
+
+  # set_estimated_cost was replace-latest with a nil no-op: a nil frame leaves the prior
+  # estimate in place; a present value supersedes it.
+  @spec replace_latest(term(), term()) :: term()
+  defp replace_latest(prior, nil), do: prior
+  defp replace_latest(_prior, value), do: value
 
   @spec tool_ctx(RepoBuilder.Orchestrator.Orchestrator.t(), String.t()) ::
           RepoBuilder.Harness.Orchestrating.tool_ctx()
@@ -261,6 +341,15 @@ defmodule RepoBuilder.Orchestrator.Server do
   defp mcp_base_url do
     Application.get_env(:repo_builder, :orchestrator, [])[:mcp_base_url] ||
       "http://127.0.0.1:4000"
+  end
+
+  # Byte-idle watchdog window (ms) for orchestrator turns — shorter than the worker-grade
+  # `:session` `idle_ms` (5 min) because an interactive turn byte-silent this long is
+  # stalled. Threaded into the session start opts so the existing idle-timeout recovery
+  # fires promptly and visibly instead of hanging until an operator intervenes.
+  @spec orchestrator_idle_ms() :: pos_integer()
+  defp orchestrator_idle_ms do
+    Application.get_env(:repo_builder, :orchestrator, [])[:turn_idle_ms] || 120_000
   end
 
   @spec adapter_for(String.t()) :: module()

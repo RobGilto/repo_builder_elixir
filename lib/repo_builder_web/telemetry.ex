@@ -3,6 +3,7 @@ defmodule RepoBuilderWeb.Telemetry do
 
   import Telemetry.Metrics
 
+  alias RepoBuilder.Budget.Guard
   alias RepoBuilder.Session.Admission
 
   @spec start_link(keyword()) :: Supervisor.on_start()
@@ -98,6 +99,14 @@ defmodule RepoBuilderWeb.Telemetry do
         description: "Per-run cost increments (USD)"
       ),
 
+      # Budget guardrails (issue-budget-guardrails)
+      last_value("repo_builder.budget.state.tripped_count",
+        description: "Budget caps currently tripped"
+      ),
+      last_value("repo_builder.budget.state.max_ratio",
+        description: "Highest spend/limit ratio across all caps"
+      ),
+
       # VM Metrics
       summary("vm.memory.total", unit: {:byte, :kilobyte}),
       summary("vm.total_run_queue_lengths.total"),
@@ -108,7 +117,8 @@ defmodule RepoBuilderWeb.Telemetry do
 
   defp periodic_measurements do
     [
-      {__MODULE__, :measure_live_sessions, []}
+      {__MODULE__, :measure_live_sessions, []},
+      {__MODULE__, :measure_budget, []}
     ]
   end
 
@@ -124,6 +134,26 @@ defmodule RepoBuilderWeb.Telemetry do
       _pid ->
         %{used: used} = Admission.count()
         :telemetry.execute([:repo_builder, :session, :count], %{count: used}, %{})
+    end
+  end
+
+  @doc "Periodic measurement: tripped-cap count + max spend/limit ratio (§9, budget guardrails)."
+  @spec measure_budget() :: :ok
+  def measure_budget do
+    case Process.whereis(Guard) do
+      nil ->
+        :ok
+
+      _pid ->
+        %{caps: caps} = Guard.snapshot()
+        tripped = Enum.count(caps, &(&1.state == :tripped))
+        max_ratio = caps |> Enum.map(& &1.ratio) |> Enum.max(fn -> 0.0 end)
+
+        :telemetry.execute(
+          [:repo_builder, :budget, :state],
+          %{tripped_count: tripped, max_ratio: max_ratio},
+          %{}
+        )
     end
   end
 end

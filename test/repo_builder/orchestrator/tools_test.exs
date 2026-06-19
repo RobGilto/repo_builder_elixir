@@ -200,7 +200,9 @@ defmodule RepoBuilder.Orchestrator.ToolsTest do
                })
 
       assert {:ok, worker} = Agents.get_by_name_for_orchestrator(orch.id, worker_name)
-      assert worker.system_prompt == "You write ExUnit tests."
+      # The reporting clause (issue-2541) is appended to every worker prompt.
+      assert worker.system_prompt =~ "You write ExUnit tests."
+      assert worker.system_prompt =~ "Reporting results"
       assert worker.config["template_name"] == template_name
       assert worker.config["template_version"] == 1
     end
@@ -227,7 +229,8 @@ defmodule RepoBuilder.Orchestrator.ToolsTest do
         })
 
       assert {:ok, worker} = Agents.get_by_name_for_orchestrator(orch.id, worker_name)
-      assert worker.system_prompt == "explicit override"
+      assert worker.system_prompt =~ "explicit override"
+      assert worker.system_prompt =~ "Reporting results"
     end
 
     test "an unknown subagent_template returns a helpful error" do

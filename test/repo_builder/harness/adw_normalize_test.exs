@@ -158,6 +158,24 @@ defmodule RepoBuilder.Harness.AdwNormalizeTest do
       assert cost == 3.0
     end
 
+    test "cache tokens contribute to the derived cost when cost_usd is absent" do
+      ctx = %{harness: :adw, model: "m", price_table: %{"m" => 10.0}}
+
+      assert {:ok, [%Event.Usage{cost_usd: cost, cache_read: 1_000_000}]} =
+               Adw.normalize(
+                 %{
+                   "type" => "usage",
+                   "input_tokens" => 0,
+                   "output_tokens" => 0,
+                   "cache_read" => 1_000_000
+                 },
+                 ctx
+               )
+
+      # cache_read 1_000_000 * 10.0 * 0.1 == 1.0 (cache is now priced).
+      assert cost == 1.0
+    end
+
     test "done (success + failure reasons)" do
       assert {:ok, [%Event.Done{ok: true, reason: :success}]} =
                normalize(%{"type" => "done", "ok" => true, "reason" => "success"})

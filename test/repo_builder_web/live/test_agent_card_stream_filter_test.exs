@@ -143,8 +143,8 @@ defmodule RepoBuilderWeb.TestAgentCardStreamFilterTest do
     |> form("#command-form", command: "ship it")
     |> render_submit()
 
-    assert_receive {:agent_event, _id, %Event.SessionStarted{}, _seq_no}, 2_000
-    assert_receive {:agent_event, _id, %Event.Done{ok: true}, _seq_no}, 2_000
+    assert_receive {:agent_event, _id, %Event.SessionStarted{}, _log_no}, 2_000
+    assert_receive {:agent_event, _id, %Event.Done{ok: true}, _log_no}, 2_000
   end
 
   test "no agent filter routes a manual run to the orchestrator (no spawn, no error)", %{

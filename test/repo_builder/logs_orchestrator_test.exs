@@ -149,8 +149,8 @@ defmodule RepoBuilder.LogsOrchestratorTest do
     end
   end
 
-  describe "durable seq_no (log-<n>)" do
-    test "persist_event/2 returns a log with a positive integer seq_no" do
+  describe "durable log_no (log-<n>)" do
+    test "persist_event/2 returns a log with a positive integer log_no" do
       {:ok, agent} =
         RepoBuilder.Agents.create_agent(%{
           name: "w-#{System.unique_integer([:positive])}",
@@ -164,13 +164,13 @@ defmodule RepoBuilder.LogsOrchestratorTest do
         raw: %{"type" => "t", "text" => "hi"}
       }
 
-      assert {:ok, %AgentLog{seq_no: seq_no}} =
+      assert {:ok, %AgentLog{log_no: log_no}} =
                Logs.persist_event(event, %{agent_id: agent.id, session_id: "s"})
 
-      assert is_integer(seq_no) and seq_no > 0
+      assert is_integer(log_no) and log_no > 0
     end
 
-    test "successive inserts produce strictly increasing seq_no (monotonic / chronological)" do
+    test "successive inserts produce strictly increasing log_no (monotonic / chronological)" do
       orch = orchestrator_fixture()
       event = %Event.TextDelta{harness: :claude, text: "x", raw: %{"type" => "t", "text" => "x"}}
 
@@ -180,10 +180,10 @@ defmodule RepoBuilder.LogsOrchestratorTest do
       {:ok, b} =
         Logs.persist_orchestrator_event(event, %{orchestrator_id: orch.id, session_id: "s"})
 
-      assert b.seq_no > a.seq_no
+      assert b.log_no > a.log_no
     end
 
-    test "list_recent_global/2 rows each carry a non-nil seq_no" do
+    test "list_recent_global/2 rows each carry a non-nil log_no" do
       orch = orchestrator_fixture()
       event = %Event.TextDelta{harness: :claude, text: "x", raw: %{"type" => "t", "text" => "x"}}
 
@@ -192,7 +192,7 @@ defmodule RepoBuilder.LogsOrchestratorTest do
 
       rows = Logs.list_recent_global(50)
       assert rows != []
-      assert Enum.all?(rows, &is_integer(&1.seq_no))
+      assert Enum.all?(rows, &is_integer(&1.log_no))
     end
 
     test "log_label/1 formats integers and degrades nil to —" do

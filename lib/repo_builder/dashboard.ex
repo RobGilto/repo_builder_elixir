@@ -68,20 +68,20 @@ defmodule RepoBuilder.Dashboard do
 
   @doc """
   Broadcast one canonical event onto the global console feed, tagged with the
-  emitting agent id and the persisted row's durable `seq_no` (the `log-<n>` number).
-  Subscribers receive `{:agent_event, agent_id, event, seq_no}`. Non-persisted events
-  (partial `text_delta` token shards) pass `seq_no = nil` (rendered "—" in the drilldown).
+  emitting agent id and the persisted row's durable `log_no` (the `log-<n>` number).
+  Subscribers receive `{:agent_event, agent_id, event, log_no}`. Non-persisted events
+  (partial `text_delta` token shards) pass `log_no = nil` (rendered "—" in the drilldown).
   Additive seam (§9): does not replace the per-agent broadcast. This topic
   (`console:events`) has a single subscriber (ConsoleLive); the per-agent
   `agent:<id>:events` topic is untouched.
   """
   @spec broadcast_event(String.t(), Event.t(), integer() | nil) :: :ok
-  def broadcast_event(agent_id, event, seq_no \\ nil) do
+  def broadcast_event(agent_id, event, log_no \\ nil) do
     _ =
       Phoenix.PubSub.broadcast(
         RepoBuilder.PubSub,
         @events_topic,
-        {:agent_event, agent_id, event, seq_no}
+        {:agent_event, agent_id, event, log_no}
       )
 
     :ok

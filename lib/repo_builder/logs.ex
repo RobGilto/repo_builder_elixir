@@ -86,7 +86,7 @@ defmodule RepoBuilder.Logs do
   end
 
   @doc """
-  Format a persisted log's durable `seq_no` as the human-readable `log-<n>` label
+  Format a persisted log's durable `log_no` as the human-readable `log-<n>` label
   surfaced in the event-detail drilldown. A `nil` (non-persisted live shard, or a row
   built before this field) degrades to `"—"`. Pure formatter — no `Repo` — co-located
   here so the live path, the backfill path, and tests share one definition.

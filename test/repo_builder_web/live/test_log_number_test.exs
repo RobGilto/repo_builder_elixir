@@ -4,7 +4,7 @@ defmodule RepoBuilderWeb.TestLogNumberTest do
   specs/issue-just-adw-need-sdlc_planner-human-readable-log-number.md).
 
   Every persisted `agent_logs` row carries a durable, best-effort-chronological
-  `seq_no` (a Postgres sequence). The console surfaces it as `log-<n>` in the center
+  `log_no` (a Postgres sequence). The console surfaces it as `log-<n>` in the center
   event stream's leading column (the durable log number) and in the event-detail
   drilldown panel. This test drives both paths that fill the drilldown:
 
@@ -26,7 +26,7 @@ defmodule RepoBuilderWeb.TestLogNumberTest do
     log
   end
 
-  test "the detail panel and the center stream both render log-<seq_no> on the backfill path",
+  test "the detail panel and the center stream both render log-<log_no> on the backfill path",
        %{conn: conn} do
     {:ok, agent} =
       Agents.create_agent(%{
@@ -44,8 +44,8 @@ defmodule RepoBuilderWeb.TestLogNumberTest do
     # Open the most-recent row (id == 2) via the drilldown seam.
     render_click(view, "open_event", %{"id" => "2"})
 
-    label = Logs.log_label(newest.seq_no)
-    assert is_integer(newest.seq_no) and newest.seq_no > 0
+    label = Logs.log_label(newest.log_no)
+    assert is_integer(newest.log_no) and newest.log_no > 0
 
     # The durable log number shows in the detail panel...
     assert has_element?(view, "#event-detail-panel", label)

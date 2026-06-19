@@ -11,7 +11,7 @@ defmodule RepoBuilder.Harness.Claude do
   @behaviour RepoBuilder.Harness
   @behaviour RepoBuilder.Harness.Orchestrating
 
-  alias RepoBuilder.Harness.{Event, McpTools}
+  alias RepoBuilder.Harness.{Event, McpTools, Pricing}
 
   @ctx %{harness: :claude}
 
@@ -203,7 +203,7 @@ defmodule RepoBuilder.Harness.Claude do
 
   def normalize(%{"type" => "system"}, _ctx), do: :skip
 
-  def normalize(%{"type" => "assistant", "message" => message} = raw, _ctx)
+  def normalize(%{"type" => "assistant", "message" => message} = raw, ctx)
       when is_map(message) do
     blocks =
       message
@@ -213,7 +213,7 @@ defmodule RepoBuilder.Harness.Claude do
 
     usage =
       case Map.get(message, "usage") do
-        %{} = u -> [usage_event(u, raw)]
+        %{} = u -> [usage_event(u, raw, ctx)]
         _ -> []
       end
 
@@ -247,7 +247,7 @@ defmodule RepoBuilder.Harness.Claude do
     {:ok, [%Event.Status{harness: :claude, kind: :rate_limit, detail: raw, raw: raw}]}
   end
 
-  def normalize(%{"type" => "result", "subtype" => "success"} = raw, _ctx) do
+  def normalize(%{"type" => "result", "subtype" => "success"} = raw, ctx) do
     is_error = Map.get(raw, "is_error", false)
     cost = Map.get(raw, "total_cost_usd")
     usage = Map.get(raw, "usage", %{})
@@ -265,7 +265,9 @@ defmodule RepoBuilder.Harness.Claude do
     }
 
     if is_map(usage) and map_size(usage) > 0 do
-      {:ok, [usage_event(usage, raw, cost), done]}
+      # Cost lives on Done only — see issue-claude-cost; double-counted otherwise.
+      # The terminal Usage carries cost_usd: nil (estimated_cost_usd still derived).
+      {:ok, [usage_event(usage, raw, ctx), done]}
     else
       {:ok, [done]}
     end
@@ -327,15 +329,34 @@ defmodule RepoBuilder.Harness.Claude do
 
   # --- usage ---
 
-  @spec usage_event(map(), map(), float() | nil) :: Event.Usage.t()
-  defp usage_event(usage, raw, cost \\ nil) do
+  # The authoritative cost is NEVER stamped on a claude Usage — it lives on Done only
+  # (single-carrier invariant, issue-claude-cost). Usage carries only the token-derived
+  # `estimated_cost_usd` display signal; `cost_usd` is always nil.
+  @spec usage_event(map(), map(), map()) :: Event.Usage.t()
+  defp usage_event(usage, raw, ctx) do
+    in_tokens = non_neg(Map.get(usage, "input_tokens"))
+    out_tokens = non_neg(Map.get(usage, "output_tokens"))
+    cache_read = opt_non_neg(Map.get(usage, "cache_read_input_tokens"))
+    cache_creation = opt_non_neg(Map.get(usage, "cache_creation_input_tokens"))
+
     %Event.Usage{
       harness: :claude,
-      input_tokens: non_neg(Map.get(usage, "input_tokens")),
-      output_tokens: non_neg(Map.get(usage, "output_tokens")),
-      cache_read: opt_non_neg(Map.get(usage, "cache_read_input_tokens")),
-      cache_creation: opt_non_neg(Map.get(usage, "cache_creation_input_tokens")),
-      cost_usd: cost,
+      input_tokens: in_tokens,
+      output_tokens: out_tokens,
+      cache_read: cache_read,
+      cache_creation: cache_creation,
+      cost_usd: nil,
+      estimated_cost_usd:
+        Pricing.derive(
+          Map.get(ctx, :model),
+          %{
+            input: in_tokens,
+            output: out_tokens,
+            cache_read: cache_read,
+            cache_creation: cache_creation
+          },
+          Map.get(ctx, :price_table, %{})
+        ),
       raw: raw
     }
   end

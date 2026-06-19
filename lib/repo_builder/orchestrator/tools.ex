@@ -11,7 +11,8 @@ defmodule RepoBuilder.Orchestrator.Tools do
   seams: `Agents`, `Session.Supervisor`, `WorkflowEngine`, `Logs`, and the
   `Dashboard` console feed.
   """
-  alias RepoBuilder.{Agents, Logs, Orchestrators, Session, WorkflowEngine, Workflows}
+  alias RepoBuilder.{Agents, Budget, Logs, Orchestrators, Session, WorkflowEngine, Workflows}
+  alias RepoBuilder.Budget.Scope
   alias RepoBuilder.Dashboard
   alias RepoBuilder.Definitions
   alias RepoBuilder.Harness.McpTools
@@ -24,6 +25,24 @@ defmodule RepoBuilder.Orchestrator.Tools do
   # `start_adw` routes to the real ADW adapter when the resolved harness is this; every
   # other harness keeps the in-app WorkflowEngine catalog path (Fake-testable fallback).
   @adw_harness "adw"
+
+  # Standard reporting clause appended to every spawned worker's system prompt
+  # (issue-2541). The orchestrator can only read a worker's findings via
+  # `check_agent_status`'s `final_message` field — i.e. the worker's final turn — so a
+  # worker that buries its conclusion mid-transcript is effectively silent. This clause
+  # makes every worker end with a concise, self-contained, retrievable summary.
+  @worker_reporting_clause """
+  ## Reporting results
+  Only your FINAL message is surfaced to the coordinator that dispatched you — it is
+  read back via the orchestrator's `check_agent_status` tool. End every turn with a
+  concise, self-contained summary of your results and findings (what you did, what you
+  found, any conclusions). Do not bury the outcome mid-transcript; restate it at the end.
+  """
+
+  # Max characters of worker text surfaced through `check_agent_status` (issue-2541).
+  # Bounded to keep the tool result small even at limit=20 (the platform has a known
+  # large-tool-result stdout-overflow concern — see issue-log-2389).
+  @worker_text_cap 2_000
 
   # Changeset failures are stringified at the boundary (`changeset_reason/1`), so a
   # reason that escapes a tool is always an atom or a string.
@@ -99,7 +118,7 @@ defmodule RepoBuilder.Orchestrator.Tools do
         "name" => name,
         "harness" => spec.harness,
         "model" => spec.model,
-        "system_prompt" => blank_to_nil(args["system_prompt"]),
+        "system_prompt" => with_reporting_clause(blank_to_nil(args["system_prompt"])),
         # The worker's `provider` column is a closed enum that can't hold pi's open
         # provider set, so the real provider rides in `config` and is threaded into
         # the session at command time. Template provenance (name+version) rides here too;
@@ -251,7 +270,8 @@ defmodule RepoBuilder.Orchestrator.Tools do
     with {:ok, name} <- fetch_string(args, "name"),
          {:ok, prompt} <- fetch_string(args, "prompt"),
          {:ok, worker} <- Agents.get_by_name_for_orchestrator(orchestrator_id, name),
-         :ok <- ensure_worker_model(worker) do
+         :ok <- ensure_worker_model(worker),
+         :ok <- check_budget(orchestrator_id) do
       session_id = worker.session_id || generate_session_id()
       _ = Agents.set_session(worker.id, session_id)
 
@@ -262,6 +282,7 @@ defmodule RepoBuilder.Orchestrator.Tools do
         harness: worker.harness,
         prompt: prompt,
         model: worker.model,
+        orchestrator_id: orchestrator_id,
         provider: worker_provider(worker),
         config: worker_session_config(worker),
         # Run the worker in the orchestrator's working directory so it operates on the
@@ -306,7 +327,9 @@ defmodule RepoBuilder.Orchestrator.Tools do
     with {:ok, name} <- fetch_string(args, "name"),
          {:ok, worker} <- Agents.get_by_name_for_orchestrator(orchestrator_id, name) do
       limit = positive_int(args["limit"], 20)
-      tail = worker.id |> Logs.list_recent(limit) |> Enum.map(&log_summary/1)
+      logs = Logs.list_recent(worker.id, limit)
+      tail = Enum.map(logs, &log_summary/1)
+      final_message = logs |> worker_final_message() |> truncate_or_nil()
       cost = worker.id |> Logs.cost_rollup!() |> Decimal.to_string()
 
       {:ok,
@@ -315,8 +338,32 @@ defmodule RepoBuilder.Orchestrator.Tools do
          "name" => worker.name,
          "status" => to_string(worker.status),
          "cost_usd" => cost,
+         "final_message" => final_message,
          "recent_events" => tail
        }}
+    end
+  end
+
+  # Budget breaker (issue-budget-guardrails): before spending on a worker turn, consult
+  # the breaker for the orchestrator's scopes. A tripped `:pause`/`:hard_stop` cap yields
+  # a typed `budget_exceeded` TOOL RESULT (`{:ok, map}`) — so the orchestrator agent sees
+  # "budget exceeded, cannot spawn worker" rather than the platform silently spending —
+  # which short-circuits the caller's `with` chain. `:ok` proceeds unchanged.
+  # Inference-only spec — the concrete tool-result map narrows below `{:ok, map()}`.
+  defp check_budget(orchestrator_id) do
+    case Budget.Guard.check(Scope.scopes_for(%{orchestrator_id: orchestrator_id})) do
+      :ok ->
+        :ok
+
+      {:error, {:budget_exceeded, cap}} ->
+        {:ok,
+         %{
+           "status" => "budget_exceeded",
+           "scope" => to_string(cap.scope),
+           "limit_usd" => Decimal.to_string(cap.limit_usd),
+           "message" =>
+             "budget exceeded for #{cap.scope} cap (limit $#{Decimal.to_string(cap.limit_usd)}); cannot spawn or drive a worker until the cap is reset or raised"
+         }}
     end
   end
 
@@ -336,22 +383,26 @@ defmodule RepoBuilder.Orchestrator.Tools do
       if harness == @adw_harness do
         start_adw_via_adapter(orchestrator_id, harness, input, args)
       else
-        start_adw_via_engine(harness, input, args)
+        start_adw_via_engine(orchestrator_id, harness, input, args)
       end
     end
   end
 
   # The in-app WorkflowEngine path (Fake-harness-testable fallback): validate the type
-  # against the catalog and run a deterministic linear workflow. Unchanged shape so the
-  # existing back-compat tests stay green.
-  @spec start_adw_via_engine(String.t(), String.t(), map()) :: result()
-  defp start_adw_via_engine(harness, input, args) do
+  # against the catalog and run a deterministic linear workflow. The run records its
+  # launching `orchestrator_id` so its terminal site can re-engage the holding pattern
+  # (issue-fallback) — the same contract the adapter path already honours.
+  @spec start_adw_via_engine(Ecto.UUID.t(), String.t(), String.t(), map()) :: result()
+  defp start_adw_via_engine(orchestrator_id, harness, input, args) do
     with {:ok, type} <- resolve_workflow_type(args) do
       name = "orch-adw-#{System.unique_integer([:positive])}"
 
       with {:ok, workflow} <- WorkflowEngine.create_workflow_of_type(name, type, harness),
            {:ok, run_id, _pid} <-
-             WorkflowEngine.start_workflow(workflow, inputs: %{"input" => input}) do
+             WorkflowEngine.start_workflow(workflow,
+               inputs: %{"input" => input},
+               orchestrator_id: orchestrator_id
+             ) do
         {:ok, %{"status" => "started", "run_id" => run_id, "workflow_type" => type}}
       else
         {:error, %Ecto.Changeset{} = changeset} -> {:error, changeset_reason(changeset)}
@@ -1014,10 +1065,69 @@ defmodule RepoBuilder.Orchestrator.Tools do
     end
   end
 
-  @spec log_summary(Logs.AgentLog.t()) :: map()
-  defp log_summary(log) do
-    %{"event_type" => to_string(log.event_type), "at" => to_iso(log.inserted_at)}
+  # Append the standard reporting clause to a worker's system prompt (issue-2541).
+  # Uses the clause alone when the orchestrator passes no prompt.
+  @spec with_reporting_clause(String.t() | nil) :: String.t()
+  defp with_reporting_clause(nil), do: String.trim(@worker_reporting_clause)
+
+  defp with_reporting_clause(prompt),
+    do: prompt <> "\n\n" <> String.trim(@worker_reporting_clause)
+
+  # The worker's most recent NON-thinking result text (issue-2541): prefer the latest
+  # terminal `:done` payload (`"result"`/`"final_text"`, harness-defensive), else the
+  # latest finalized `:text_delta` that is not thinking. `nil` when none exists.
+  @spec worker_final_message([Logs.AgentLog.t()]) :: String.t() | nil
+  defp worker_final_message(logs) do
+    logs
+    |> Enum.reverse()
+    |> Enum.find_value(fn log -> result_text(log) end)
   end
+
+  @spec result_text(Logs.AgentLog.t()) :: String.t() | nil
+  defp result_text(%{event_type: :done, payload: payload}) when is_map(payload),
+    do: blank_to_nil(payload["result"]) || blank_to_nil(payload["final_text"])
+
+  defp result_text(%{event_type: :text_delta, payload: payload}) when is_map(payload) do
+    if payload["thinking"] == true, do: nil, else: blank_to_nil(payload["text"])
+  end
+
+  defp result_text(_log), do: nil
+
+  # Codepoint-based so truncation never splits a multibyte UTF-8 char. Inference-only
+  # spec (the lone `cap` caller passes the literal @worker_text_cap, narrowing below
+  # `pos_integer()`).
+  defp truncate_text(text, cap) do
+    if String.length(text) <= cap,
+      do: text,
+      else: String.slice(text, 0, cap) <> "… (truncated)"
+  end
+
+  defp truncate_or_nil(nil), do: nil
+  defp truncate_or_nil(text), do: truncate_text(text, @worker_text_cap)
+
+  # Inference-only spec — the concrete summary map (optionally with a "text" key)
+  # narrows below a hand-written `map()` (matches the original inference-only form).
+  defp log_summary(log) do
+    base = %{"event_type" => to_string(log.event_type), "at" => to_iso(log.inserted_at)}
+
+    case log_summary_text(log) do
+      nil -> base
+      text -> Map.put(base, "text", truncate_text(text, @worker_text_cap))
+    end
+  end
+
+  # Content-bearing events surface a text excerpt (issue-2541); others stay compact.
+  @spec log_summary_text(Logs.AgentLog.t()) :: String.t() | nil
+  defp log_summary_text(%{event_type: :text_delta, payload: payload}) when is_map(payload),
+    do: blank_to_nil(payload["text"])
+
+  defp log_summary_text(%{event_type: :done, payload: payload}) when is_map(payload),
+    do: blank_to_nil(payload["result"]) || blank_to_nil(payload["final_text"])
+
+  defp log_summary_text(%{event_type: :error, payload: payload}) when is_map(payload),
+    do: blank_to_nil(payload["message"])
+
+  defp log_summary_text(_log), do: nil
 
   @spec to_iso(DateTime.t() | nil) :: String.t() | nil
   defp to_iso(%DateTime{} = at), do: DateTime.to_iso8601(at)

@@ -53,6 +53,7 @@ defmodule RepoBuilder.Orchestrator.Orchestrator do
           status: status(),
           working_dir: String.t() | nil,
           total_cost_usd: Decimal.t(),
+          estimated_cost_usd: Decimal.t() | nil,
           input_tokens: non_neg_integer(),
           output_tokens: non_neg_integer(),
           context_tokens: non_neg_integer(),
@@ -76,6 +77,10 @@ defmodule RepoBuilder.Orchestrator.Orchestrator do
     field :status, Ecto.Enum, values: [:idle, :running, :error], default: :idle
     field :working_dir, :string
     field :total_cost_usd, :decimal, default: Decimal.new(0)
+    # Token-derived live ESTIMATE (display-only, OVERWRITE-latest snapshot — NOT a sum);
+    # nullable (nil = unpriced/no estimate yet). Superseded by `total_cost_usd` when the
+    # harness reports the authoritative billed amount on the terminal event.
+    field :estimated_cost_usd, :decimal
     # Cumulative lifetime token throughput (cost report); `context_tokens` is the
     # LATEST turn's input+output (context-window occupancy), overwritten each turn.
     field :input_tokens, :integer, default: 0
@@ -101,6 +106,7 @@ defmodule RepoBuilder.Orchestrator.Orchestrator do
       :status,
       :working_dir,
       :total_cost_usd,
+      :estimated_cost_usd,
       :input_tokens,
       :output_tokens,
       :context_tokens,

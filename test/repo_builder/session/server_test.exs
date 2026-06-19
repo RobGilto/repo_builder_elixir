@@ -4,6 +4,7 @@ defmodule RepoBuilder.Session.ServerTest do
   import Mox
 
   alias RepoBuilder.{Agents, HarnessFixtures, Logs, OsPidLedger}
+  alias RepoBuilder.Logs.Writer
   alias RepoBuilder.Session.{Admission, Supervisor}
 
   @mock RepoBuilder.Harness.Mock
@@ -95,11 +96,48 @@ defmodule RepoBuilder.Session.ServerTest do
 
       ref = Process.monitor(pid)
 
-      assert_receive {:harness_event,
-                      %Event.Error{message: "stdout overflow", reason: :provider_error}},
+      assert_receive {:harness_event, %Event.Error{message: message, reason: :provider_error}},
                      2_000
 
+      assert String.starts_with?(message, "stdout overflow")
       assert_receive {:DOWN, ^ref, :process, _, _}, 2_000
+    end
+
+    test "a large but newline-terminated frame above the old 1 MiB default is not treated as overflow" do
+      agent = unique_agent()
+      subscribe(agent)
+
+      # Long-running child so the server stays alive while we inject crafted stdout.
+      stub(@mock, :command, fn _ -> {"sleep", ["10"], [], %{harness: :mock}} end)
+
+      stub(@mock, :normalize, fn
+        %{"k" => "text", "t" => text}, _ -> {:ok, [%Event.TextDelta{harness: :mock, text: text}]}
+        _, _ -> :skip
+      end)
+
+      {:ok, pid} =
+        Supervisor.start_session(
+          agent_id: agent,
+          harness: "mock",
+          prompt: "x",
+          max_line_bytes: 2_000_000
+        )
+
+      os_pid = :sys.get_state(pid).os_pid
+      assert is_integer(os_pid)
+
+      # A single valid, newline-terminated frame ~1.5 MiB — comfortably above the old 1 MiB
+      # default but under the generous cap: must normalize, NOT be killed as overflow.
+      padding = String.duplicate("x", 1_500_000)
+      line = ~s({"k":"text","t":"#{padding}"}) <> "\n"
+      assert byte_size(line) > 1_048_576
+
+      send(pid, {:stdout, os_pid, line})
+
+      assert_receive {:harness_event, %Event.TextDelta{text: ^padding}}, 2_000
+      refute_receive {:harness_event, %Event.Error{reason: :provider_error}}, 200
+
+      :ok = Supervisor.stop_session(agent)
     end
 
     test "a malformed JSON line is skipped, not fatal" do
@@ -207,6 +245,10 @@ defmodule RepoBuilder.Session.ServerTest do
       assert raw["api_key"] == "sk-secret", "the in-flight broadcast keeps full raw"
       assert_receive {:DOWN, ^ref, :process, _, _}, 2_000
 
+      # Persistence is now async (issue hot-path-writes Part A) — wait for this agent's
+      # writer partition to drain before asserting on the persisted rows / status.
+      :ok = Writer.sync(agent.id)
+
       logs = Logs.list_recent(agent.id)
       text_log = Enum.find(logs, &(&1.event_type == :text_delta))
       # TextDelta persists the canonical text (+ thinking flag), not the raw frame, so
@@ -267,6 +309,7 @@ defmodule RepoBuilder.Session.ServerTest do
       assert_receive {:harness_event, %Event.TextDelta{text: "lo", partial?: true}}, 2_000
       assert_receive {:harness_event, %Event.TextDelta{text: "Hello", partial?: false}}, 2_000
       assert_receive {:DOWN, ^ref, :process, _, _}, 2_000
+      :ok = Writer.sync(agent.id)
 
       # Only the finalized text delta is persisted — partials write no rows.
       text_logs =

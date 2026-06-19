@@ -12,6 +12,7 @@ defmodule RepoBuilder.SessionCase do
   use ExUnit.CaseTemplate
 
   alias Ecto.Adapters.SQL.Sandbox
+  alias RepoBuilder.Logs.Writer
 
   using do
     quote do
@@ -26,6 +27,10 @@ defmodule RepoBuilder.SessionCase do
   setup tags do
     pid = Sandbox.start_owner!(RepoBuilder.Repo, shared: not tags[:async])
     on_exit(fn -> Sandbox.stop_owner(pid) end)
+    # Drain the async Logs.Writer before the sandbox connection is checked in (LIFO:
+    # runs after drain_sessions, before stop_owner) so a late persist never races
+    # teardown.
+    on_exit(&Writer.drain/0)
     on_exit(&drain_sessions/0)
 
     unless tags[:async], do: Mox.set_mox_global()

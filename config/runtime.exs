@@ -56,6 +56,24 @@ if base = System.get_env("ORCHESTRATOR_MCP_BASE_URL") do
   config :repo_builder, :orchestrator, mcp_base_url: base
 end
 
+# Operator-tunable stdout backpressure ceiling (BUILD_PROMPT.md §6 rule 6): raise/lower the
+# per-line OOM backstop without a redeploy. Only applied when the env var is a valid positive
+# integer; otherwise the config/config.exs default (16 MiB) stands.
+case System.get_env("REPO_BUILDER_MAX_LINE_BYTES") do
+  nil ->
+    :ok
+
+  raw ->
+    case Integer.parse(raw) do
+      {bytes, ""} when bytes > 0 ->
+        session_cfg = Application.get_env(:repo_builder, :session, [])
+        config :repo_builder, :session, Keyword.put(session_cfg, :max_line_bytes, bytes)
+
+      _invalid ->
+        :ok
+    end
+end
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

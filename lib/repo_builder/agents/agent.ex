@@ -82,7 +82,11 @@ defmodule RepoBuilder.Agents.Agent do
     |> validate_required([:name, :harness, :orchestrator_id])
     |> validate_length(:name, min: 1, max: 200)
     |> validate_inclusion(:harness, Registry.known(), message: "is not a registered harness")
-    |> unique_constraint([:orchestrator_id, :name], name: :agents_orchestrator_id_name_index)
+    # Report the composite `(orchestrator_id, name)` violation on `:name` (still keyed to
+    # the same index) so the duplicate is surfaced as an actionable "duplicate name" — not
+    # a misleading `orchestrator_id has already been taken`. A bare field attaches the
+    # error to that field while still matching the named composite index.
+    |> unique_constraint(:name, name: :agents_orchestrator_id_name_index)
   end
 
   @doc "Set a worker's resumable CLI session id."

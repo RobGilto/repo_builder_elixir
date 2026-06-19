@@ -253,6 +253,11 @@ config :repo_builder, :webhooks, replay_window_seconds: 300
 # Cost/error alerting thresholds (BUILD_PROMPT.md §13).
 config :repo_builder, :alerting, cost_threshold_usd: 10.0
 
+# Budget guardrails (issue-budget-guardrails). `refresh_ms` is the slow-path reconcile
+# interval for Budget.Guard; `reconcile_on_boot?` seeds the default :alert cap from
+# `:alerting` and reconciles spent-so-far from CostCenter on start (runtime-overridable).
+config :repo_builder, :budget, refresh_ms: 60_000, reconcile_on_boot?: true
+
 # Context-window sizes (tokens) for orchestrator/worker usage-% reporting. A
 # `{harness, model}` tuple overrides the `:default`; harness-blind at the call site
 # (RepoBuilder.Orchestrator.ContextWindow). Operator-tunable; pi's live model catalog
@@ -271,10 +276,19 @@ config :repo_builder, :orchestrator,
   default_model: nil,
   mcp_base_url: "http://127.0.0.1:4000",
   # FIFO turn queue (issue message-queue). `auto_resume_on_worker_return` enables the
-  # holding pattern (an idle orchestrator is re-engaged when a worker returns);
-  # `max_queue_depth` bounds the pending operator-message backlog.
-  auto_resume_on_worker_return: false,
+  # holding pattern (an idle orchestrator is re-engaged when a dispatched worker
+  # returns) — defaults ON (issue holding-pattern-followup) so the orchestrator always
+  # follows up on returned work; set false to opt out. `max_queue_depth` bounds the
+  # pending operator-message backlog.
+  auto_resume_on_worker_return: true,
   max_queue_depth: 50,
+  # Idle watchdog for orchestrator turns. An orchestrator turn is interactive, so it
+  # gets a SHORTER byte-idle window than the worker-grade `:session` `idle_ms` (5 min):
+  # a worker doing a long build can legitimately be byte-silent for minutes, but an
+  # interactive orchestrator turn byte-silent beyond this is treated as stalled and is
+  # surfaced/recovered via the existing idle-timeout → Event.Error path. The timer
+  # resets on every streamed frame, so a genuinely-working turn never trips it.
+  turn_idle_ms: 120_000,
   # Writable root for operator/orchestrator-authored subagent templates (the
   # read-only built-ins ship at priv/orchestrator/agents). Markdown-with-frontmatter
   # files, versioned on the filesystem. Overridden to a tmp dir in test.exs.
@@ -285,7 +299,11 @@ config :repo_builder, :session,
   max_live_sessions: 100,
   max_children: 200,
   idle_ms: 300_000,
-  max_line_bytes: 1_048_576,
+  # Hostile-stream OOM backstop (BUILD_PROMPT.md §6 rule 6): a single un-newline-terminated
+  # line larger than this is treated as a runaway flood and kills the child. Sized at 16 MiB
+  # so legitimate large single-line stream-json frames (big Read/diff/Firecrawl tool results)
+  # pass through; tune per deploy via REPO_BUILDER_MAX_LINE_BYTES (config/runtime.exs).
+  max_line_bytes: 16_777_216,
   workspace_base: "priv/workspaces"
 
 # Import environment specific config. This must remain at the bottom

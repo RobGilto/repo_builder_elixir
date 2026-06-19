@@ -30,12 +30,19 @@ defmodule RepoBuilder.CostCenterTest do
     usage =
       case Keyword.get(opts, :cost, :none) do
         :none ->
-          %Usage{input_tokens: opts[:input] || 0, output_tokens: opts[:output] || 0}
+          %Usage{
+            input_tokens: opts[:input] || 0,
+            output_tokens: opts[:output] || 0,
+            cache_read: opts[:cache_read],
+            cache_creation: opts[:cache_creation]
+          }
 
         cost ->
           %Usage{
             input_tokens: opts[:input] || 0,
             output_tokens: opts[:output] || 0,
+            cache_read: opts[:cache_read],
+            cache_creation: opts[:cache_creation],
             cost_usd: cost
           }
       end
@@ -190,7 +197,7 @@ defmodule RepoBuilder.CostCenterTest do
   end
 
   describe "price_table_for/1" do
-    test "returns %{model => combined_rate}, preferring the output rate" do
+    test "returns %{model => Pricing.Rate} with separate input/output rates" do
       {:ok, _} =
         CostCenter.upsert_price(%{
           harness: "pi",
@@ -199,10 +206,12 @@ defmodule RepoBuilder.CostCenterTest do
           output_price_per_mtok: "2.2"
         })
 
-      assert CostCenter.price_table_for("pi") == %{"glm-4.6" => 2.2}
+      assert CostCenter.price_table_for("pi") == %{
+               "glm-4.6" => %Pricing.Rate{input: 0.6, output: 2.2}
+             }
     end
 
-    test "falls back to the input rate when output is absent, omits rateless rows" do
+    test "falls back input↔output when one rate is absent, omits rateless rows" do
       {:ok, _} =
         CostCenter.upsert_price(%{
           harness: "pi",
@@ -213,7 +222,7 @@ defmodule RepoBuilder.CostCenterTest do
       {:ok, _} = CostCenter.upsert_price(%{harness: "pi", model: "no-rate"})
 
       table = CostCenter.price_table_for("pi")
-      assert table["only-input"] == 0.5
+      assert table["only-input"] == %Pricing.Rate{input: 0.5, output: 0.5}
       refute Map.has_key?(table, "no-rate")
     end
   end
@@ -222,7 +231,8 @@ defmodule RepoBuilder.CostCenterTest do
     test "a catalog entry derives a cost where the config table alone left it nil" do
       config_table = Application.fetch_env!(:repo_builder, :harnesses)["pi"][:price_table]
       # A model the hard-coded config price_table does NOT know.
-      assert Pricing.derive("brand-new-model", 1_000_000, 0, config_table) == nil
+      assert Pricing.derive("brand-new-model", %{input: 1_000_000, output: 0}, config_table) ==
+               nil
 
       {:ok, _} =
         CostCenter.upsert_price(%{
@@ -232,7 +242,7 @@ defmodule RepoBuilder.CostCenterTest do
         })
 
       merged = Map.merge(config_table, CostCenter.price_table_for("pi"))
-      assert Pricing.derive("brand-new-model", 1_000_000, 0, merged) == 3.0
+      assert Pricing.derive("brand-new-model", %{input: 1_000_000, output: 0}, merged) == 3.0
     end
   end
 
@@ -294,6 +304,34 @@ defmodule RepoBuilder.CostCenterTest do
       # (500k + 500k) / 1e6 * 2.0 = 2.0
       assert Decimal.equal?(Decimal.round(row.estimated_cost_usd, 2), Decimal.new("2.00"))
       assert Decimal.equal?(row.actual_cost_usd, Decimal.new(0))
+    end
+
+    test "the cache_read tokens contribute to the estimate (cache-aware fallback)" do
+      {:ok, _} =
+        CostCenter.upsert_price(%{
+          harness: "pi",
+          provider: "zai",
+          model: "glm-4.6",
+          input_price_per_mtok: "10.0",
+          output_price_per_mtok: "50.0"
+        })
+
+      agent = agent_fixture()
+
+      log_fixture(agent,
+        harness: "pi",
+        provider: "zai",
+        model: "glm-4.6",
+        input: 0,
+        output: 0,
+        cache_read: 1_000_000,
+        cost: nil
+      )
+
+      assert [row] = CostCenter.rollup([])
+      assert row.estimated?
+      # cache_read 1_000_000 * input_rate 10.0 * 0.1 = 1.0
+      assert Decimal.equal?(Decimal.round(row.estimated_cost_usd, 2), Decimal.new("1.00"))
     end
 
     test "leaves estimated_cost_usd nil when no catalog price exists (nil-vs-0 preserved)" do

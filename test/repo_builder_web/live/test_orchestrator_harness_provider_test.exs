@@ -76,7 +76,7 @@ defmodule RepoBuilderWeb.TestOrchestratorHarnessProviderTest do
     |> render_submit()
 
     # (a) The orchestrator's text streams onto the global console feed.
-    assert_receive {:agent_event, agent_id, %RepoBuilder.Harness.Event.TextDelta{}, _seq_no},
+    assert_receive {:agent_event, agent_id, %RepoBuilder.Harness.Event.TextDelta{}, _log_no},
                    5_000
 
     assert String.starts_with?(agent_id, "orch-")

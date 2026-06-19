@@ -111,6 +111,10 @@ defmodule RepoBuilder.Harness.Event do
       field :cache_read, non_neg_integer(), enforce: false
       field :cache_creation, non_neg_integer(), enforce: false
       field :cost_usd, float(), enforce: false
+      # Token-derived live ESTIMATE (display-only); never accumulated into authoritative
+      # cost; nil when the model is unpriced. Superseded by cost_usd when the harness
+      # reports the real billed amount on the terminal event.
+      field :estimated_cost_usd, float(), enforce: false
       field :raw, map(), default: %{}
     end
   end

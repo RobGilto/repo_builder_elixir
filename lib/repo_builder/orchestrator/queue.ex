@@ -17,9 +17,13 @@ defmodule RepoBuilder.Orchestrator.Queue do
       of the FIFO and starts it — guaranteeing only ONE turn resumes the session at a
       time, in operator order.
     * `cancel/2` removes a still-queued item (never the in-flight turn).
-    * holding pattern — when `Orchestrators.auto_resume?/0` is enabled and the queue is
-      fully idle, a worker-terminal signal enqueues ONE low-priority auto-resume turn so
-      the orchestrator reviews the returned work. Operator messages always front-run it.
+    * holding pattern — when `Orchestrators.auto_resume?/0` is enabled, a worker-terminal
+      signal re-engages the orchestrator with ONE low-priority auto-resume turn so it
+      reviews the returned work. If the queue is idle the resume starts immediately; if a
+      turn is still in flight (the worker returned mid-dispatch) the resume is recorded in
+      `pending_resume?` and started when the queue next drains to idle — so a return at an
+      inconvenient moment is never lost (anti-amnesia) yet a burst coalesces to one resume
+      (anti-spam). Operator messages always front-run and supersede it.
 
   The queue is in-memory runtime state (it does not survive a process restart), matching
   OTP norms — see the spec's Notes.
@@ -59,6 +63,15 @@ defmodule RepoBuilder.Orchestrator.Queue do
       # The pluggable turn launcher (defaults to Server.start_turn/2; tests inject a
       # controllable starter so the busy/idle state machine is fully deterministic).
       field :starter, (Ecto.UUID.t(), String.t() -> {:ok, pid(), String.t()} | {:error, term()})
+      # One-bit holding-pattern memory (issue holding-pattern-followup): a worker
+      # returned while the queue was busy/backlogged, so a single auto-resume turn is
+      # OWED once the queue next drains to idle. Bursts coalesce to one flag; operator
+      # messages clear it (they supersede the owed resume).
+      field :pending_resume?, boolean()
+      # The returned-worker info backing a pending resume, so the consumed auto-resume
+      # prompt can name which worker to review (nil when no resume is owed; a burst
+      # keeps the most recent return).
+      field :pending_info, map() | nil
     end
   end
 
@@ -140,7 +153,9 @@ defmodule RepoBuilder.Orchestrator.Queue do
       orchestrator_id: orchestrator_id,
       queue: :queue.new(),
       current: nil,
-      starter: opts[:starter] || (&Server.start_turn/2)
+      starter: opts[:starter] || (&Server.start_turn/2),
+      pending_resume?: false,
+      pending_info: nil
     }
 
     {:ok, state}
@@ -148,6 +163,8 @@ defmodule RepoBuilder.Orchestrator.Queue do
 
   @impl true
   def handle_call({:enqueue, prompt, kind}, _from, %State{current: nil} = state) do
+    state = clear_pending_resume_for(state, kind)
+
     case start_item(state, build_item(prompt, kind)) do
       {:started, agent_id, state} ->
         log(state, "start", "started turn #{agent_id}")
@@ -164,9 +181,10 @@ defmodule RepoBuilder.Orchestrator.Queue do
       {:reply, {:error, :queue_full}, state}
     else
       item = build_item(prompt, kind)
-      # Operator messages always front-run any pending auto-resume holding-pattern item.
+      # Operator messages always front-run any pending auto-resume holding-pattern item
+      # AND clear any owed (mid-turn) resume — operator work supersedes the resume.
       queue = item |> append_with_priority(state.queue)
-      state = %{state | queue: queue}
+      state = clear_pending_resume_for(%{state | queue: queue}, kind)
       position = :queue.len(queue)
       log(state, "enqueue", "queued #{kind} at position #{position}")
       broadcast(state)
@@ -197,9 +215,10 @@ defmodule RepoBuilder.Orchestrator.Queue do
         {:DOWN, ref, :process, _down_pid, _reason},
         %State{current: {_pid, ref, _id}} = state
       ) do
-    # The in-flight turn finished dispatching (Server stopped on Done/Error). Advance.
+    # The in-flight turn finished dispatching (Server stopped on Done/Error). Advance,
+    # then honour any holding-pattern resume owed from a mid-turn worker return.
     state = %{state | current: nil}
-    state = advance(state)
+    state = state |> advance() |> maybe_consume_pending_resume()
     broadcast(state)
     {:noreply, state}
   end
@@ -255,19 +274,55 @@ defmodule RepoBuilder.Orchestrator.Queue do
     end
   end
 
-  # Holding pattern: only when enabled, fully idle, and not already holding an
-  # auto-resume item — so worker-return bursts coalesce to at most one pending resume,
-  # and any operator work suppresses it.
+  # Holding pattern (event-driven, coalesced single-resume): a worker returned.
+  #   * disabled        → unchanged (fully opt-out via config).
+  #   * enabled + idle   → start the resume turn now.
+  #   * enabled + busy/backlogged → record the OWED resume in `pending_resume?` rather
+  #     than dropping it (anti-amnesia); a burst coalesces to one flag, keeping the most
+  #     recent worker for the prompt. The owed resume is consumed when the queue next
+  #     drains to idle (see `maybe_consume_pending_resume/1`).
   @spec maybe_auto_resume(State.t(), map()) :: State.t()
-  defp maybe_auto_resume(%State{current: nil} = state, info) do
+  defp maybe_auto_resume(%State{} = state, info) do
     cond do
-      not Orchestrators.auto_resume?() -> state
-      not :queue.is_empty(state.queue) -> state
-      true -> start_auto_resume(state, info)
+      not Orchestrators.auto_resume?() ->
+        state
+
+      idle?(state) ->
+        state |> start_auto_resume(info) |> clear_pending()
+
+      true ->
+        %{state | pending_resume?: true, pending_info: info}
     end
   end
 
-  defp maybe_auto_resume(%State{} = state, _info), do: state
+  # Consume an owed holding-pattern resume once the queue has drained to idle. The flag
+  # is cleared BEFORE starting the resume so an auto-resume turn that dispatches no new
+  # worker cannot retrigger itself — a fresh `{:worker_terminal, …}` is required to owe
+  # another (loop-safety).
+  @spec maybe_consume_pending_resume(State.t()) :: State.t()
+  defp maybe_consume_pending_resume(%State{pending_resume?: true} = state) do
+    if Orchestrators.auto_resume?() and idle?(state) do
+      info = state.pending_info || %{}
+      state |> clear_pending() |> start_auto_resume(info)
+    else
+      state
+    end
+  end
+
+  defp maybe_consume_pending_resume(%State{} = state), do: state
+
+  # The queue is fully idle: no in-flight turn and nothing waiting.
+  @spec idle?(State.t()) :: boolean()
+  defp idle?(%State{current: nil} = state), do: :queue.is_empty(state.queue)
+  defp idle?(%State{}), do: false
+
+  # Operator work supersedes an owed auto-resume; other kinds leave the flag intact.
+  @spec clear_pending_resume_for(State.t(), kind()) :: State.t()
+  defp clear_pending_resume_for(%State{} = state, :operator), do: clear_pending(state)
+  defp clear_pending_resume_for(%State{} = state, _kind), do: state
+
+  @spec clear_pending(State.t()) :: State.t()
+  defp clear_pending(%State{} = state), do: %{state | pending_resume?: false, pending_info: nil}
 
   @spec start_auto_resume(State.t(), map()) :: State.t()
   defp start_auto_resume(%State{} = state, info) do

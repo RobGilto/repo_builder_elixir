@@ -103,6 +103,7 @@ defmodule RepoBuilder.Harness.Fake do
          input_tokens: Map.get(raw, "input_tokens", 0),
          output_tokens: Map.get(raw, "output_tokens", 0),
          cost_usd: Map.get(raw, "cost_usd"),
+         estimated_cost_usd: Map.get(raw, "estimated_cost_usd"),
          raw: raw
        }
      ]}

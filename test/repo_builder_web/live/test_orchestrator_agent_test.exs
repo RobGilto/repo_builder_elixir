@@ -32,7 +32,7 @@ defmodule RepoBuilderWeb.TestOrchestratorAgentTest do
     refute html =~ "Select an agent"
 
     # (d) The orchestrator's events and the spawned worker broadcast on console:events.
-    assert_receive {:agent_event, agent_id, %RepoBuilder.Harness.Event.TextDelta{}, _seq_no},
+    assert_receive {:agent_event, agent_id, %RepoBuilder.Harness.Event.TextDelta{}, _log_no},
                    5_000
 
     assert String.starts_with?(agent_id, "orch-")

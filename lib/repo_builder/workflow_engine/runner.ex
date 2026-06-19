@@ -20,6 +20,8 @@ defmodule RepoBuilder.WorkflowEngine.Runner do
 
   require Logger
 
+  alias RepoBuilder.Budget
+  alias RepoBuilder.Budget.Scope
   alias RepoBuilder.Harness.Event
   alias RepoBuilder.Logs.Usage
   alias RepoBuilder.Session
@@ -82,10 +84,30 @@ defmodule RepoBuilder.WorkflowEngine.Runner do
     state = %{state | run: run, session_agent_id: agent_id, text_buf: ""}
     prompt = render(step.prompt_template, state.artifacts)
 
+    # Budget breaker (issue-budget-guardrails): a tripped cap in this run's scope blocks
+    # the step. Isolated — the step follows `on_failure`, the transition persists to
+    # `workflow_runs`, and neither this run nor any other crashes.
+    case Budget.Guard.check(Scope.scopes_for(%{workflow_run_id: run.id})) do
+      :ok ->
+        start_step_session(state, name, step, agent_id, prompt)
+
+      {:error, {:budget_exceeded, cap}} ->
+        Logger.warning("workflow #{run.id} step #{name} blocked by budget cap #{cap.id}")
+        state = record_step(state, name, :failed, nil)
+        reply(advance(state, step.on_failure))
+    end
+  end
+
+  @spec start_step_session(State.t(), String.t(), Step.t(), String.t(), String.t()) ::
+          {:noreply, State.t()}
+          | {:noreply, State.t(), {:continue, :run_step}}
+          | {:stop, :normal, State.t()}
+  defp start_step_session(%State{run: run} = state, name, step, agent_id, prompt) do
     case Session.Supervisor.start_session(
            agent_id: agent_id,
            harness: step.harness,
-           prompt: prompt
+           prompt: prompt,
+           workflow_run_id: run.id
          ) do
       {:ok, _pid} ->
         {:noreply, state}
@@ -158,6 +180,9 @@ defmodule RepoBuilder.WorkflowEngine.Runner do
   defp finalize(state, status) do
     {:ok, run} = Workflows.update_run(state.run, %{status: status, artifacts: state.artifacts})
     broadcast_lane(run, status)
+    # Re-engage the launching orchestrator (holding pattern) on a terminal run; no-op
+    # when this run was not orchestrator-launched (issue-fallback).
+    _ = WorkflowEngine.emit_orchestrator_resume(run, status == :succeeded)
     %{state | run: run, current_step: nil, session_agent_id: nil}
   end
 

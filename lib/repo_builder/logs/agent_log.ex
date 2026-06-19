@@ -34,7 +34,7 @@ defmodule RepoBuilder.Logs.AgentLog do
           payload: map(),
           usage: Usage.t() | nil,
           hidden: boolean(),
-          seq_no: integer() | nil,
+          log_no: integer() | nil,
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
@@ -63,7 +63,7 @@ defmodule RepoBuilder.Logs.AgentLog do
     # backed by an owned sequence (migration). `read_after_writes: true` so the live path
     # gets the value back in the inserted struct at broadcast time. Never cast — DB-managed,
     # never user input.
-    field :seq_no, :integer, read_after_writes: true
+    field :log_no, :integer, read_after_writes: true
     timestamps()
   end
 
