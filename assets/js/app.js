@@ -261,6 +261,10 @@ const LogCopy = {
       this.didDrag = false
       this.anchorEl = cell
       this.endEl = cell
+      // Suppress native text selection for the gesture (reuses DragSelect's class +
+      // its `.cns-dragging * { user-select: none }` rule), so the drag never paints
+      // the browser's blue highlight across rows.
+      this.el.classList.add("cns-dragging")
     }
 
     // Track the log cell under the pointer; recompute from the live DOM so rows that
@@ -278,6 +282,7 @@ const LogCopy = {
     this._onPointerUp = () => {
       if (!this.dragging) return
       this.dragging = false
+      this.el.classList.remove("cns-dragging")
       const anchor = this.anchorEl
       const end = this.endEl
       this.anchorEl = null
@@ -294,6 +299,8 @@ const LogCopy = {
         const [first, last] = following ? [anchor, end] : [end, anchor]
         text = `${first.dataset.log} to ${last.dataset.log}`
         cells = [first, last]
+        // Clear any selection that began in the first frame before the class took effect.
+        window.getSelection()?.removeAllRanges()
       }
 
       if (text && navigator.clipboard) navigator.clipboard.writeText(text)

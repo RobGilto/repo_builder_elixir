@@ -278,6 +278,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
+  user-select: none;
 }
 .cns-event-row__ln:hover { color: var(--cns-text-2); }
 .cns-event-row__ln--copied { color: var(--cns-cyan); }
