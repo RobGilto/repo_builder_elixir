@@ -123,6 +123,11 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
               "type" => "string",
               "description" =>
                 "Harness for the workflow. Use `adw` to run the real portable Python ADWs; omit to use the orchestrator's harness (in-app catalog workflow)."
+            },
+            "working_dir" => %{
+              "type" => "string",
+              "description" =>
+                "Absolute path to the repo the ADW should operate in. REQUIRED for cross-repo work (the ADW's slash commands resolve from this repo's `.claude/commands/`); defaults to the orchestrator's working directory. Must be an existing directory."
             }
           },
           "required" => ["input"]

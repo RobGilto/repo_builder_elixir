@@ -52,7 +52,11 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
       coherent slice) and track each with `check_adw` by its returned run id; report
       progress to the operator in plain text. Omitting `harness` runs the lightweight
       in-app catalog workflow instead (handy for demos/tests). Watch per-step progress
-      with `check_adw`.
+      with `check_adw`. CROSS-REPO: an ADW's slash commands (`/plan`, `/build`, …)
+      resolve from the TARGET repo's `.claude/commands/`, so when the ADW must operate
+      on a repo OTHER than your working directory, pass `working_dir` (an absolute path
+      to that repo) to `start_adw` — otherwise the commands won't resolve and the run
+      does nothing.
     - If a tier shows `(unassigned — cannot spawn here)` or a spawn fails with "no
       model selected", call `get_config` to inspect the available harnesses/models,
       then `configure_tier` to assign one — do NOT stop and ask the operator unless

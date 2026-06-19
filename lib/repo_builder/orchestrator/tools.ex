@@ -418,7 +418,8 @@ defmodule RepoBuilder.Orchestrator.Tools do
   # The returned `run_id` IS the worker/agent id; `check_adw` reads its canonical events.
   @spec start_adw_via_adapter(Ecto.UUID.t(), String.t(), String.t(), map()) :: result()
   defp start_adw_via_adapter(orchestrator_id, harness, input, args) do
-    with {:ok, adw} <- resolve_discovered_adw(orchestrator_id, args) do
+    with {:ok, cwd} <- adw_working_dir(orchestrator_id, args),
+         {:ok, adw} <- resolve_discovered_adw(orchestrator_id, cwd, args) do
       name = "orch-adw-#{System.unique_integer([:positive])}"
       adw_id = generate_adw_id()
 
@@ -439,7 +440,7 @@ defmodule RepoBuilder.Orchestrator.Tools do
       case Agents.create_worker(orchestrator_id, params) do
         {:ok, worker} ->
           _ = Agents.set_session(worker.id, adw_id)
-          spawn_adw_session(orchestrator_id, worker, input, adw)
+          spawn_adw_session(worker, input, adw, cwd)
 
         {:error, %Ecto.Changeset{} = changeset} ->
           {:error, changeset_reason(changeset)}
@@ -447,9 +448,27 @@ defmodule RepoBuilder.Orchestrator.Tools do
     end
   end
 
-  @spec spawn_adw_session(Ecto.UUID.t(), Agents.Agent.t(), String.t(), Definitions.Adw.t()) ::
+  # Resolve the directory the ADW worker runs in (its `opts.cwd`, and thus the
+  # adapter's `--working-dir` and the SDK's `.claude/commands/` root). An explicit
+  # `working_dir` MUST be an existing directory — a cross-repo ADW names the target
+  # repo here so its slash commands resolve from that repo, not the orchestrator's.
+  # Absent, fall back to the orchestrator's own working dir (same-repo back-compat).
+  @spec adw_working_dir(Ecto.UUID.t(), map()) :: {:ok, String.t() | nil} | {:error, reason()}
+  defp adw_working_dir(orchestrator_id, args) do
+    case blank_to_nil(args["working_dir"]) do
+      nil ->
+        {:ok, orchestrator_working_dir(orchestrator_id)}
+
+      dir ->
+        if File.dir?(dir),
+          do: {:ok, dir},
+          else: {:error, "working_dir #{dir} is not an existing directory"}
+    end
+  end
+
+  @spec spawn_adw_session(Agents.Agent.t(), String.t(), Definitions.Adw.t(), String.t() | nil) ::
           result()
-  defp spawn_adw_session(orchestrator_id, worker, input, adw) do
+  defp spawn_adw_session(worker, input, adw, cwd) do
     opts = [
       agent_id: worker.id,
       agent_db_id: worker.id,
@@ -458,7 +477,7 @@ defmodule RepoBuilder.Orchestrator.Tools do
       prompt: input,
       model: worker.model,
       config: worker.config,
-      cwd: orchestrator_working_dir(orchestrator_id)
+      cwd: cwd
     ]
 
     case Session.Supervisor.start_session(opts) do
@@ -482,12 +501,14 @@ defmodule RepoBuilder.Orchestrator.Tools do
   end
 
   # Validate the requested `workflow_type` against the DISCOVERED ADW scripts (app root
-  # + the orchestrator's working dir overlay). A missing/unknown type returns a helpful
-  # error listing the discovered slugs (never a crash).
-  @spec resolve_discovered_adw(Ecto.UUID.t(), map()) ::
+  # + the orchestrator's working dir + the resolved target `cwd` overlay). A
+  # missing/unknown type returns a helpful error listing the discovered slugs (never a
+  # crash). The target `cwd` is scanned too so a cross-repo ADW living only in the
+  # target repo's `adws/` is discoverable.
+  @spec resolve_discovered_adw(Ecto.UUID.t(), String.t() | nil, map()) ::
           {:ok, Definitions.Adw.t()} | {:error, reason()}
-  defp resolve_discovered_adw(orchestrator_id, args) do
-    discovered = discovered_adws(orchestrator_id)
+  defp resolve_discovered_adw(orchestrator_id, cwd, args) do
+    discovered = discovered_adws(orchestrator_id, cwd)
 
     case blank_to_nil(args["workflow_type"]) do
       nil ->
@@ -501,15 +522,17 @@ defmodule RepoBuilder.Orchestrator.Tools do
     end
   end
 
-  @spec discovered_adws(Ecto.UUID.t()) :: [Definitions.Adw.t()]
-  defp discovered_adws(orchestrator_id) do
+  @spec discovered_adws(Ecto.UUID.t(), String.t() | nil) :: [Definitions.Adw.t()]
+  defp discovered_adws(orchestrator_id, cwd) do
     app = Definitions.Adw.scan(File.cwd!(), :app)
 
-    working =
-      case orchestrator_working_dir(orchestrator_id) do
-        nil -> []
-        dir -> Definitions.Adw.scan(dir, :working_dir)
-      end
+    # Scan the orchestrator's working dir and the resolved target cwd (often the same;
+    # de-duplicated by slug below). The target overlay makes a target-repo-only ADW
+    # discoverable for cross-repo runs.
+    dirs =
+      [orchestrator_working_dir(orchestrator_id), cwd] |> Enum.reject(&is_nil/1) |> Enum.uniq()
+
+    working = Enum.flat_map(dirs, &Definitions.Adw.scan(&1, :working_dir))
 
     (working ++ app) |> Enum.uniq_by(& &1.name) |> Enum.sort_by(& &1.name)
   end

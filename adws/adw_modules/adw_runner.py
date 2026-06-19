@@ -18,10 +18,21 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 from dataclasses import dataclass
 from typing import Any, Callable
 
 from adw_emit import Emitter, emit_mode_selected
+
+# Substrings that mark a slash command the agent could NOT dispatch — it echoed the
+# token back as plain text instead of running the project command. Seeing any of these
+# in a step's output means the step did NOT execute, so it must report `failed`, never
+# `succeeded` (issue-workflow-adw-step). Matched case-insensitively.
+NON_EXECUTION_MARKERS = (
+    "isn't available in this environment",
+    "unknown command",
+    "command not found",
+)
 
 
 @dataclass
@@ -69,6 +80,51 @@ def render(command: str, prompt: str, prior: dict[str, str]) -> str:
     return " ".join(parts)
 
 
+def command_name(command: str) -> str:
+    """The bare command name: strip the leading slash + any arg suffix ('/build x' → 'build')."""
+    stripped = command.strip().lstrip("/").split()
+    return stripped[0] if stripped else ""
+
+
+def commands_dir(working_dir: str | None) -> str:
+    """The project slash-command directory the SDK resolves commands from."""
+    return os.path.join(working_dir or ".", ".claude", "commands")
+
+
+def missing_commands(steps: list[Step], working_dir: str | None) -> list[str]:
+    """Bare names of step commands with no ``<working_dir>/.claude/commands/<name>.md``.
+
+    First-seen order, de-duplicated. This is the pre-flight that converts the silent
+    "workflow references a command the runtime doesn't have" failure into a loud one.
+    """
+    base = commands_dir(working_dir)
+    missing: list[str] = []
+    seen: set[str] = set()
+    for step in steps:
+        name = command_name(step.command)
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        if not os.path.isfile(os.path.join(base, f"{name}.md")):
+            missing.append(name)
+    return missing
+
+
+def _emit_missing_commands(emitter: Emitter, missing: list[str], working_dir: str | None) -> None:
+    """Emit the neutral ``error`` event naming the unresolved slash commands."""
+    names = ", ".join(f"/{name}" for name in missing)
+    emitter.error(
+        f"missing slash command(s) in {commands_dir(working_dir)}: {names}",
+        reason="spawn_failed",
+    )
+
+
+def has_non_execution_marker(text: str) -> bool:
+    """True when ``text`` shows the agent failed to dispatch a slash command."""
+    lowered = text.lower()
+    return any(marker in lowered for marker in NON_EXECUTION_MARKERS)
+
+
 async def _run_step(emitter: Emitter, step: Step, prompt: str, args: Args,
                     index: int, total: int, prior: dict[str, str]) -> tuple[str, bool]:
     """Run one step via the SDK, emitting neutral events. Returns (final_text, ok)."""
@@ -92,6 +148,11 @@ async def _run_step(emitter: Emitter, step: Step, prompt: str, args: Args,
             cwd=args.working_dir,
             model=args.model,
             permission_mode="bypassPermissions",
+            # Load the project's filesystem settings — crucially `.claude/commands/` from
+            # the run's cwd — so the custom slash commands (/plan, /build, /review, /fix)
+            # resolve. claude-agent-sdk ≥0.1.0 loads NOTHING from disk without this, so
+            # without it every slash command is treated as plain text (issue-workflow-adw-step).
+            setting_sources=["project"],
         )
 
         step_cost: float | None = None
@@ -119,6 +180,19 @@ async def _run_step(emitter: Emitter, step: Step, prompt: str, args: Args,
                 if getattr(message, "is_error", False):
                     ok = False
 
+        # Defensive backstop: a "command not recognized" reply is a SUCCESSFUL SDK run
+        # (the agent produced text), so `is_error` stays False — yet the step did no
+        # work. Treat the well-known non-execution markers as a step failure so
+        # `step_end` reports `failed`, never a false `succeeded` (issue-workflow-adw-step).
+        if has_non_execution_marker(final_text):
+            ok = False
+            emitter.tool_result(
+                step.slug,
+                f"step {step.slug}: slash command {step.command} did not dispatch "
+                "(non-execution marker in agent output)",
+                is_error=True,
+            )
+
         emitter.step_end(step.slug, "succeeded" if ok else "failed",
                          cost_usd=step_cost, started_at=started)
     except Exception as exc:  # noqa: BLE001 — surface any failure as a neutral event
@@ -140,6 +214,15 @@ async def run(
     emitter = Emitter(args.adw_id, enabled=args.emit_json)
     emitter.session_started(model=args.model)
 
+    # Pre-flight: every static step's slash command must resolve to a project command
+    # file under the TARGET repo's `.claude/commands/`. If any is missing, fail loud and
+    # fast with a neutral `error` event — NEVER run steps that would silently "succeed"
+    # while doing nothing (issue-workflow-adw-step).
+    static_missing = missing_commands(steps, args.working_dir)
+    if static_missing:
+        _emit_missing_commands(emitter, static_missing, args.working_dir)
+        return 1
+
     prior: dict[str, str] = {}
     queue = list(steps)
     index, ok_all = 0, True
@@ -152,7 +235,14 @@ async def run(
         ok_all = ok_all and ok
 
         if branch is not None:
-            queue.extend(branch(step.slug, prior))
+            appended = branch(step.slug, prior)
+            # Validate branch-appended commands (e.g. review→/fix) before running them,
+            # closing the same silent-failure gap on the dynamic path.
+            appended_missing = missing_commands(appended, args.working_dir)
+            if appended_missing:
+                _emit_missing_commands(emitter, appended_missing, args.working_dir)
+                return 1
+            queue.extend(appended)
 
         index += 1
 

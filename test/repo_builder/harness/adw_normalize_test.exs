@@ -114,6 +114,20 @@ defmodule RepoBuilder.Harness.AdwNormalizeTest do
       assert content["cost_usd"] == 0.02
     end
 
+    # Regression for issue-workflow-adw-step: once the Python runner stops reporting a
+    # non-executed step as "succeeded", the decoder must faithfully reflect the real
+    # status — `failed`/`error` ⇒ is_error true (red step in the console), `succeeded`
+    # ⇒ is_error false. The decoder was never at fault; this locks the contract in.
+    test "step_end status maps faithfully to is_error (failed/error → true, succeeded → false)" do
+      for status <- ["failed", "error"] do
+        assert {:ok, [%Event.ToolResult{is_error: true, content: %{"status" => ^status}}]} =
+                 normalize(%{"type" => "step_end", "adw_step" => "plan", "status" => status})
+      end
+
+      assert {:ok, [%Event.ToolResult{is_error: false, content: %{"status" => "succeeded"}}]} =
+               normalize(%{"type" => "step_end", "adw_step" => "plan", "status" => "succeeded"})
+    end
+
     test "tool / tool_result" do
       assert {:ok, [%Event.ToolCall{name: "Bash", input: %{"command" => "ls"}}]} =
                normalize(%{
