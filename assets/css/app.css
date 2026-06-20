@@ -507,6 +507,10 @@
 .cns-step-box[data-step-status="pending"] { opacity: 0.7; }
 .cns-step-box--current { box-shadow: 0 0 0 2px var(--cns-cyan, var(--cns-info)); }
 
+/* stage lanes: a step box whose body wraps the stage's event squares */
+.cns-stage-lane { display: flex; flex-direction: column; gap: 0.375rem; max-width: 12rem; }
+.cns-stage-lane__squares { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+
 /* event detail panel (right slide-out) */
 .cns-detail {
   background-color: var(--cns-bg-1);

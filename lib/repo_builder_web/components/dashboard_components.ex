@@ -53,12 +53,12 @@ defmodule RepoBuilderWeb.DashboardComponents do
   attr :label, :string, required: true
   attr :status, :atom, required: true, values: @statuses
   attr :harness, :string, default: nil
-  slot :inner_block, doc: "the event-kind columns of event squares"
+  slot :inner_block, doc: "the per-stage lanes of event squares"
 
   @doc """
   A standalone agent card (manual / non-workflow agents): the same card chrome as
-  `adw_card/1` (status-colored left border + header) holding columns of event squares,
-  so every block in the ADWS view shares one visual language.
+  `adw_card/1` (status-colored left border + header) holding per-stage lanes of event
+  squares, so every block in the ADWS view shares one visual language.
   """
   @spec adw_agent_card(map()) :: Phoenix.LiveView.Rendered.t()
   def adw_agent_card(assigns) do
@@ -98,10 +98,15 @@ defmodule RepoBuilderWeb.DashboardComponents do
     required: true,
     doc: "per-step view maps (name/status/cost_usd) from Workflows.run_progress/1"
 
+  attr :step_squares, :map,
+    default: %{},
+    doc: "map of step name → event rows whose squares render inside that step box"
+
   @doc """
   One ADW card: a status-colored left border, a header (`ADW: <type>` key + the
   human-friendly title + status/progress/cost + duration), then a wrapping set of
-  per-step boxes (status-keyed, current step highlighted).
+  per-step boxes (status-keyed, current step highlighted) each hosting that stage's
+  event squares.
   """
   @spec adw_card(map()) :: Phoenix.LiveView.Rendered.t()
   def adw_card(assigns) do
@@ -129,7 +134,14 @@ defmodule RepoBuilderWeb.DashboardComponents do
           name={step.name}
           status={step.status}
           current?={step.name == @current}
-        />
+        >
+          <.event_square
+            :for={row <- Map.get(@step_squares, step.name, [])}
+            event_id={row.id}
+            category={row.category}
+            summary={"#{row.kind}: #{row.body}"}
+          />
+        </.step_box>
       </div>
     </div>
     """
@@ -139,8 +151,12 @@ defmodule RepoBuilderWeb.DashboardComponents do
   attr :name, :string, required: true
   attr :status, :atom, required: true
   attr :current?, :boolean, default: false
+  slot :inner_block, doc: "optional event squares for this stage"
 
-  @doc "One ADW step box: tinted by status (`data-step-status`), highlighted when current."
+  @doc """
+  One ADW step box: tinted by status (`data-step-status`), highlighted when current; its
+  body holds the stage's event squares when any are passed.
+  """
   @spec step_box(map()) :: Phoenix.LiveView.Rendered.t()
   def step_box(assigns) do
     ~H"""
@@ -148,9 +164,39 @@ defmodule RepoBuilderWeb.DashboardComponents do
       id={@id}
       data-step-status={@status}
       title={"#{@name}: #{@status}"}
-      class={["cns-step-box", @current? && "cns-step-box--current"]}
+      class={["cns-step-box cns-stage-lane", @current? && "cns-step-box--current"]}
     >
       <span class="cns-step-box__name">{format_step_name(@name)}</span>
+      <div :if={@inner_block != []} class="cns-stage-lane__squares">
+        {render_slot(@inner_block)}
+      </div>
+    </div>
+    """
+  end
+
+  attr :id, :string, required: true
+  attr :step, :string, required: true, doc: "raw step name; `_workflow` → `Workflow`"
+  attr :status, :atom, default: nil, doc: "optional stage status for tinting/highlight"
+  attr :current?, :boolean, default: false
+  slot :inner_block, required: true, doc: "the stage's event squares"
+
+  @doc """
+  One stage lane: a labeled, status-tintable box (shares the `.cns-step-box` chrome) whose
+  body is a wrapping grid of the stage's event squares. `"_workflow"` humanizes to
+  `"Workflow"`, so non-ADW workers degrade to a single lane.
+  """
+  @spec stage_lane(map()) :: Phoenix.LiveView.Rendered.t()
+  def stage_lane(assigns) do
+    ~H"""
+    <div
+      id={@id}
+      data-step-status={@status}
+      class={["cns-step-box cns-stage-lane", @current? && "cns-step-box--current"]}
+    >
+      <span class="cns-step-box__name">{format_step_name(@step)}</span>
+      <div class="cns-stage-lane__squares">
+        {render_slot(@inner_block)}
+      </div>
     </div>
     """
   end
@@ -215,6 +261,11 @@ defmodule RepoBuilderWeb.DashboardComponents do
       <div class="grid grid-cols-2 gap-2 text-[0.6875rem]" style="color: var(--cns-text-1)">
         <div><span style="color: var(--cns-text-2)">type</span> {@event.kind}</div>
         <div><span style="color: var(--cns-text-2)">category</span> {@event.category}</div>
+        <div>
+          <span style="color: var(--cns-text-2)">step</span> {format_step_name(
+            @event[:step] || "_workflow"
+          )}
+        </div>
         <div><span style="color: var(--cns-text-2)">agent</span> {@event.agent}</div>
         <div><span style="color: var(--cns-text-2)">time</span> {@event.time}</div>
         <div>

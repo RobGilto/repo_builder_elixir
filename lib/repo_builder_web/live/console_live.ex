@@ -30,6 +30,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
     only: [
       adw_card: 1,
       adw_agent_card: 1,
+      stage_lane: 1,
       event_square: 1,
       event_detail_panel: 1
     ]
@@ -2484,6 +2485,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
       color: AgentColors.hex(to_string(agent_id)),
       category: attrs.category,
       kind: attrs.kind,
+      # The workflow stage this event belongs to (`adw_step` on the neutral ADW envelope,
+      # carried in `event.raw` ⇒ the row payload). Drives stage-lane grouping; defaults to
+      # `"_workflow"` for non-ADW workers. Single source of truth with the backfill path.
+      step: event_step(Map.get(attrs, :payload, %{})),
       body: to_string(attrs.body),
       # The presenter render model drives the structured card; the single source of truth
       # shared with the backfill path (log_to_row) so live + reconnect render identically.
@@ -3134,6 +3139,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
                   duration={view.duration}
                   current={view.current}
                   steps={view.steps}
+                  step_squares={workflow_step_squares(@event_buffer, view.run_id, @active_categories)}
                 />
               </div>
 
@@ -3157,22 +3163,18 @@ defmodule RepoBuilderWeb.ConsoleLive do
                   label={lane.name}
                   status={lane.status}
                 >
-                  <div
-                    :for={col <- visible_columns(lane.columns, @active_categories)}
-                    class="flex flex-col items-center gap-1"
+                  <.stage_lane
+                    :for={stage <- visible_stages(lane.stages, @active_categories)}
+                    id={"swimlane-#{lane.key}-stage-#{stage.step}"}
+                    step={stage.step}
                   >
-                    <span class="text-[0.5rem] uppercase" style="color: var(--cns-text-3)">
-                      {col.kind}
-                    </span>
-                    <div class="flex flex-wrap gap-1" style="max-width: 8rem">
-                      <.event_square
-                        :for={row <- col.rows}
-                        event_id={row.id}
-                        category={row.category}
-                        summary={"#{row.kind}: #{row.body}"}
-                      />
-                    </div>
-                  </div>
+                    <.event_square
+                      :for={row <- stage.rows}
+                      event_id={row.id}
+                      category={row.category}
+                      summary={"#{row.kind}: #{row.body}"}
+                    />
+                  </.stage_lane>
                 </.adw_agent_card>
               </div>
             </div>
@@ -3479,6 +3481,18 @@ defmodule RepoBuilderWeb.ConsoleLive do
     Enum.any?(swimlanes, fn lane -> lane.status != :running end)
   end
 
+  # The workflow stage of one event row: the envelope's `adw_step` when present, else the
+  # `"_workflow"` fallback (mirrors the reference's `event.adw_step || '_workflow'`).
+  @spec event_step(map()) :: String.t()
+  defp event_step(payload) when is_map(payload) do
+    case payload["adw_step"] do
+      step when is_binary(step) and step != "" -> step
+      _ -> "_workflow"
+    end
+  end
+
+  defp event_step(_payload), do: "_workflow"
+
   @spec agent_swimlanes(map()) :: [map()]
   defp agent_swimlanes(assigns) do
     assigns.event_buffer
@@ -3488,22 +3502,58 @@ defmodule RepoBuilderWeb.ConsoleLive do
         key: key,
         name: Map.get(assigns.agent_names, key, short_id(key)),
         status: Map.get(assigns.statuses, key, :idle),
-        columns:
-          rows
-          |> Enum.group_by(& &1.kind)
-          |> Enum.map(fn {kind, krows} -> %{kind: kind, rows: krows} end)
+        stages: group_by_step(rows)
       }
     end)
   end
 
-  # The agent-card columns whose squares pass the active category filter (empty columns
+  # Group an agent's rows into ordered `%{step, rows}` stage lanes, keyed by `:step` in
+  # first-appearance (chronological) order — mirroring the reference's insertion-ordered
+  # `allAdwEventsByStep[adwId][step]`.
+  @spec group_by_step([map()]) :: [%{step: String.t(), rows: [map()]}]
+  defp group_by_step(rows) do
+    {order, groups} =
+      Enum.reduce(rows, {[], %{}}, fn row, {order, groups} ->
+        step = row.step
+
+        if Map.has_key?(groups, step) do
+          {order, Map.update!(groups, step, &[row | &1])}
+        else
+          {[step | order], Map.put(groups, step, [row])}
+        end
+      end)
+
+    order
+    |> Enum.reverse()
+    |> Enum.map(fn step -> %{step: step, rows: Enum.reverse(groups[step])} end)
+  end
+
+  # The agent-card stage lanes whose squares pass the active category filter (empty stages
   # dropped). `:system` events always pass (lifecycle), matching the LOGS view.
-  @spec visible_columns([map()], MapSet.t()) :: [map()]
-  defp visible_columns(columns, active) do
-    for col <- columns,
-        rows = Enum.filter(col.rows, &category_pass?(&1, active)),
+  @spec visible_stages([map()], MapSet.t()) :: [map()]
+  defp visible_stages(stages, active) do
+    for stage <- stages,
+        rows = Enum.filter(stage.rows, &category_pass?(&1, active)),
         rows != [],
-        do: %{kind: col.kind, rows: rows}
+        do: %{step: stage.step, rows: rows}
+  end
+
+  # The run's buffered event rows grouped by `:step`, for the matching workflow card's step
+  # boxes (squares live under the step that emitted them). Rows are matched to the run by the
+  # `wf-<run_id>-<step>` agent-key prefix (WorkflowEngine.step_agent_id/2) or a bare run-id
+  # key, then filtered by the active category set.
+  @spec workflow_step_squares([map()], Ecto.UUID.t(), MapSet.t()) :: %{
+          optional(String.t()) => [map()]
+        }
+  defp workflow_step_squares(event_buffer, run_id, active) do
+    prefix = "wf-#{run_id}"
+
+    event_buffer
+    |> Enum.filter(fn row ->
+      key = to_string(row.agent_key)
+      (key == run_id or String.starts_with?(key, prefix)) and category_pass?(row, active)
+    end)
+    |> Enum.group_by(& &1.step)
   end
 
   @spec counter(map(), String.t(), atom()) :: non_neg_integer()
@@ -3568,6 +3618,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
       color: AgentColors.hex(to_string(agent_key)),
       category: category,
       kind: to_string(log.event_type),
+      # Stage from the persisted payload's `adw_step` (reconnect path) — identical to the
+      # live `record_event/4` derivation so backfill groups into the same stage lanes.
+      step: event_step(log.payload),
       body: EventPresenter.search_text(render),
       render: render,
       # Persisted text_delta rows carry the thinking flag (Logs.event_payload), so
