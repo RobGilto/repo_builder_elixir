@@ -308,6 +308,24 @@ defmodule RepoBuilder.Logs do
   end
 
   @doc """
+  Soft-hide all `agent_logs` rows belonging to the given agent UUIDs (the console
+  ADWS "CLEAR" swimlane action). Mirrors `hide_logs/1` but scoped to the `agent_id`
+  FK column rather than log row `id`. An empty list is a no-op returning 0.
+  Returns the count updated.
+  """
+  @spec hide_logs_for_agents([Ecto.UUID.t()]) :: non_neg_integer()
+  def hide_logs_for_agents([]), do: 0
+
+  def hide_logs_for_agents(agent_ids) when is_list(agent_ids) do
+    {count, _} =
+      AgentLog
+      |> where([l], l.agent_id in ^agent_ids)
+      |> Repo.update_all(set: [hidden: true])
+
+    count
+  end
+
+  @doc """
   Un-hide (reveal) a specific set of `agent_logs` rows by id — the per-row inverse of
   `hide_logs/1` (issue-log-db-manager). An empty list is a no-op returning 0. Returns the
   count updated.

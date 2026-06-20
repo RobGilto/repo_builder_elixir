@@ -1564,12 +1564,13 @@ defmodule RepoBuilderWeb.ConsoleLive do
      |> stream(:events, [], reset: true)}
   end
 
-  # Clear finished (succeeded/failed/cancelled) workflows from the ADWS view AND soft-hide
-  # the persisted runs so the cleared state survives a reconnect. Running/queued runs stay;
-  # nothing is deleted (the settings "show hidden" toggle reveals them). When
-  # troubleshooting (show_hidden?), skip the persist so CLEAR stays a view-only reset.
+  # Clear finished (succeeded/failed/cancelled) workflows AND non-running agent swimlanes
+  # from the ADWS view. Soft-hides the persisted data so the cleared state survives a
+  # reconnect. Running/queued work stays; nothing is deleted (reversible via the settings
+  # "show hidden" toggle). When troubleshooting (show_hidden?), skip the persist so CLEAR
+  # stays a view-only reset.
   def handle_event("clear_workflows", _params, socket) do
-    # Discard the hidden-run count: the persist is a side effect, not a return value.
+    # Existing: drop finished workflow cards and persist cleared state.
     _ = unless socket.assigns.show_hidden?, do: Workflows.hide_finished_runs()
 
     kept =
@@ -1577,7 +1578,49 @@ defmodule RepoBuilderWeb.ConsoleLive do
       |> Enum.reject(fn {_run_id, view} -> view.status in @finished_workflow_statuses end)
       |> Map.new()
 
-    {:noreply, assign(socket, :workflow_progress, kept)}
+    # New: derive clearable agent_key set from event_buffer + statuses (@swimlanes is a
+    # render-time derived assign computed in render/1 — not in socket.assigns directly).
+    # Any key whose current status is not :running is clearable.
+    clearable_keys =
+      socket.assigns.event_buffer
+      |> Enum.map(& &1.agent_key)
+      |> Enum.uniq()
+      |> Enum.reject(fn k -> Map.get(socket.assigns.statuses, k, :idle) == :running end)
+      |> MapSet.new()
+
+    # Trim event_buffer; @swimlanes auto-recomputes from it in render/1 (line 2847).
+    {cleared_rows, kept_buffer} =
+      Enum.split_with(socket.assigns.event_buffer, fn row ->
+        MapSet.member?(clearable_keys, row.agent_key)
+      end)
+
+    # Drop clearable keys from @statuses so running_count/1 badge stays accurate.
+    kept_statuses =
+      Map.reject(socket.assigns.statuses, fn {k, _} -> MapSet.member?(clearable_keys, k) end)
+
+    # Durable: soft-hide worker swimlanes (UUID-shaped agent_key) in the DB so the clear
+    # survives a reconnect (backfill_events reads list_recent_global which respects hidden).
+    # Orchestrator-derived lanes ("orch-…" keys) are cleared view-only; persisting those
+    # is governed by the orchestrator/chat backfill path and is out of scope here.
+    _ =
+      unless socket.assigns.show_hidden? do
+        worker_keys =
+          clearable_keys
+          |> Enum.filter(fn k -> match?({:ok, _}, Ecto.UUID.cast(k)) end)
+
+        Logs.hide_logs_for_agents(worker_keys)
+      end
+
+    socket =
+      socket
+      |> assign(:workflow_progress, kept)
+      |> assign(:event_buffer, kept_buffer)
+      |> assign(:statuses, kept_statuses)
+
+    # stream_delete each cleared row from :events (mirrors hide_selected, lines 1728-1734).
+    socket = Enum.reduce(cleared_rows, socket, &stream_delete(&2, :events, &1))
+
+    {:noreply, socket}
   end
 
   def handle_event("toggle_event", %{"id" => id}, socket) do
@@ -3067,9 +3110,12 @@ defmodule RepoBuilderWeb.ConsoleLive do
                   id="clear-workflows"
                   type="button"
                   phx-click="clear_workflows"
-                  disabled={not any_finished_workflows?(@workflow_progress)}
+                  disabled={
+                    not (any_finished_workflows?(@workflow_progress) or
+                           any_clearable_swimlanes?(@swimlanes))
+                  }
                   class="cns-chip disabled:cursor-not-allowed disabled:opacity-40"
-                  title="Clear finished workflows (succeeded/failed/cancelled) from the view; running ones stay. Does not delete persisted runs."
+                  title="Clear finished workflows and non-running agent cards from the view; running ones stay. Nothing is deleted — reversible via the settings 'show hidden' toggle."
                 >
                   CLEAR
                 </button>
@@ -3426,6 +3472,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
     Enum.any?(workflow_progress, fn {_run_id, view} ->
       view.status in @finished_workflow_statuses
     end)
+  end
+
+  @spec any_clearable_swimlanes?([map()]) :: boolean()
+  defp any_clearable_swimlanes?(swimlanes) do
+    Enum.any?(swimlanes, fn lane -> lane.status != :running end)
   end
 
   @spec agent_swimlanes(map()) :: [map()]
