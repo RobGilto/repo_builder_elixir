@@ -22,7 +22,7 @@ defmodule RepoBuilderWeb.TestWorkingDirectoryTest do
     render_click(view, "open_dir_picker", %{})
 
     assert has_element?(view, "#dir-picker")
-    assert has_element?(view, "#dir-picker-path", FileBrowser.project_root())
+    assert view |> element("#dir-picker-path") |> render() =~ FileBrowser.project_root()
   end
 
   test "selecting a browsed directory persists it as the cwd", %{conn: conn} do

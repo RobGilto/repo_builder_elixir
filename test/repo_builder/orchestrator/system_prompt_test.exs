@@ -75,14 +75,14 @@ defmodule RepoBuilder.Orchestrator.SystemPromptTest do
     assert prompt =~ "- plan_build_review_fix:"
   end
 
-  test "ports the o3s prose: ultrathink, inline slash-command, and conductor framing" do
+  test "ports the o3s prose: ultrathink, slash-command, and conductor framing" do
     prompt = SystemPrompt.build(orchestrator())
 
     # ultrathink thinking-mode guidance for the command_agent command field.
     assert prompt =~ "ultrathink"
-    # Inline /slash-command placement guidance.
-    assert prompt =~ "/slash-command"
-    assert prompt =~ "SAME position"
+    # Control-owned slash-command expansion guidance (works on every harness).
+    assert prompt =~ "SLASH COMMANDS:"
+    assert prompt =~ "Available slash commands"
     # Narrative framing.
     assert prompt =~ "conductor of this multi-agent orchestra"
     assert prompt =~ "builder: implement features"

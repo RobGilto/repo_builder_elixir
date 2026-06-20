@@ -37,9 +37,13 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
       `ultrathink` in the `command_agent` command field — a Claude worker raises its
       thinking budget on it (the maximum-reasoning-effort signal). Drop it for a
       cheap/simple task where deep reasoning is not warranted.
-    - If the operator gives a custom `/slash-command`, place it in the `command_agent`
-      command field at the SAME position they wrote it (start, middle, or end) — that
-      kicks off the worker's slash command exactly where intended.
+    - SLASH COMMANDS: the platform expands any `/command` you put at the START of a line
+      in a `command_agent` prompt — it injects the body of that command's
+      `.claude/commands/<name>.md` (from the worker's working directory) BEFORE the worker
+      runs, so it works on EVERY harness (Claude, pi, cursor), not just Claude. Unknown
+      commands pass through verbatim. Put the command on its own line with any arguments
+      after it; use the AVAILABLE SLASH COMMANDS listed below (or any the operator names)
+      to reuse templated workflows.
     - To run a multi-step AI Developer Workflow, use `start_adw`. For REAL substantive
       work pass `harness: "adw"` and a `workflow_type` from the AVAILABLE ADW TYPES
       below — that shells out to the portable Python ADW (the real /plan→/build→
@@ -76,6 +80,9 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
 
     Available ADW types (pass as `start_adw`'s `workflow_type`):
     #{available_adw_types_block(orchestrator)}
+
+    Available slash commands (put at the START of a line in a `command_agent` prompt; the platform expands them on any harness):
+    #{slash_commands_block(orchestrator)}
 
     Context management:
     #{context_management_block()}
@@ -241,6 +248,31 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
 
     (working ++ app) |> Enum.uniq_by(& &1.name) |> Enum.sort_by(& &1.name)
   end
+
+  # The file-driven slash-command palette (issue server-side slash expansion): the
+  # commands discovered for the merged (app ∪ working-dir) root. The platform expands
+  # any of these placed at the start of a line in a worker prompt, so listing them here
+  # empowers the orchestrator to reuse templated workflows on any harness.
+  @spec slash_commands_block(Orchestrator.t()) :: String.t()
+  defp slash_commands_block(%Orchestrator{working_dir: working_dir}) do
+    dir = if is_binary(working_dir) and working_dir != "", do: working_dir, else: nil
+
+    case Definitions.list(:slash_command, dir) do
+      [] ->
+        "  (none discovered — drop a markdown file in `.claude/commands/`)"
+
+      commands ->
+        Enum.map_join(commands, "\n", fn cmd ->
+          "  - /#{cmd.name}#{slash_desc(cmd.description)}"
+        end)
+    end
+  end
+
+  @spec slash_desc(String.t() | nil) :: String.t()
+  defp slash_desc(description) when is_binary(description) and description != "",
+    do: ": #{description}"
+
+  defp slash_desc(_description), do: ""
 
   # Guidance for watching spend + context-window pressure and relieving it via
   # compaction (ports the reference "Context Window Management" prompt section).

@@ -365,8 +365,16 @@ defmodule RepoBuilder.Logs do
   # Persist the canonical text (+ thinking flag) rather than the raw harness frame,
   # so reconnect backfill renders clean chat text — pi's raw `message_end` frame has
   # no top-level "text", which would otherwise dump as JSON in the chat bubble.
+  #
+  # Store `event.text` VERBATIM (not through `Redact.scrub_term/1`): it is the model's
+  # own assistant output — a flat string with no nested credential keys to mask — and the
+  # worker-report spill path (`Orchestrator.Tools.spill_report/4`) re-reads this payload to
+  # write the complete report file. Routing it through the scrubber capped it at
+  # `@max_blob_bytes` (10 KB) and silently amputated long reports with a `…[truncated]`
+  # marker (issue worker-report-truncation). The `raw` escape hatch is still scrubbed in
+  # `persist_event/2`, so secret redaction is unaffected.
   defp event_payload(%Event.TextDelta{} = event, _raw) do
-    Redact.scrub_term(%{"text" => event.text, "thinking" => event.thinking?})
+    %{"text" => event.text, "thinking" => event.thinking?}
   end
 
   defp event_payload(_event, raw), do: raw

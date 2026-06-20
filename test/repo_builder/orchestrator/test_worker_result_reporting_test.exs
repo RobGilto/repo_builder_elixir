@@ -99,4 +99,49 @@ defmodule RepoBuilder.Orchestrator.TestWorkerResultReportingTest do
     assert result["final_message"] =~ "ai_docs/"
     assert String.length(result["final_message"]) < 5_000
   end
+
+  @tag :tmp_dir
+  test "the spilled report file carries the FULL >10KB worker output, not a 10KB-capped copy",
+       %{tmp_dir: tmp_dir} do
+    # issue worker-report-truncation: the canonical TextDelta text was persisted through
+    # the 10 KB `Redact` blob cap, so the spill file (sourced from that payload) ended
+    # mid-sentence with `…[truncated]`. The text is now stored verbatim, so the file is full.
+    orch = orchestrator()
+    {:ok, _} = Orchestrators.set_working_dir(orch.id, tmp_dir)
+    {name, agent} = worker(orch)
+
+    # >10 KB of body text with a recognizable tail past the old 10,000-byte cut.
+    body = String.duplicate("AB", 8_000) <> "END-OF-REPORT"
+    assert byte_size(body) > 10_000
+
+    persist(%Event.TextDelta{harness: :fake, text: body, thinking?: false}, agent.id)
+
+    assert {:ok, result} = Tools.call("check_agent_status", orch.id, %{"name" => name})
+    assert (report_file = result["report_file"]) != nil
+
+    contents = File.read!(Path.join(tmp_dir, report_file))
+
+    # The full body survives end-to-end; no amputation marker.
+    assert contents =~ "END-OF-REPORT"
+    refute contents =~ "[truncated]"
+    assert byte_size(contents) > 10_000
+  end
+
+  @tag :tmp_dir
+  test "a short (<10KB) report is unaffected — ends cleanly with no truncation marker",
+       %{tmp_dir: tmp_dir} do
+    # Control group: short reports never hit the cap and must remain byte-faithful.
+    orch = orchestrator()
+    {:ok, _} = Orchestrators.set_working_dir(orch.id, tmp_dir)
+    {name, agent} = worker(orch)
+
+    body = String.duplicate("y", 3_000) <> "TAIL"
+    persist(%Event.TextDelta{harness: :fake, text: body, thinking?: false}, agent.id)
+
+    assert {:ok, result} = Tools.call("check_agent_status", orch.id, %{"name" => name})
+    contents = File.read!(Path.join(tmp_dir, result["report_file"]))
+
+    assert contents =~ "TAIL"
+    refute contents =~ "[truncated]"
+  end
 end

@@ -1154,10 +1154,13 @@ defmodule RepoBuilder.Orchestrator.Tools do
 
   defp maybe_spill_report(_orchestrator_id, _worker, nil), do: nil
 
-  # Write the full message to `ai_docs/worker-reports/<worker-slug>-<log_no>.md` under the
-  # orchestrator working dir (or platform root when none is set). Idempotent: the filename
-  # is keyed on the source log, so repeated `check_agent_status` polls overwrite the same
-  # path. Returns the path RELATIVE to the working dir when one is set (the orchestrator can
+  # Write the worker's final message to `ai_docs/worker-reports/<worker-slug>-<log_no>.md`
+  # under the orchestrator working dir (or platform root when none is set). The `text` comes
+  # from the persisted canonical log payload (`result_text/1`), which is stored verbatim —
+  # NOT through the 10 KB `Redact` blob cap (issue worker-report-truncation) — so the file
+  # carries the worker's complete output, not the 2000-char `final_message` preview. Idempotent:
+  # the filename is keyed on the source log, so repeated `check_agent_status` polls overwrite the
+  # same path. Returns the path RELATIVE to the working dir when one is set (the orchestrator can
   # `Read ai_docs/worker-reports/...`), ABSOLUTE on the platform-root fallback. Never raises:
   # any write failure yields `nil` so the caller still returns the preview.
   @spec spill_report(Ecto.UUID.t(), Agents.Agent.t(), String.t(), Logs.AgentLog.t()) ::

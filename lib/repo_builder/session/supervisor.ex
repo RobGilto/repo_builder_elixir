@@ -10,6 +10,7 @@ defmodule RepoBuilder.Session.Supervisor do
   """
   alias RepoBuilder.Budget
   alias RepoBuilder.Budget.Scope
+  alias RepoBuilder.Prompts.SlashExpander
   alias RepoBuilder.Session.{Admission, Server}
 
   @sup RepoBuilder.SessionSupervisor
@@ -29,11 +30,36 @@ defmodule RepoBuilder.Session.Supervisor do
   """
   @spec start_session(keyword()) :: {:ok, pid()} | {:error, start_error()}
   def start_session(opts) do
+    opts = expand_prompt(opts)
+
     case Budget.Guard.check(scopes_for(opts)) do
       :ok -> acquire_and_start(opts)
       {:error, _budget} = error -> error
     end
   end
+
+  # Control-owned slash-command expansion (the single seam every live session passes
+  # through). Rewrites `opts[:prompt]` so a `/command` invocation expands to its
+  # `.claude/commands/<name>.md` body on EVERY interactive harness — fixing pi, which
+  # has no native expansion. The `adw` harness is skipped: the portable Python ADW
+  # engine performs its own `/plan→/build→…` dispatch in the target repo, so
+  # pre-expanding would break it. A blank/nil prompt is left untouched.
+  @spec expand_prompt(keyword()) :: keyword()
+  defp expand_prompt(opts) do
+    prompt = opts[:prompt]
+
+    new_prompt =
+      if to_string(opts[:harness]) == "adw" or blank?(prompt),
+        do: prompt,
+        else: SlashExpander.expand(prompt, opts[:cwd])
+
+    Keyword.put(opts, :prompt, new_prompt)
+  end
+
+  @spec blank?(term()) :: boolean()
+  defp blank?(nil), do: true
+  defp blank?(value) when is_binary(value), do: String.trim(value) == ""
+  defp blank?(_value), do: false
 
   @spec acquire_and_start(keyword()) :: {:ok, pid()} | {:error, start_error()}
   defp acquire_and_start(opts) do

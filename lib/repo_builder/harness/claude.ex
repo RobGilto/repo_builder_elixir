@@ -15,6 +15,19 @@ defmodule RepoBuilder.Harness.Claude do
 
   @ctx %{harness: :claude}
 
+  # The orchestrator runs on a model ALIAS (`opus`/`sonnet`/`haiku`) — the CLI resolves
+  # each alias to the latest of its family. The seeded price catalog
+  # (priv/repo/pricing_seeds.exs) is keyed by the CANONICAL family IDs, so the live
+  # estimate lookup must canonicalize the alias first or it misses the catalog and the
+  # cost badge shows `—` for the whole turn (issue log-7700). The CLI still receives the
+  # alias verbatim; only the pricing lookup is canonicalized. Keep these targets in sync
+  # with the seeded catalog keys when a new family/latest model lands.
+  @model_aliases %{
+    "opus" => "claude-opus-4-8",
+    "sonnet" => "claude-sonnet-4-6",
+    "haiku" => "claude-haiku-4-5"
+  }
+
   # The orchestrator is a delegation-only meta-agent: ALL real work goes to worker
   # agents via the bound MCP meta-tools (`RepoBuilder.Orchestrator.Tools`). Claude ships
   # native coding tools that would otherwise be available AND auto-approved (the
@@ -348,7 +361,7 @@ defmodule RepoBuilder.Harness.Claude do
       cost_usd: nil,
       estimated_cost_usd:
         Pricing.derive(
-          Map.get(ctx, :model),
+          canonical_model(Map.get(ctx, :model)),
           %{
             input: in_tokens,
             output: out_tokens,
@@ -360,6 +373,14 @@ defmodule RepoBuilder.Harness.Claude do
       raw: raw
     }
   end
+
+  # Resolve an orchestrator model alias to its canonical catalog ID for the PRICING
+  # lookup only (the CLI still gets the alias). Unknown/unaliased models and `nil` pass
+  # through unchanged, so a genuinely unpriced model still derives a nil estimate rather
+  # than being masked (issue log-7700).
+  @spec canonical_model(String.t() | nil) :: String.t() | nil
+  defp canonical_model(model) when is_binary(model), do: Map.get(@model_aliases, model, model)
+  defp canonical_model(nil), do: nil
 
   @spec result_error_message(map()) :: String.t()
   defp result_error_message(raw) do

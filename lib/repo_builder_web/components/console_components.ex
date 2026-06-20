@@ -894,14 +894,20 @@ defmodule RepoBuilderWeb.ConsoleComponents do
           </button>
         </div>
 
-        <div
-          id="dir-picker-path"
-          class="mb-2 truncate rounded border p-2 font-mono text-xs"
-          style="border-color: var(--cns-border); color: var(--cns-text-1)"
-          title={@path}
-        >
-          {@path}
-        </div>
+        <form phx-submit="dir_picker_goto" class="mb-2 flex items-center gap-2">
+          <input
+            type="text"
+            name="path"
+            id="dir-picker-path"
+            value={@path}
+            title={@path}
+            autocomplete="off"
+            spellcheck="false"
+            class="min-w-0 flex-1 rounded border p-2 font-mono text-xs"
+            style="border-color: var(--cns-border); color: var(--cns-text-1); background: transparent"
+          />
+          <button type="submit" class="cns-chip">Go</button>
+        </form>
 
         <div
           class="max-h-64 overflow-y-auto rounded border"
@@ -1869,8 +1875,16 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   end
 
   attr :state, :map, required: true
-  attr :caps, :list, required: true, doc: "all caps (Budget.list_caps/0) for the table"
+  attr :caps, :list, required: true, doc: "merged DB+live rows for the editable list"
   attr :form, :any, required: true
+  attr :scope, :string, default: "global", doc: "the form's currently-selected scope"
+
+  attr :scope_targets, :map,
+    default: %{},
+    doc:
+      ~S(`%{"orchestrator" => [{label, id}], "workflow" => [{label, id}]}` for the scope_id picker)
+
+  attr :editing?, :boolean, default: false, doc: "true when the form is editing an existing cap"
 
   @doc """
   Budget guardrails as a popup modal (opened from the header `#stat-cost` pill). Shown
@@ -1896,20 +1910,38 @@ defmodule RepoBuilderWeb.ConsoleComponents do
           </div>
         </div>
 
-        <.budget_panel state={@state} caps={@caps} form={@form} />
+        <.budget_panel
+          state={@state}
+          caps={@caps}
+          form={@form}
+          scope={@scope}
+          scope_targets={@scope_targets}
+          editing?={@editing?}
+        />
       </div>
     </div>
     """
   end
 
   attr :state, :map, required: true
-  attr :caps, :list, required: true, doc: "all caps (Budget.list_caps/0) for the table"
+
+  attr :caps, :list,
+    required: true,
+    doc: ~S(merged rows `%{cap, spent, ratio, state}` — DB caps overlaid with live spend)
+
   attr :form, :any, required: true
+  attr :scope, :string, default: "global"
+  attr :scope_targets, :map, default: %{}
+  attr :editing?, :boolean, default: false
 
   @doc """
-  Budget panel: live spend-vs-cap progress bars + a create/edit form + per-cap delete.
-  Caps CRUD goes through the `RepoBuilder.Budget` context (the web layer never touches
-  `Repo`); spend bars reflect the live `Budget.Guard` snapshot.
+  Budget panel: a single spend-vs-cap list where every cap carries its own
+  Edit / Reset / Delete controls, plus a create-or-edit form. The rows are the union of the
+  durable DB caps (authoritative — the editable source of truth) and the live
+  `Budget.Guard` snapshot (live spend/state), keyed by cap id, so every cap the operator
+  can SEE is one they can act on — there are no DB-only or memory-only "ghost" rows the UI
+  can't reach. Caps CRUD goes through the `RepoBuilder.Budget` context (the web layer never
+  touches `Repo`).
   """
   @spec budget_panel(map()) :: Phoenix.LiveView.Rendered.t()
   def budget_panel(assigns) do
@@ -1922,18 +1954,49 @@ defmodule RepoBuilderWeb.ConsoleComponents do
         <.kill_switch state={@state} />
       </div>
 
-      <div :if={@state.caps == []} class="text-[0.625rem]" style="color: var(--cns-text-2)">
+      <div :if={@caps == []} class="text-[0.625rem]" style="color: var(--cns-text-2)">
         No budget caps yet — spend is unbounded. Add a cap below.
       </div>
 
-      <div :for={row <- @state.caps} id={"budget-cap-#{row.cap.id}"} class="flex flex-col gap-0.5">
-        <div class="flex items-center justify-between text-[0.6875rem]">
-          <span>{budget_scope_label(row.cap)} · {row.cap.period} · {budget_action_label(
-            row.cap.action
-          )}</span>
-          <span data-budget-state={to_string(row.state)}>
-            {budget_cost(row.spent)} / {budget_cost(row.cap.limit_usd)}
+      <div :for={row <- @caps} id={"budget-cap-#{row.cap.id}"} class="flex flex-col gap-0.5">
+        <div class="flex items-center justify-between gap-2 text-[0.6875rem]">
+          <span class="truncate">
+            {budget_scope_label(row.cap)} · {row.cap.period} · {budget_action_label(row.cap.action)}
           </span>
+          <div class="flex shrink-0 items-center gap-2">
+            <span data-budget-state={to_string(row.state)}>
+              {budget_cost(row.spent)} / {budget_cost(row.cap.limit_usd)}
+            </span>
+            <button
+              type="button"
+              id={"budget-edit-#{row.cap.id}"}
+              phx-click="edit_budget"
+              phx-value-id={row.cap.id}
+              class="cns-chip"
+            >
+              Edit
+            </button>
+            <button
+              :if={row.state == :tripped}
+              type="button"
+              id={"budget-panel-reset-#{row.cap.id}"}
+              phx-click="reset_budget"
+              phx-value-id={row.cap.id}
+              class="cns-chip"
+            >
+              Reset
+            </button>
+            <button
+              type="button"
+              id={"budget-delete-#{row.cap.id}"}
+              phx-click="delete_budget"
+              phx-value-id={row.cap.id}
+              data-confirm="Delete this budget cap?"
+              class="cns-chip"
+            >
+              Delete
+            </button>
+          </div>
         </div>
         <div class="h-1.5 w-full overflow-hidden rounded" style="background: var(--cns-border)">
           <div
@@ -1947,6 +2010,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
         :if={@form}
         id="budget-form"
         for={@form}
+        phx-change="budget_form_change"
         phx-submit="save_budget"
         class="flex flex-wrap items-end gap-2"
       >
@@ -1957,7 +2021,22 @@ defmodule RepoBuilderWeb.ConsoleComponents do
           options={[{"Global", "global"}, {"Orchestrator", "orchestrator"}, {"Workflow", "workflow"}]}
           class="cns-input w-28"
         />
-        <.input field={@form[:scope_id]} label="Scope id" class="cns-input w-32" />
+        <%= if @scope != "global" do %>
+          <.input
+            :if={Map.get(@scope_targets, @scope, []) != []}
+            field={@form[:scope_id]}
+            label="Target"
+            type="select"
+            options={Map.get(@scope_targets, @scope, [])}
+            class="cns-input w-44"
+          />
+          <.input
+            :if={Map.get(@scope_targets, @scope, []) == []}
+            field={@form[:scope_id]}
+            label={"#{String.capitalize(@scope)} id"}
+            class="cns-input w-44"
+          />
+        <% end %>
         <.input
           field={@form[:period]}
           label="Period"
@@ -1974,40 +2053,24 @@ defmodule RepoBuilderWeb.ConsoleComponents do
         />
         <.input
           field={@form[:action]}
-          label="Action"
+          label="When exceeded"
           type="select"
-          options={[{"Alert", "alert"}, {"Pause", "pause"}, {"Hard stop", "hard_stop"}]}
-          class="cns-input w-28"
+          options={[{"Warn me", "alert"}, {"Pause runs", "pause"}, {"Hard stop", "hard_stop"}]}
+          class="cns-input w-32"
         />
-        <button id="budget-form-submit" type="submit" class="cns-chip">Add cap</button>
+        <button id="budget-form-submit" type="submit" class="cns-chip">
+          {if @editing?, do: "Save cap", else: "Add cap"}
+        </button>
+        <button
+          :if={@editing?}
+          type="button"
+          id="budget-form-cancel"
+          phx-click="cancel_edit_budget"
+          class="cns-chip"
+        >
+          Cancel
+        </button>
       </.form>
-
-      <table :if={@caps != []} id="budget-caps-table" class="w-full text-[0.6875rem]">
-        <tbody>
-          <tr
-            :for={cap <- @caps}
-            id={"budget-row-#{cap.id}"}
-            style="border-top: 1px solid var(--cns-border)"
-          >
-            <td class="py-1 pr-2">{budget_scope_label(cap)}</td>
-            <td class="py-1 pr-2">{cap.period}</td>
-            <td class="py-1 pr-2 text-right">{budget_cost(cap.limit_usd)}</td>
-            <td class="py-1 pr-2">{budget_action_label(cap.action)}</td>
-            <td class="py-1 text-right">
-              <button
-                type="button"
-                id={"budget-delete-#{cap.id}"}
-                phx-click="delete_budget"
-                phx-value-id={cap.id}
-                data-confirm="Delete this budget cap?"
-                class="cns-chip"
-              >
-                Delete
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
     </div>
     """
   end

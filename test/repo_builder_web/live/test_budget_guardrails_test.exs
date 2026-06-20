@@ -64,4 +64,64 @@ defmodule RepoBuilderWeb.TestBudgetGuardrailsTest do
     assert wait_until(fn -> not has_element?(view, "#budget-banner") end)
     assert has_element?(view, ~s(#kill-switch[data-engaged="false"]))
   end
+
+  test "every visible cap is editable in place, and editing upserts it", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    view
+    |> element("#budget-form")
+    |> render_submit(%{
+      "budget" => %{
+        "scope" => "global",
+        "scope_id" => "",
+        "period" => "total",
+        "limit_usd" => "5.0",
+        "action" => "alert"
+      }
+    })
+
+    assert [%{id: id, limit_usd: limit}] = Budget.list_caps()
+    assert Decimal.equal?(limit, Decimal.new("5.0"))
+
+    # The cap row carries its own Edit/Delete controls (no DB-only "ghost" rows).
+    assert has_element?(view, "#budget-edit-#{id}")
+    assert has_element?(view, "#budget-delete-#{id}")
+
+    # Edit loads it into the form (Save cap label + Cancel appear).
+    view |> element("#budget-edit-#{id}") |> render_click()
+    assert has_element?(view, "#budget-form-submit", "Save cap")
+    assert has_element?(view, "#budget-form-cancel")
+
+    # Saving a new limit upserts the SAME cap (keyed by scope/scope_id/period).
+    view
+    |> element("#budget-form")
+    |> render_submit(%{
+      "budget" => %{
+        "scope" => "global",
+        "scope_id" => "",
+        "period" => "total",
+        "limit_usd" => "25.0",
+        "action" => "alert"
+      }
+    })
+
+    assert [%{id: ^id, limit_usd: updated}] = Budget.list_caps()
+    assert Decimal.equal?(updated, Decimal.new("25.0"))
+  end
+
+  test "the scope_id picker is hidden for Global and revealed for scoped caps", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    # Default scope is Global → no Target picker / scope_id field.
+    refute has_element?(view, "#budget_scope_id")
+
+    # Switching scope to Orchestrator reveals the live id picker ("This console").
+    html =
+      view
+      |> element("#budget-form")
+      |> render_change(%{"budget" => %{"scope" => "orchestrator"}})
+
+    assert html =~ "This console"
+    assert has_element?(view, "#budget_scope_id")
+  end
 end

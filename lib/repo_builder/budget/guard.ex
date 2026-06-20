@@ -47,6 +47,9 @@ defmodule RepoBuilder.Budget.Guard do
       field :breaker, %{optional(Ecto.UUID.t()) => :ok | :warning | :tripped}, default: %{}
       field :kill_switch?, boolean(), default: false
       field :reconcile?, boolean(), default: true
+      # Whether `caps` is sourced from the DB (the normal singleton) vs. seeded with an
+      # explicit `caps:` opt (tests). Only DB-backed Guards reload their cap list on refresh.
+      field :db_backed?, boolean(), default: true
       field :refresh_ms, pos_integer()
       field :handler_id, String.t()
     end
@@ -89,7 +92,11 @@ defmodule RepoBuilder.Budget.Guard do
   @spec reset_cap(Ecto.UUID.t(), GenServer.server()) :: :ok
   def reset_cap(cap_id, server \\ __MODULE__), do: GenServer.call(server, {:reset_cap, cap_id})
 
-  @doc "Force an immediate reconcile from CostCenter (test/observability hook)."
+  @doc """
+  Force an immediate reload of the active caps from the DB (so caps created/deleted at
+  runtime take effect live) followed by a reconcile from CostCenter. Called after any
+  operator cap CRUD, and on the periodic timer.
+  """
   @spec refresh(GenServer.server()) :: :ok
   def refresh(server \\ __MODULE__), do: GenServer.call(server, :refresh)
 
@@ -133,6 +140,7 @@ defmodule RepoBuilder.Budget.Guard do
         breaker: Map.new(caps, fn cap -> {cap.id, :ok} end),
         kill_switch?: false,
         reconcile?: reconcile?,
+        db_backed?: not is_list(opts[:caps]),
         refresh_ms: refresh_ms,
         handler_id: handler_id
       }
@@ -177,7 +185,7 @@ defmodule RepoBuilder.Budget.Guard do
   end
 
   def handle_call(:refresh, _from, %State{} = state) do
-    {:reply, :ok, reconcile(state)}
+    {:reply, :ok, reconcile(reload_caps(state))}
   end
 
   def handle_call(:snapshot, _from, %State{} = state) do
@@ -192,7 +200,7 @@ defmodule RepoBuilder.Budget.Guard do
   @impl true
   def handle_info(:refresh, %State{refresh_ms: ms} = state) do
     schedule_refresh(ms)
-    {:noreply, reconcile(state)}
+    {:noreply, reconcile(reload_caps(state))}
   end
 
   def handle_info(_msg, %State{} = state), do: {:noreply, state}
@@ -212,6 +220,27 @@ defmodule RepoBuilder.Budget.Guard do
   end
 
   # --- reconciliation (slow path / boot) ---
+
+  # Re-read the active caps from the DB and rebuild `caps`, preserving the live spent/breaker
+  # accumulators for caps that still exist (so a reload never loses in-flight spend) while
+  # dropping deleted caps and admitting newly-created ones. This is what makes runtime cap
+  # CRUD take effect live — without it, `state.caps` only ever changed at boot, so created
+  # caps went unenforced and deleted caps lingered as stale in-memory "ghosts". A no-op for
+  # Guards seeded with an explicit `caps:` opt (tests), whose source of truth is not the DB.
+  @spec reload_caps(State.t()) :: State.t()
+  defp reload_caps(%State{db_backed?: false} = state), do: state
+
+  defp reload_caps(%State{} = state) do
+    caps_by_id = Map.new(load_caps_from_db(), fn cap -> {cap.id, cap} end)
+    ids = Map.keys(caps_by_id)
+
+    %{
+      state
+      | caps: caps_by_id,
+        spent: Map.new(ids, fn id -> {id, Map.get(state.spent, id, Decimal.new(0))} end),
+        breaker: Map.new(ids, fn id -> {id, Map.get(state.breaker, id, :ok)} end)
+    }
+  end
 
   @spec reconcile(State.t()) :: State.t()
   defp reconcile(%State{reconcile?: false} = state), do: recompute_all(state)

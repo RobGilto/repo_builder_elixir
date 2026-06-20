@@ -195,6 +195,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
         # updated live over the "budget:events" topic.
         budget_state: %{kill_switch?: false, caps: []},
         budget_caps: [],
+        # The form's selected scope drives whether the scope_id picker shows (hidden for
+        # "global"); scope_targets feeds that picker with live orchestrator/workflow ids.
+        budget_scope: "global",
+        budget_scope_targets: %{},
+        budget_editing?: false,
         budget_form: to_form(Cap.changeset(%Cap{}, %{}), as: :budget),
         # ADW Builder mode
         adw_builder?: false,
@@ -372,7 +377,56 @@ defmodule RepoBuilderWeb.ConsoleLive do
   # §9). The snapshot reads the live Guard; caps read the durable context.
   @spec seed_budget(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp seed_budget(socket) do
-    assign(socket, budget_state: Budget.Guard.snapshot(), budget_caps: Budget.list_caps())
+    snapshot = Budget.Guard.snapshot()
+
+    assign(socket,
+      budget_state: snapshot,
+      budget_caps: budget_rows(snapshot, Budget.list_caps()),
+      budget_scope_targets: budget_scope_targets(socket)
+    )
+  end
+
+  # Merge the durable DB caps (authoritative + editable) with the live Guard snapshot
+  # (spend/state), keyed by cap id. DB caps anchor the editable rows; snapshot-only caps
+  # (a not-yet-reconciled memory cap) still surface so no cap is unreachable. A DB cap with
+  # no live row yet renders at zero spend / :ok.
+  @spec budget_rows(map(), [Cap.t()]) :: [map()]
+  defp budget_rows(%{caps: live_rows}, db_caps) do
+    by_id = Map.new(live_rows, &{&1.cap.id, &1})
+
+    from_db =
+      Enum.map(db_caps, fn cap ->
+        Map.get(by_id, cap.id, %{cap: cap, spent: Decimal.new(0), ratio: 0.0, state: :ok})
+      end)
+
+    db_ids = MapSet.new(db_caps, & &1.id)
+    ghosts = Enum.reject(live_rows, &MapSet.member?(db_ids, &1.cap.id))
+
+    from_db ++ ghosts
+  end
+
+  defp budget_rows(_snapshot, db_caps) do
+    Enum.map(db_caps, &%{cap: &1, spent: Decimal.new(0), ratio: 0.0, state: :ok})
+  end
+
+  # Live id pickers for scoped caps: the console's own orchestrator and the recent
+  # workflow runs, labelled for humans so the operator never hand-types a raw UUID.
+  @spec budget_scope_targets(Phoenix.LiveView.Socket.t()) :: %{
+          String.t() => [{String.t(), String.t()}]
+        }
+  defp budget_scope_targets(socket) do
+    orchestrators =
+      case socket.assigns[:orchestrator_id] do
+        id when is_binary(id) -> [{"This console", id}]
+        _ -> []
+      end
+
+    workflows =
+      for run <- Workflows.list_recent_runs(20) do
+        {"#{run.current_step || "run"} · #{String.slice(run.id, 0, 8)} (#{run.status})", run.id}
+      end
+
+    %{"orchestrator" => orchestrators, "workflow" => workflows}
   end
 
   # Re-read the live snapshot + durable caps after a breaker event or operator action.
@@ -732,6 +786,15 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   def handle_event("dir_picker_browse", %{"path" => path}, socket) do
     {:noreply, load_dir_picker(socket, path)}
+  end
+
+  # Browse straight to a typed/pasted absolute path. Blank ⇒ no-op (no flash spam);
+  # otherwise reuse load_dir_picker/2 (expands, lists, flashes + keeps prior view on error).
+  def handle_event("dir_picker_goto", %{"path" => path}, socket) do
+    case String.trim(path) do
+      "" -> {:noreply, socket}
+      trimmed -> {:noreply, load_dir_picker(socket, trimmed)}
+    end
   end
 
   def handle_event("close_dir_picker", _params, socket) do
@@ -1096,6 +1159,45 @@ defmodule RepoBuilderWeb.ConsoleLive do
   end
 
   # --- budget guardrails (issue-budget-guardrails) ---
+
+  # Track the form's selected scope as the operator changes it, so the scope_id picker can
+  # show/hide (and swap orchestrator-vs-workflow targets) without a submit. Rebuild the form
+  # from the in-flight params so typed values survive the re-render.
+  def handle_event("budget_form_change", %{"budget" => params}, socket) do
+    changeset = Cap.changeset(%Cap{}, params)
+
+    {:noreply,
+     assign(socket,
+       budget_form: to_form(changeset, as: :budget),
+       budget_scope: params["scope"] || "global",
+       # Recompute live targets so the picker reflects orchestrators/workflows present
+       # right now (the mount seed runs before orchestrator assignment / before new runs).
+       budget_scope_targets: budget_scope_targets(socket)
+     )}
+  end
+
+  # Load an existing cap (from the merged DB+live rows, so even a not-yet-reconciled cap is
+  # editable) into the form. Submitting upserts it, which also reconciles any memory-vs-DB
+  # drift by writing the row back.
+  def handle_event("edit_budget", %{"id" => id}, socket) do
+    case Enum.find(socket.assigns.budget_caps, &(&1.cap.id == id)) do
+      %{cap: cap} ->
+        {:noreply,
+         assign(socket,
+           budget_form: to_form(Cap.changeset(cap, %{}), as: :budget),
+           budget_scope: to_string(cap.scope),
+           budget_scope_targets: budget_scope_targets(socket),
+           budget_editing?: true
+         )}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("cancel_edit_budget", _params, socket) do
+    {:noreply, reset_budget_form(socket)}
+  end
 
   def handle_event("save_budget", %{"budget" => params}, socket) do
     case Budget.upsert_cap(params) do
@@ -2500,7 +2602,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
             chat_width={@chat_width}
             cost={@orchestrator_cost}
             estimate={@orchestrator_est_cost}
-            typing?={@typing? || Map.get(@statuses, @orchestrator_id) == :running}
+            typing?={
+              @orchestrator_queue.busy? || @typing? ||
+                Map.get(@statuses, @orchestrator_id) == :running
+            }
             auto_follow?={@auto_follow?}
           >
             <:messages>
@@ -2580,7 +2685,14 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
       <.explain_modal status={@explain.status} count={@explain.count} />
 
-      <.budget_modal state={@budget_state} caps={@budget_caps} form={@budget_form} />
+      <.budget_modal
+        state={@budget_state}
+        caps={@budget_caps}
+        form={@budget_form}
+        scope={@budget_scope}
+        scope_targets={@budget_scope_targets}
+        editing?={@budget_editing?}
+      />
 
       <.settings_modal
         settings_tab={@settings_tab}
@@ -2922,7 +3034,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   @spec reset_budget_form(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp reset_budget_form(socket) do
-    assign(socket, :budget_form, to_form(Cap.changeset(%Cap{}, %{}), as: :budget))
+    assign(socket,
+      budget_form: to_form(Cap.changeset(%Cap{}, %{}), as: :budget),
+      budget_scope: "global",
+      budget_editing?: false
+    )
   end
 
   # Guard operator-supplied mode string into the closed atom set (never

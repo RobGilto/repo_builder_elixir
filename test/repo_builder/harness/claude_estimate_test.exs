@@ -56,6 +56,36 @@ defmodule RepoBuilder.Harness.ClaudeEstimateTest do
     assert %Event.Usage{cost_usd: nil, estimated_cost_usd: nil} = usage
   end
 
+  # issue log-7700: the orchestrator runs on a model ALIAS (`opus`/`sonnet`/`haiku`) but
+  # the catalog is keyed by canonical family IDs. The alias must be canonicalized for the
+  # pricing lookup, or the live estimate is nil and the cost badge shows `—` all turn.
+  test "a model alias is canonicalized for pricing so the estimate is non-nil" do
+    for {alias_model, canonical} <- [
+          {"opus", "claude-opus-4-8"},
+          {"sonnet", "claude-sonnet-4-6"},
+          {"haiku", "claude-haiku-4-5"}
+        ] do
+      # Catalog keyed ONLY by the canonical ID — the alias must resolve onto it.
+      ctx = %{harness: :claude, model: alias_model, price_table: %{canonical => 30.0}}
+
+      assert {:ok, events} = Claude.normalize(assistant_frame(1_000_000, 0), ctx)
+      usage = Enum.find(events, &match?(%Event.Usage{}, &1))
+
+      assert %Event.Usage{cost_usd: nil} = usage
+      assert usage.estimated_cost_usd == 30.0
+    end
+  end
+
+  test "alias resolution does not mask a genuinely unpriced model" do
+    # `made-up` is not an alias and not in the catalog → estimate stays nil.
+    ctx = %{harness: :claude, model: "made-up", price_table: %{"claude-opus-4-8" => 30.0}}
+
+    assert {:ok, events} = Claude.normalize(assistant_frame(1_000, 1_000), ctx)
+    usage = Enum.find(events, &match?(%Event.Usage{}, &1))
+
+    assert %Event.Usage{cost_usd: nil, estimated_cost_usd: nil} = usage
+  end
+
   test "terminal result carries the authoritative cost on Done only, estimate on Usage" do
     frame = %{
       "type" => "result",
