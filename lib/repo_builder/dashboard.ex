@@ -55,6 +55,25 @@ defmodule RepoBuilder.Dashboard do
   end
 
   @doc """
+  Broadcast a humanized ADW `title` for every run of `workflow_id` on the lanes topic
+  so open consoles swap the heuristic card title for the Fast-tier-humanized one live
+  (issue-unified-adw-swimlane-cards). Subscribers receive
+  `{:workflow_title, workflow_id, title}`. Additive seam — NOT a canonical `Event`.
+  Emitted by `RepoBuilder.Workflows.TitleHumanizer` after it persists `metadata["title"]`.
+  """
+  @spec broadcast_workflow_title(Ecto.UUID.t(), String.t()) :: :ok
+  def broadcast_workflow_title(workflow_id, title) do
+    _ =
+      Phoenix.PubSub.broadcast(
+        RepoBuilder.PubSub,
+        @lanes_topic,
+        {:workflow_title, workflow_id, title}
+      )
+
+    :ok
+  end
+
+  @doc """
   Subscribe to the GLOBAL console event feed — a unified stream of every live
   session's canonical events across ALL agents (the per-agent
   `agent:<id>:events` topics stay unchanged). The multi-layered console (§9)

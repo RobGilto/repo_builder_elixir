@@ -96,6 +96,49 @@ defmodule RepoBuilder.Logs do
   end
 
   @doc """
+  Durably record one OPERATOR chat turn — the human side of the orchestrator
+  transcript (specs/issue-operator-persist-operator-chat-messages.md). Mirrors
+  `persist_orchestrator_event/2`: an orchestrator-scoped `agent_logs` row with
+  `event_type: :text_delta`, scoped by `:orchestrator_id` only (no `agent_id`).
+
+  The row is distinguished from orchestrator REPLY text — which shares the same
+  `orchestrator_id` — by the `payload["role"] == "operator"` marker, so the chat
+  backfill (`list_recent_orchestrator_messages/2`, which already returns these rows
+  unchanged) can render it as the operator's `:user` bubble instead of the
+  orchestrator bubble. Without this row, operator prompts were purely ephemeral UI
+  state and vanished on any LiveView reconnect/server restart.
+
+  `attrs` must carry `:orchestrator_id`. `:session_id` is caller-supplied or a
+  synthesized `"orch-<id>-op-<n>"`; `:harness` is the orchestrator's harness string
+  (column parity, optional).
+  """
+  @spec persist_operator_message(String.t(), %{
+          required(:orchestrator_id) => Ecto.UUID.t(),
+          optional(:session_id) => String.t(),
+          optional(:harness) => String.t() | nil
+        }) :: {:ok, AgentLog.t()} | {:error, Ecto.Changeset.t()}
+  def persist_operator_message(prompt, attrs) do
+    orchestrator_id = attrs[:orchestrator_id]
+
+    params = %{
+      orchestrator_id: orchestrator_id,
+      session_id: attrs[:session_id] || synth_operator_session(orchestrator_id),
+      event_type: :text_delta,
+      harness: attrs[:harness],
+      payload: %{"text" => prompt, "role" => "operator", "thinking" => false}
+    }
+
+    %AgentLog{}
+    |> AgentLog.changeset(params)
+    |> Repo.insert()
+  end
+
+  @spec synth_operator_session(Ecto.UUID.t() | nil) :: String.t()
+  defp synth_operator_session(orchestrator_id) do
+    "orch-#{orchestrator_id}-op-#{System.unique_integer([:positive])}"
+  end
+
+  @doc """
   Format a persisted log's durable `log_no` as the human-readable `log-<n>` label
   surfaced in the event-detail drilldown. A `nil` (non-persisted live shard, or a row
   built before this field) degrades to `"—"`. Pure formatter — no `Repo` — co-located
@@ -135,6 +178,33 @@ defmodule RepoBuilder.Logs do
   end
 
   @doc """
+  The most recent `limit` ORCHESTRATOR `:text_delta` rows (the finalized assistant
+  text that becomes chat), in chronological order. The chat-pane reconnect/restart
+  backfill source (issue-chat-history-backfill).
+
+  Distinct from `list_recent_global/2`: the chat pane must NOT be rebuilt from the
+  worker-dominated global stream slice. Workers emit far more events than the
+  orchestrator, so once ≥`limit` worker rows accumulate after the last orchestrator
+  message, the orchestrator's sparse chat rows fall out of the global most-recent
+  window and the chat pane backfills empty — even though the rows are durably stored.
+  Scoping to `not is_nil(orchestrator_id) and event_type == :text_delta` guarantees the
+  chat history survives a restart independent of worker volume.
+
+  Rows soft-hidden by the console CLEAR action are skipped unless `include_hidden?`
+  is true (mirrors `list_recent_global/2`).
+  """
+  @spec list_recent_orchestrator_messages(pos_integer(), boolean()) :: [AgentLog.t()]
+  def list_recent_orchestrator_messages(limit \\ 100, include_hidden? \\ false) do
+    AgentLog
+    |> where([l], not is_nil(l.orchestrator_id) and l.event_type == :text_delta)
+    |> filter_hidden(include_hidden?)
+    |> order_by([l], desc: l.inserted_at, desc: l.id)
+    |> limit(^limit)
+    |> Repo.all()
+    |> Enum.reverse()
+  end
+
+  @doc """
   Soft-hide EVERY currently-visible agent_logs row (the console "CLEAR" log action).
   Persists the cleared state so a reconnect stays empty; rows are NOT deleted and are
   revealed again by the settings "show hidden" toggle. Returns the count hidden.
@@ -163,6 +233,31 @@ defmodule RepoBuilder.Logs do
       |> Repo.update_all(set: [hidden: false])
 
     count
+  end
+
+  @doc """
+  The persisted `agent_logs` rows for a concrete set of durable `log_no` numbers
+  (issue orchestrator-log-lookup-tools), ordered ascending by `log_no`. Drives the
+  orchestrator's `get_logs` tool: resolve a `log-<n>` reference (single / inclusive
+  range / explicit array) back to its critical content.
+
+  Numbers with no matching row are simply absent from the result (the caller reports
+  them as "missing", never an error). Soft-hidden (console CLEAR) rows are excluded
+  unless `:include_hidden?` is true. An empty list short-circuits to `[]` — no query.
+  """
+  @spec logs_by_numbers([integer()], keyword()) :: [AgentLog.t()]
+  def logs_by_numbers(numbers, opts \\ [])
+
+  def logs_by_numbers([], _opts), do: []
+
+  def logs_by_numbers(numbers, opts) when is_list(numbers) do
+    include_hidden? = Keyword.get(opts, :include_hidden?, false)
+
+    AgentLog
+    |> where([l], l.log_no in ^numbers)
+    |> filter_hidden(include_hidden?)
+    |> order_by([l], asc: l.log_no)
+    |> Repo.all()
   end
 
   @spec filter_hidden(Ecto.Queryable.t(), boolean()) :: Ecto.Query.t()

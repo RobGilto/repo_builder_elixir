@@ -64,6 +64,10 @@ defmodule RepoBuilder.Application do
       # a one-shot Fast-tier session that never persists and never hits the global
       # feed. A crashed/finished run is isolated, never restarted.
       {DynamicSupervisor, name: RepoBuilder.ExplainSupervisor, strategy: :one_for_one},
+      # One :temporary runner per ephemeral Fast-tier ADW title humanization
+      # (issue-unified-adw-swimlane-cards): a one-shot session that never persists and
+      # never hits the global feed; on reply it writes only `Workflow.metadata["title"]`.
+      {DynamicSupervisor, name: RepoBuilder.TitleHumanizerSupervisor, strategy: :one_for_one},
       # Boot-time reconciliation of orphaned OS children via the durable ledger.
       # Runs AFTER Repo (it reads os_pid_ledger). Disabled on boot in tests.
       RepoBuilder.OrphanReaper,

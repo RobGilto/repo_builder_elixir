@@ -189,6 +189,35 @@ const tools = [
     },
   },
   {
+    name: "get_logs",
+    description:
+      "Fetch the critical content of persisted console logs by their durable log-<n> number " +
+      "(the labels shown on every event, e.g. log-8219). Three shapes: a single log (\"log-8219\" " +
+      "or 8219), an inclusive from..to range, or an explicit numbers array. Each log returns its " +
+      "label, owner, session, event type, harness/provider/model, a capped text excerpt, token/cost " +
+      "usage, and timestamp; absent numbers come back under missing (never an error); the resolved " +
+      "set is bounded to 100 numbers (capped: true when truncated). Distinct from read_system_logs " +
+      "(the separate audit table) and check_agent_status (which tails a worker by name).",
+    parameters: {
+      type: "object",
+      properties: {
+        log: { type: "string", description: "A single log number, e.g. \"log-8219\" or \"8219\"." },
+        from: { type: "string", description: "Inclusive range start, e.g. \"log-8219\"." },
+        to: { type: "string", description: "Inclusive range end, e.g. \"log-8228\"." },
+        numbers: {
+          type: "array",
+          items: { type: ["integer", "string"] },
+          description: "Explicit list of log numbers (bare ints or \"log-<n>\" strings).",
+        },
+        include_hidden: {
+          type: "boolean",
+          description: "Include soft-hidden (console-cleared) rows (default false).",
+        },
+      },
+      required: [],
+    },
+  },
+  {
     name: "check_adw",
     description:
       "Inspect an ADW run by id: status, current step, cost, artifacts, plus completed/total progress, a per-step status+cost list, and a recent per-step activity tail. Pairs with start_adw.",

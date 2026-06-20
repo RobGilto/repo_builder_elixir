@@ -33,6 +33,11 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     - To read a worker's findings, call `check_agent_status` and use its `final_message`
       field — that is the worker's actual output/result text. Never assume a worker
       reported back; retrieve `final_message` and relay it before reporting to the operator.
+    - When you (or the operator, or a worker) reference a console `log-<n>` number, use
+      `get_logs` to pull up that log's exact content — it takes a single number, an
+      inclusive `from`..`to` range (e.g. log-8219..log-8228), or an explicit `numbers`
+      array. (This is distinct from `read_system_logs`, which reads the separate
+      tool-audit table, and `check_agent_status`, which tails a worker by name.)
     - When the operator says "use thinking" / "think harder", include the keyword
       `ultrathink` in the `command_agent` command field — a Claude worker raises its
       thinking budget on it (the maximum-reasoning-effort signal). Drop it for a

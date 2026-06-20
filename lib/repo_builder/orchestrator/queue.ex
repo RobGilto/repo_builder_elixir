@@ -108,7 +108,23 @@ defmodule RepoBuilder.Orchestrator.Queue do
   @spec enqueue(Ecto.UUID.t(), String.t()) :: enqueue_result()
   def enqueue(orchestrator_id, prompt) do
     with {:ok, pid} <- start_or_get(orchestrator_id) do
+      # Durably record the operator turn so the chat transcript survives reconnect /
+      # restart (specs/issue-operator-persist-operator-chat-messages.md). This public
+      # path is operator-only (always `:operator` kind); internal holding-pattern
+      # resume turns never call it, so resume prompts are never mislabeled as operator
+      # turns. Persistence is best-effort (non-fatal): the turn must run regardless,
+      # and we do NOT broadcast — the LiveView already echoes via push_user_message/2,
+      # so broadcasting would double-render on the originating console.
+      persist_operator_message(orchestrator_id, prompt)
       GenServer.call(pid, {:enqueue, prompt, :operator})
+    end
+  end
+
+  @spec persist_operator_message(Ecto.UUID.t(), String.t()) :: :ok
+  defp persist_operator_message(orchestrator_id, prompt) do
+    case Logs.persist_operator_message(prompt, %{orchestrator_id: orchestrator_id}) do
+      {:ok, _log} -> :ok
+      {:error, _reason} -> :ok
     end
   end
 

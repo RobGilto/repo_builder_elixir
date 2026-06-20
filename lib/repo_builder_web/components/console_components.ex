@@ -471,7 +471,17 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   attr :color, :string, required: true
   attr :category, :atom, required: true, values: @categories
   attr :kind, :string, required: true
-  attr :body, :string, required: true
+  attr :body, :string, required: true, doc: "plain-text projection (search/copy fallback)"
+  attr :summary, :string, required: true, doc: "one-line card headline (presenter render model)"
+  attr :preview, :string, default: nil, doc: "clean collapsed content preview (nil ⇒ none)"
+
+  attr :detail, :string,
+    default: nil,
+    doc: "full body revealed on expand (nil ⇒ falls back to preview)"
+
+  attr :tool_name, :string, default: nil, doc: "drives the tool pill (nil ⇒ no pill)"
+  attr :error?, :boolean, default: false, doc: "tool-result error ⇒ red accent"
+  attr :files, :list, default: [], doc: "consumed/written files ⇒ \"Consumed N files\" card"
   attr :thinking?, :boolean, default: false
   attr :tokens, :string, default: nil
   attr :time, :string, default: ""
@@ -481,7 +491,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     default: false,
     doc: "reusable multi-select state (action-agnostic — EXPLAIN/HIDE/COPY act on the selection)"
 
-  @doc "One center event-stream row: select | log# | category badge | agent (colored) | content | meta; expandable."
+  @doc "One center event-stream row rendered as a structured card: select | log# | category badge | agent (colored) | card | meta; expandable."
   @spec event_row(map()) :: Phoenix.LiveView.Rendered.t()
   def event_row(assigns) do
     ~H"""
@@ -519,19 +529,59 @@ defmodule RepoBuilderWeb.ConsoleComponents do
       </span>
       <span class={["cns-cat", "cns-cat--#{@category}"]}>{category_label(@category)}</span>
       <span class="cns-event-row__agent">{@agent}</span>
-      <span class="cns-event-row__body">
-        <%= if @expanded? do %>
-          <pre class="whitespace-pre-wrap break-all" phx-no-curly-interpolation><%= @body %></pre>
-        <% else %>
-          {truncate(@body, 160)}
+      <div class={["cns-event-row__body cns-event-card", @error? && "cns-event-card--error"]}>
+        <div class="cns-event-card__summary">
+          <span>{@summary}</span>
+          <span :if={@tool_name} class="cns-tool-pill">{@tool_name}</span>
+        </div>
+        <%= cond do %>
+          <% @expanded? and (@detail || @preview) -> %>
+            <pre
+              class="cns-event-preview cns-event-preview--full whitespace-pre-wrap break-all"
+              phx-no-curly-interpolation
+            ><%= @detail || @preview %></pre>
+          <% @preview -> %>
+            <div class="cns-event-preview">{truncate(@preview, 200)}</div>
+          <% true -> %>
         <% end %>
-      </span>
+        <.consumed_files :if={@files != []} files={@files} />
+      </div>
       <span class="cns-event-row__meta">
         <span :if={@tokens}>{@tokens} · </span>{@time}
       </span>
     </div>
     """
   end
+
+  attr :files, :list,
+    required: true,
+    doc: "presenter file_activity entries: %{path, action, bytes}"
+
+  @doc ~S"""
+  "Consumed N files" sub-card (issue polished-event-stream-cards): a header plus one row
+  per file (path + byte count) surfaced from a response/tool-result's file activity.
+  """
+  @spec consumed_files(map()) :: Phoenix.LiveView.Rendered.t()
+  def consumed_files(assigns) do
+    ~H"""
+    <div class="cns-consumed">
+      <div class="cns-consumed__header">
+        Consumed {length(@files)} {if length(@files) == 1, do: "file", else: "files"}
+      </div>
+      <div :for={file <- @files} class="cns-consumed__file">
+        <span class="cns-consumed__action">{file.action}</span>
+        <span class="cns-consumed__path">{file.path}</span>
+        <span :if={file.bytes} class="cns-consumed__bytes">{format_bytes(file.bytes)}</span>
+      </div>
+    </div>
+    """
+  end
+
+  # Human-readable byte count for the consumed-files card (B / KB / MB).
+  @spec format_bytes(non_neg_integer()) :: String.t()
+  defp format_bytes(bytes) when bytes < 1_024, do: "#{bytes} B"
+  defp format_bytes(bytes) when bytes < 1_048_576, do: "#{Float.round(bytes / 1_024, 1)} KB"
+  defp format_bytes(bytes), do: "#{Float.round(bytes / 1_048_576, 1)} MB"
 
   # --- selection action bar -------------------------------------------------
 

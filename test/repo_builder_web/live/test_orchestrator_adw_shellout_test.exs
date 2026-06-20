@@ -136,12 +136,13 @@ defmodule RepoBuilderWeb.TestOrchestratorAdwShelloutTest do
 
     html = render(view)
 
-    # Ordered per-step progress: each step's tool-call marker (`<step> %{…}` body)
-    # appears in order. The ` %{` suffix targets the event-stream tool card, not the
-    # ADWS palette chips (whose tokens are `plan_build` etc., never `plan %{`).
-    plan = index!(html, "plan %{")
-    build = index!(html, "build %{")
-    review = index!(html, "review %{")
+    # Ordered per-step progress: each step's tool-call card renders the polished
+    # `Using tool: <step>` summary (issue polished-event-stream-cards) in order. This
+    # targets the event-stream tool card, not the ADWS palette chips (whose tokens are
+    # `plan_build` etc., never `Using tool: plan`).
+    plan = index!(html, "Using tool: plan")
+    build = index!(html, "Using tool: build")
+    review = index!(html, "Using tool: review")
     assert plan < build
     assert build < review
 

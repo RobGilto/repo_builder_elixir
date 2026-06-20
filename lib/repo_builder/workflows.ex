@@ -34,6 +34,19 @@ defmodule RepoBuilder.Workflows do
   @spec delete_workflow(Workflow.t()) :: {:ok, Workflow.t()} | {:error, Ecto.Changeset.t()}
   def delete_workflow(%Workflow{} = workflow), do: Repo.delete(workflow)
 
+  @doc """
+  Persist a human-friendly display `title` into the workflow's `metadata` map
+  (`metadata["title"]`), preserving any sibling metadata. This is the only write the
+  Fast-tier `RepoBuilder.Workflows.TitleHumanizer` makes — no new column, no migration.
+  The console title fallback chain reads `metadata["title"]` first.
+  """
+  @spec put_workflow_title(Workflow.t(), String.t()) ::
+          {:ok, Workflow.t()} | {:error, Ecto.Changeset.t()}
+  def put_workflow_title(%Workflow{} = workflow, title) when is_binary(title) do
+    new_metadata = Map.put(workflow.metadata, "title", title)
+    update_workflow(workflow, %{metadata: new_metadata})
+  end
+
   # --- runs ---
 
   @spec get_run(Ecto.UUID.t()) :: WorkflowRun.t() | nil

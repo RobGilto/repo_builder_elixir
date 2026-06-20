@@ -52,29 +52,32 @@ defmodule RepoBuilderWeb.DashboardComponents do
   attr :id, :string, required: true
   attr :label, :string, required: true
   attr :status, :atom, required: true, values: @statuses
-  attr :kind, :atom, default: :agent, values: [:agent, :workflow]
   attr :harness, :string, default: nil
-  attr :duration, :string, default: nil
-  slot :inner_block, doc: "the step columns of event squares"
+  slot :inner_block, doc: "the event-kind columns of event squares"
 
-  @doc "One ADW swimlane: key/label + status badge (+ duration), holding step columns of event squares."
-  @spec swimlane(map()) :: Phoenix.LiveView.Rendered.t()
-  def swimlane(assigns) do
+  @doc """
+  A standalone agent card (manual / non-workflow agents): the same card chrome as
+  `adw_card/1` (status-colored left border + header) holding columns of event squares,
+  so every block in the ADWS view shares one visual language.
+  """
+  @spec adw_agent_card(map()) :: Phoenix.LiveView.Rendered.t()
+  def adw_agent_card(assigns) do
     ~H"""
-    <div id={@id} class="cns-panel rounded p-2">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2">
-          <span class="cns-cat cns-cat--system">{@kind}</span>
-          <span class="text-sm font-semibold" style="color: var(--cns-text-0)">{@label}</span>
-          <span :if={@harness} class="text-[0.625rem]" style="color: var(--cns-text-2)">{@harness}</span>
-          <span :if={@duration} class="text-[0.625rem]" style="color: var(--cns-text-2)">{@duration}</span>
+    <div id={@id} class={["cns-card", "cns-card--#{@status}"]} data-run-status={@status}>
+      <div class="flex items-start justify-between">
+        <div class="flex flex-col gap-0.5">
+          <span class="cns-card__key">AGENT</span>
+          <span class="cns-card__title">{@label}</span>
+          <span class="flex items-center gap-1.5">
+            <.adw_orb active?={@status == :running} />
+            <span class={["badge", status_class(@status)]}>{@status}</span>
+            <span :if={@harness} class="text-[0.625rem]" style="color: var(--cns-text-2)">
+              {@harness}
+            </span>
+          </span>
         </div>
-        <span class="flex items-center gap-1.5">
-          <.adw_orb active?={@status == :running} />
-          <span class={["badge", status_class(@status)]}>{@status}</span>
-        </span>
       </div>
-      <div class="mt-2 flex gap-3 overflow-x-auto pb-1">
+      <div class="mt-2 flex flex-wrap gap-3">
         {render_slot(@inner_block)}
       </div>
     </div>
@@ -82,62 +85,101 @@ defmodule RepoBuilderWeb.DashboardComponents do
   end
 
   attr :id, :string, required: true
-  attr :label, :string, required: true, doc: "the run id / current step"
+  attr :title, :string, required: true, doc: "human-friendly display name (never a UUID)"
+  attr :type, :string, default: nil, doc: "the workflow type slug (key line)"
   attr :status, :atom, required: true, values: @statuses
   attr :completed, :integer, required: true
   attr :total, :integer, required: true
   attr :cost, :any, default: nil
+  attr :duration, :string, default: nil, doc: "elapsed/total display string"
+  attr :current, :string, default: nil, doc: "the active step name (highlighted)"
 
   attr :steps, :list,
     required: true,
     doc: "per-step view maps (name/status/cost_usd) from Workflows.run_progress/1"
 
-  @doc "A per-step ADW swimlane: run label + status/progress, then one colored square per step (status-keyed)."
-  @spec workflow_swimlane(map()) :: Phoenix.LiveView.Rendered.t()
-  def workflow_swimlane(assigns) do
+  @doc """
+  One ADW card: a status-colored left border, a header (`ADW: <type>` key + the
+  human-friendly title + status/progress/cost + duration), then a wrapping set of
+  per-step boxes (status-keyed, current step highlighted).
+  """
+  @spec adw_card(map()) :: Phoenix.LiveView.Rendered.t()
+  def adw_card(assigns) do
     ~H"""
-    <div id={@id} class="cns-panel rounded p-2" data-run-status={@status}>
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2">
-          <span class="cns-cat cns-cat--system">workflow</span>
-          <span class="text-sm font-semibold" style="color: var(--cns-text-0)">{@label}</span>
-          <span class="text-[0.625rem]" style="color: var(--cns-text-2)">{@completed}/{@total}</span>
+    <div id={@id} class={["cns-card", "cns-card--#{@status}"]} data-run-status={@status}>
+      <div class="flex items-start justify-between">
+        <div class="flex flex-col gap-0.5">
+          <span class="cns-card__key">ADW: {@type || "workflow"}</span>
+          <span class="cns-card__title">{@title}</span>
+          <span class="flex items-center gap-1.5">
+            <.adw_orb active?={@status == :running} />
+            <span class={["badge", status_class(@status)]}>{@status}</span>
+            <span class="text-[0.625rem]" style="color: var(--cns-text-2)">
+              {@completed}/{@total}
+            </span>
+            <.cost_badge cost={@cost} />
+          </span>
         </div>
-        <span class="flex items-center gap-1.5">
-          <.adw_orb active?={@status == :running} />
-          <.cost_badge cost={@cost} />
-          <span class={["badge", status_class(@status)]}>{@status}</span>
-        </span>
+        <span :if={@duration} class="cns-duration">{@duration}</span>
       </div>
-      <div class="mt-2 flex gap-2 overflow-x-auto pb-1">
-        <div :for={step <- @steps} class="flex flex-col items-center gap-1">
-          <span
-            id={"#{@id}-step-#{step.name}"}
-            data-step-status={step.status}
-            title={"#{step.name}: #{step.status}"}
-            class={["cns-square", step_square_class(step.status)]}
-          />
-          <span class="text-[0.5rem] uppercase" style="color: var(--cns-text-3)">{step.name}</span>
-        </div>
+      <div class="mt-2 flex flex-wrap gap-2">
+        <.step_box
+          :for={step <- @steps}
+          id={"#{@id}-step-#{step.name}"}
+          name={step.name}
+          status={step.status}
+          current?={step.name == @current}
+        />
       </div>
     </div>
     """
   end
 
-  @spec step_square_class(atom()) :: String.t()
-  defp step_square_class(:succeeded), do: "cns-square--response"
-  defp step_square_class(:running), do: "cns-square--tool"
-  defp step_square_class(:failed), do: "cns-square--system"
-  defp step_square_class(:cancelled), do: "cns-square--hook"
-  defp step_square_class(_pending), do: "cns-square--thinking"
+  attr :id, :string, required: true
+  attr :name, :string, required: true
+  attr :status, :atom, required: true
+  attr :current?, :boolean, default: false
+
+  @doc "One ADW step box: tinted by status (`data-step-status`), highlighted when current."
+  @spec step_box(map()) :: Phoenix.LiveView.Rendered.t()
+  def step_box(assigns) do
+    ~H"""
+    <div
+      id={@id}
+      data-step-status={@status}
+      title={"#{@name}: #{@status}"}
+      class={["cns-step-box", @current? && "cns-step-box--current"]}
+    >
+      <span class="cns-step-box__name">{format_step_name(@name)}</span>
+    </div>
+    """
+  end
+
+  # "plan" → "Plan", "plan_build" → "Plan Build", "_workflow" → "Workflow".
+  @spec format_step_name(String.t()) :: String.t()
+  defp format_step_name(name) do
+    name
+    |> String.split(~r/[-_\s]+/, trim: true)
+    |> Enum.map_join(" ", &String.capitalize/1)
+  end
+
+  @doc "Icon glyph for a canonical event category (drives the event-square face)."
+  @spec category_icon(atom()) :: String.t()
+  def category_icon(:response), do: "💬"
+  def category_icon(:tool), do: "🛠️"
+  def category_icon(:thinking), do: "🧠"
+  def category_icon(:hook), do: "🪝"
+  def category_icon(:system), do: "⚙️"
 
   attr :category, :atom, required: true, values: @event_categories
   attr :summary, :string, required: true, doc: "hover-tooltip text"
   attr :event_id, :integer, required: true
 
-  @doc "A 12px colored event square (by canonical category); hover tooltip + click opens the detail panel."
+  @doc "A colored event square with a category icon; hover tooltip + click opens the detail panel."
   @spec event_square(map()) :: Phoenix.LiveView.Rendered.t()
   def event_square(assigns) do
+    assigns = assign(assigns, :icon, category_icon(assigns.category))
+
     ~H"""
     <button
       type="button"
@@ -146,7 +188,9 @@ defmodule RepoBuilderWeb.DashboardComponents do
       phx-value-id={@event_id}
       title={@summary}
       class={["cns-square", "cns-square--#{@category}"]}
-    />
+    >
+      <span class="cns-square__icon">{@icon}</span>
+    </button>
     """
   end
 

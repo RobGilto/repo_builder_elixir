@@ -59,3 +59,6 @@ npm-debug.log
 __pycache__/
 
 /.planning/
+
+# Local MCP server config — contains a live orchestrator bearer token; never commit.
+/.mcp.json

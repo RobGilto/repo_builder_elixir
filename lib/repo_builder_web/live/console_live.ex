@@ -28,9 +28,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   import RepoBuilderWeb.DashboardComponents,
     only: [
-      swimlane_row: 1,
-      swimlane: 1,
-      workflow_swimlane: 1,
+      adw_card: 1,
+      adw_agent_card: 1,
       event_square: 1,
       event_detail_panel: 1
     ]
@@ -51,6 +50,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   alias RepoBuilder.Agents.Agent
   alias RepoBuilder.Budget.Cap
+  alias RepoBuilder.Console.EventPresenter
   alias RepoBuilder.CostCenter.ModelPrice
   alias RepoBuilder.FileBrowser
   alias RepoBuilder.Harness.Event
@@ -58,6 +58,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
   alias RepoBuilder.Harness.Registry, as: HarnessRegistry
   alias RepoBuilder.Orchestrator.Queue, as: OrchestratorQueue
   alias RepoBuilder.Orchestrator.Templates
+  alias RepoBuilder.Workflows.TitleHumanizer
   alias RepoBuilderWeb.AgentColors
 
   @categories [:response, :tool, :thinking, :hook]
@@ -569,11 +570,16 @@ defmodule RepoBuilderWeb.ConsoleLive do
   end
 
   # A minimal view for a run first seen via a live broadcast (assume it is running
-  # until a lane status says otherwise).
+  # until a lane status says otherwise). No workflow loaded yet ⇒ title falls back to
+  # the never-a-UUID `"ADW <short>"` form until a refetch fills it in.
   @spec default_workflow_view(Ecto.UUID.t()) :: map()
   defp default_workflow_view(run_id) do
     %{
       run_id: run_id,
+      workflow_id: nil,
+      title: "ADW " <> short_id(run_id),
+      type: nil,
+      duration: nil,
       status: :running,
       current: nil,
       cost: nil,
@@ -584,13 +590,19 @@ defmodule RepoBuilderWeb.ConsoleLive do
   end
 
   # Build a per-step workflow view from a run (seed/refetch path): full status + cost
-  # from the row, plus the derived per-step progress (ordered, branching-safe).
+  # from the row, the derived per-step progress (ordered, branching-safe), a derived
+  # duration, and a human-friendly `title` (loaded from the run's `Workflow`).
   # Inference-only spec — the concrete view map narrows below `map()` under :underspecs.
   defp workflow_view(run) do
     progress = Workflows.run_progress(run)
+    workflow = run.workflow_id && Workflows.get_workflow(run.workflow_id)
 
     %{
       run_id: run.id,
+      workflow_id: run.workflow_id,
+      title: workflow_title(run, workflow),
+      type: workflow && workflow.type,
+      duration: workflow_duration(run),
       status: run.status,
       current: run.current_step,
       cost: run.total_cost_usd,
@@ -598,6 +610,81 @@ defmodule RepoBuilderWeb.ConsoleLive do
       total: progress.total,
       steps: progress.steps
     }
+  end
+
+  # The card title: the humanized `metadata["title"]` wins; else a non-machine-looking
+  # workflow name; else the humanized type; else the live step; else a short, never-raw
+  # `"ADW <short>"`. A bare UUID is never the title.
+  @spec workflow_title(Workflows.WorkflowRun.t(), Workflows.Workflow.t() | nil) :: String.t()
+  defp workflow_title(run, workflow) do
+    meta_title(workflow) || human_name(workflow) || human_type(workflow) ||
+      step_title(run) || "ADW " <> short_id(run.id)
+  end
+
+  @spec meta_title(Workflows.Workflow.t() | nil) :: String.t() | nil
+  defp meta_title(%{metadata: %{"title" => title}}) when is_binary(title), do: presence(title)
+  defp meta_title(_workflow), do: nil
+
+  # A workflow name only when it is human-friendly (a machine-looking name is skipped
+  # so the card shows the humanized type until the Fast-tier title arrives).
+  @spec human_name(Workflows.Workflow.t() | nil) :: String.t() | nil
+  defp human_name(%{name: name}) when is_binary(name) do
+    if TitleHumanizer.machine_name?(name), do: nil, else: presence(name)
+  end
+
+  defp human_name(_workflow), do: nil
+
+  @spec human_type(Workflows.Workflow.t() | nil) :: String.t() | nil
+  defp human_type(%{type: type}) when is_binary(type) and type != "",
+    do: presence(humanize_type(type))
+
+  defp human_type(_workflow), do: nil
+
+  @spec step_title(Workflows.WorkflowRun.t()) :: String.t() | nil
+  defp step_title(%{current_step: step}) when is_binary(step), do: presence(step)
+  defp step_title(_run), do: nil
+
+  @spec presence(String.t()) :: String.t() | nil
+  defp presence(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  # Slug → Title Case ("plan_build" → "Plan Build").
+  @spec humanize_type(String.t()) :: String.t()
+  defp humanize_type(type) do
+    type
+    |> String.split(~r/[-_\s]+/, trim: true)
+    |> Enum.map_join(" ", &String.capitalize/1)
+  end
+
+  # A display duration for the run: finished ⇒ inserted_at→updated_at; running ⇒
+  # inserted_at→now. `nil` when timestamps are absent.
+  @spec workflow_duration(Workflows.WorkflowRun.t()) :: String.t() | nil
+  defp workflow_duration(%{inserted_at: %DateTime{} = started} = run) do
+    finished =
+      case run do
+        %{status: status, updated_at: %DateTime{} = up}
+        when status in [:succeeded, :failed, :cancelled] ->
+          up
+
+        _ ->
+          DateTime.utc_now()
+      end
+
+    format_duration(DateTime.diff(finished, started, :second))
+  end
+
+  defp workflow_duration(_run), do: nil
+
+  @spec format_duration(integer()) :: String.t()
+  defp format_duration(seconds) when seconds < 0, do: "0s"
+  defp format_duration(seconds) when seconds < 60, do: "#{seconds}s"
+
+  defp format_duration(seconds) do
+    "#{div(seconds, 60)}m #{rem(seconds, 60)}s"
   end
 
   # The header grand total = Σ worker-own spend + the orchestrator's OWN spend. The
@@ -642,18 +729,28 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
     timezone = socket.assigns.timezone
 
-    {rows, messages, seq} =
-      Enum.reduce(logs, {[], [], 0}, fn log, {rows, msgs, seq} ->
+    {rows, seq} =
+      Enum.reduce(logs, {[], 0}, fn log, {rows, seq} ->
         seq = seq + 1
         row = log_to_row(log, seq, socket.assigns.agent_names, timezone)
-        msgs = append_chat(msgs, chat_for_row(row), seq, timezone)
-        {rows ++ [row], msgs, seq}
+        # Operator chat turns are chat-pane-only (parity with the live path, where
+        # push_user_message/2 writes no center-stream row) — keep them out of the
+        # center stream (issue-operator-persist-operator-chat-messages). The chat pane
+        # is still seeded from backfill_messages/2 below.
+        if row.chat_role == "operator", do: {rows, seq}, else: {rows ++ [row], seq}
       end)
 
     rows = Enum.take(rows, -@buffer_limit)
 
+    # Seed the chat pane from a dedicated orchestrator-scoped query rather than the
+    # worker-dominated global slice above (issue-chat-history-backfill): orchestrator
+    # rows fall out of the global most-recent-200 window once workers dominate, so the
+    # chat would otherwise backfill empty on restart. A SEPARATE `chat_seq` keeps chat
+    # entry ids from colliding with the center-stream `seq`.
+    messages = backfill_messages(socket, timezone)
+
     socket
-    |> assign(event_buffer: rows, messages: Enum.take(messages, -@messages_limit), seq: seq)
+    |> assign(event_buffer: rows, messages: messages, seq: seq)
     # A reconnect starts from persisted finalized history only — drop any stale
     # in-flight streaming buffer so no token shards survive the reconnect (§9), and
     # drop any selection referencing the now-reset row ids (issue-explain).
@@ -664,6 +761,23 @@ defmodule RepoBuilderWeb.ConsoleLive do
     |> seed_context_tokens()
     |> seed_counters()
     |> stream(:events, rows, reset: true)
+  end
+
+  # Build the chat pane's `@messages` from the orchestrator-scoped backfill query
+  # (issue-chat-history-backfill) so the conversation survives a restart even when
+  # worker rows dominate the global stream. Reuses the live path's
+  # `log_to_row/4` → `chat_for_row/1` → `append_chat/3` helpers (single source of
+  # truth) with its OWN `seq` so chat entry ids never collide with the center stream.
+  @spec backfill_messages(Phoenix.LiveView.Socket.t(), String.t()) :: [map()]
+  defp backfill_messages(socket, timezone) do
+    Logs.list_recent_orchestrator_messages(@messages_limit, socket.assigns.show_hidden?)
+    |> Enum.reduce({[], 0}, fn log, {msgs, seq} ->
+      seq = seq + 1
+      row = log_to_row(log, seq, socket.assigns.agent_names, timezone)
+      {append_chat(msgs, chat_for_row(row), seq, timezone), seq}
+    end)
+    |> elem(0)
+    |> Enum.take(-@messages_limit)
   end
 
   @spec agent_lanes([Agent.t()]) :: [Dashboard.lane()]
@@ -1484,6 +1598,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
              steps: step_list
            }),
          {:ok, _run_id, _pid} <- WorkflowEngine.start_workflow(wf, inputs: %{"input" => name}) do
+      # Fire-and-forget Fast-tier title humanization (machine-looking name ⇒ friendly).
+      _ = TitleHumanizer.maybe_humanize_async(wf, socket.assigns.orchestrator_id)
+
       socket
       |> assign(adw_builder?: false, adw_steps: [], adw_name: "")
       |> put_flash(:info, "ADW launched — check the ADWS tab")
@@ -1778,6 +1895,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
          category: :system,
          kind: "session",
          body: "session #{event.session_id}",
+         render: EventPresenter.from_event(event),
          payload: event.raw
        },
        log_no
@@ -1815,6 +1933,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
          category: :thinking,
          kind: "thinking",
          body: event.text,
+         render: EventPresenter.from_event(event),
          thinking?: true,
          payload: event.raw
        },
@@ -1846,6 +1965,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
          category: :response,
          kind: "text",
          body: event.text,
+         render: EventPresenter.from_event(event),
          payload: event.raw,
          chat: chat
        },
@@ -1862,6 +1982,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
   end
 
   def handle_info({:agent_event, agent_id, %Event.ToolCall{} = event, log_no}, socket) do
+    render = EventPresenter.from_event(event)
+
     {:noreply,
      record_event(
        socket,
@@ -1869,7 +1991,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
        %{
          category: :tool,
          kind: "tool_call",
-         body: "#{event.name} #{inspect(event.input)}",
+         body: EventPresenter.search_text(render),
+         render: render,
          payload: event.raw
        },
        log_no
@@ -1877,6 +2000,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
   end
 
   def handle_info({:agent_event, agent_id, %Event.ToolResult{} = event, log_no}, socket) do
+    render = EventPresenter.from_event(event)
+
     {:noreply,
      record_event(
        socket,
@@ -1884,7 +2009,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
        %{
          category: :tool,
          kind: "tool_result",
-         body: inspect(event.content),
+         body: EventPresenter.search_text(render),
+         render: render,
          payload: event.raw
        },
        log_no
@@ -1904,6 +2030,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
          category: :system,
          kind: "usage",
          body: "in=#{event.input_tokens} out=#{event.output_tokens}",
+         render: EventPresenter.from_event(event),
          tokens: "#{event.input_tokens + event.output_tokens}t",
          payload: event.raw
        },
@@ -1912,6 +2039,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
   end
 
   def handle_info({:agent_event, agent_id, %Event.Status{} = event, log_no}, socket) do
+    render = EventPresenter.from_event(event)
+
     {:noreply,
      record_event(
        socket,
@@ -1919,7 +2048,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
        %{
          category: :hook,
          kind: "status",
-         body: "#{event.kind} #{inspect(event.detail)}",
+         body: EventPresenter.search_text(render),
+         render: render,
          payload: event.raw
        },
        log_no
@@ -1941,6 +2071,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
          category: :system,
          kind: "done",
          body: "reason=#{event.reason}",
+         render: EventPresenter.from_event(event),
          payload: event.raw
        },
        log_no
@@ -1958,6 +2089,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
          category: :system,
          kind: "error",
          body: "#{event.reason}: #{event.message}",
+         render: EventPresenter.from_event(event),
          payload: event.raw
        },
        log_no
@@ -2093,6 +2225,19 @@ defmodule RepoBuilderWeb.ConsoleLive do
     {:noreply, update_workflow_steps(socket, run_id, progress)}
   end
 
+  # Fast-tier humanized title for every view of `workflow_id`: swap the heuristic card
+  # title for the friendly one in place (issue-unified-adw-swimlane-cards).
+  def handle_info({:workflow_title, workflow_id, title}, socket) do
+    progress =
+      Map.new(socket.assigns.workflow_progress, fn {run_id, view} ->
+        if view.workflow_id == workflow_id,
+          do: {run_id, Map.put(view, :title, title)},
+          else: {run_id, view}
+      end)
+
+    {:noreply, assign(socket, :workflow_progress, progress)}
+  end
+
   # The single hot path: append to the bounded buffer, bump pills + counters, push
   # into the stream only if the row passes the active filters, and append a chat
   # entry where one applies.
@@ -2113,6 +2258,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
       category: attrs.category,
       kind: attrs.kind,
       body: to_string(attrs.body),
+      # The presenter render model drives the structured card; the single source of truth
+      # shared with the backfill path (log_to_row) so live + reconnect render identically.
+      render: Map.get(attrs, :render, empty_render(attrs)),
       thinking?: Map.get(attrs, :thinking?, false),
       tokens: Map.get(attrs, :tokens),
       time: now_hms(socket.assigns.timezone),
@@ -2133,6 +2281,21 @@ defmodule RepoBuilderWeb.ConsoleLive do
       |> maybe_chat(Map.get(attrs, :chat), seq)
 
     socket
+  end
+
+  # Defensive fallback render model for a row whose attrs omit `:render` (every live
+  # handler supplies one; this keeps a missing key from crashing the stream).
+  # Inference-only spec — dialyzer narrows `attrs` to the concrete per-variant map shape,
+  # which a hand-written `map()` spec would supertype under :underspecs.
+  defp empty_render(attrs) do
+    %{
+      summary: to_string(Map.get(attrs, :body, "")),
+      preview: nil,
+      detail: nil,
+      tool_name: nil,
+      error?: false,
+      files: []
+    }
   end
 
   # Inference-only spec — the row map is narrowed to its concrete shape (:underspecs).
@@ -2633,6 +2796,12 @@ defmodule RepoBuilderWeb.ConsoleLive do
                     category={row.category}
                     kind={row.kind}
                     body={row.body}
+                    summary={row.render.summary}
+                    preview={row.render.preview}
+                    detail={row.render.detail}
+                    tool_name={row.render.tool_name}
+                    error?={row.render.error?}
+                    files={row.render.files}
                     thinking?={row.thinking?}
                     tokens={row.tokens}
                     time={row.time}
@@ -2646,7 +2815,37 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
           <div id="swimlanes" class={["flex min-h-0 flex-1", @view_mode != :adws && "hidden"]}>
             <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
-              <div class="flex items-center justify-end">
+              <%!-- One header: category-filter chips + a folded running-worker count + CLEAR. --%>
+              <div
+                id="adw-controls"
+                class="flex flex-wrap items-center gap-2 border-b pb-2"
+                style="border-color: var(--cns-border)"
+              >
+                <%!-- Distinct ids from the LOGS filter bar (both views stay mounted). --%>
+                <button
+                  :for={
+                    {cat, label} <- [
+                      response: "RESPONSE",
+                      tool: "TOOL",
+                      thinking: "THINKING",
+                      hook: "HOOK"
+                    ]
+                  }
+                  id={"adw-cat-#{cat}"}
+                  type="button"
+                  phx-click="toggle_category"
+                  phx-value-cat={cat}
+                  class={[
+                    "cns-chip",
+                    "cns-chip--#{cat}",
+                    MapSet.member?(@active_categories, cat) && "cns-chip--active"
+                  ]}
+                >
+                  {label}
+                </button>
+                <span class="ml-auto text-[0.625rem]" style="color: var(--cns-text-2)">
+                  {running_count(@statuses)} running
+                </span>
                 <button
                   id="clear-workflows"
                   type="button"
@@ -2658,50 +2857,61 @@ defmodule RepoBuilderWeb.ConsoleLive do
                   CLEAR
                 </button>
               </div>
+
               <div id="workflow-runs" class="flex flex-col gap-2">
-                <.workflow_swimlane
+                <.adw_card
                   :for={view <- workflow_views(@workflow_progress)}
                   id={"workflow-#{view.run_id}"}
-                  label={view.current || view.run_id}
+                  title={view.title}
+                  type={view.type}
                   status={view.status}
                   completed={view.completed}
                   total={view.total}
                   cost={view.cost}
+                  duration={view.duration}
+                  current={view.current}
                   steps={view.steps}
                 />
               </div>
 
-              <div id="agent-lanes" phx-update="stream" class="flex flex-col gap-2">
-                <div :for={{dom_id, lane} <- @streams.lanes} id={dom_id}>
-                  <.swimlane_row
-                    id={lane.id}
-                    label={lane.label}
-                    status={lane.status}
-                    kind={lane.kind}
-                    harness={lane.harness}
-                  />
+              <div
+                :if={@workflow_progress == %{} and @swimlanes == []}
+                id="no-adws"
+                class="cns-empty p-6 text-center text-sm"
+                style="color: var(--cns-text-2)"
+              >
+                No AI Developer Workflows found.
+                <div class="text-[0.6875rem] opacity-70">
+                  Start an ADW from the orchestrator chat.
                 </div>
               </div>
 
-              <.swimlane
-                :for={lane <- @swimlanes}
-                id={"swimlane-#{lane.key}"}
-                label={lane.name}
-                status={lane.status}
-                kind={:agent}
-              >
-                <div :for={col <- lane.columns} class="flex flex-col items-center gap-1">
-                  <span class="text-[0.5rem] uppercase" style="color: var(--cns-text-3)">{col.kind}</span>
-                  <div class="flex flex-wrap gap-1" style="max-width: 6rem">
-                    <.event_square
-                      :for={row <- col.rows}
-                      event_id={row.id}
-                      category={row.category}
-                      summary={"#{row.kind}: #{row.body}"}
-                    />
+              <div :if={@swimlanes != []} id="agent-cards" class="mt-1 flex flex-col gap-2">
+                <span class="cns-card__key">AGENTS</span>
+                <.adw_agent_card
+                  :for={lane <- @swimlanes}
+                  id={"swimlane-#{lane.key}"}
+                  label={lane.name}
+                  status={lane.status}
+                >
+                  <div
+                    :for={col <- visible_columns(lane.columns, @active_categories)}
+                    class="flex flex-col items-center gap-1"
+                  >
+                    <span class="text-[0.5rem] uppercase" style="color: var(--cns-text-3)">
+                      {col.kind}
+                    </span>
+                    <div class="flex flex-wrap gap-1" style="max-width: 8rem">
+                      <.event_square
+                        :for={row <- col.rows}
+                        event_id={row.id}
+                        category={row.category}
+                        summary={"#{row.kind}: #{row.body}"}
+                      />
+                    </div>
                   </div>
-                </div>
-              </.swimlane>
+                </.adw_agent_card>
+              </div>
             </div>
 
             <.event_detail_panel event={@selected_event} />
@@ -3018,6 +3228,16 @@ defmodule RepoBuilderWeb.ConsoleLive do
     end)
   end
 
+  # The agent-card columns whose squares pass the active category filter (empty columns
+  # dropped). `:system` events always pass (lifecycle), matching the LOGS view.
+  @spec visible_columns([map()], MapSet.t()) :: [map()]
+  defp visible_columns(columns, active) do
+    for col <- columns,
+        rows = Enum.filter(col.rows, &category_pass?(&1, active)),
+        rows != [],
+        do: %{kind: col.kind, rows: rows}
+  end
+
   @spec counter(map(), String.t(), atom()) :: non_neg_integer()
   defp counter(counters, agent_id, key) do
     counters |> Map.get(agent_id, %{}) |> Map.get(key, 0)
@@ -3054,11 +3274,22 @@ defmodule RepoBuilderWeb.ConsoleLive do
         ) :: map()
   defp log_to_row(log, seq, names, timezone) do
     category = category_for_type(log.event_type)
-    # Worker rows carry an `agent_id` (UUID); orchestrator rows carry no `agent_id`
-    # but hold the `"orch-…"` turn id in `session_id`. Fall back to it so the backfill
-    # agent_key matches the live path — and so the chat gate (`orchestrator_event?/1`)
-    # can tell orchestrator text from worker text on reconnect.
-    agent_key = log.agent_id || log.session_id
+    # Worker rows carry an `agent_id` (UUID). Orchestrator rows carry `agent_id: nil`
+    # and an `orchestrator_id`; their `session_id` is the harness session UUID — NOT
+    # the live `"orch-…"` broadcast key. Synthesize the `"orch-#{orchestrator_id}"` key
+    # for those rows so the backfill agent_key matches the live path and the chat gate
+    # (`orchestrator_event?/1`) recognizes orchestrator text on reconnect/restart
+    # (issue-chat-history-backfill). Worker rows keep their UUID agent_id.
+    agent_key =
+      case log.orchestrator_id do
+        nil -> log.agent_id || log.session_id
+        orch_id -> "orch-#{orch_id}"
+      end
+
+    # Same presenter as the live path (single source of truth) so reconnect backfill
+    # renders the identical structured card; best-effort for variants whose persisted
+    # payload is the raw wire frame (see EventPresenter.from_payload/2).
+    render = EventPresenter.from_payload(log.event_type, log.payload)
 
     %{
       id: seq,
@@ -3069,10 +3300,16 @@ defmodule RepoBuilderWeb.ConsoleLive do
       color: AgentColors.hex(to_string(agent_key)),
       category: category,
       kind: to_string(log.event_type),
-      body: log_body(log),
+      body: EventPresenter.search_text(render),
+      render: render,
       # Persisted text_delta rows carry the thinking flag (Logs.event_payload), so
       # backfill can route reasoning to the thinking pane like the live path does.
       thinking?: log.payload["thinking"] == true,
+      # Operator chat turns are orchestrator-scoped text_delta rows marked
+      # `payload["role"] == "operator"` (issue-operator-persist-operator-chat-messages);
+      # carry the marker so chat_for_row/1 routes them to the :user bubble and
+      # backfill_events/1 keeps them out of the center stream.
+      chat_role: log.payload["role"],
       tokens: nil,
       time: log_time(log, timezone),
       payload_json: pretty_json(log.payload)
@@ -3086,10 +3323,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
   defp category_for_type(:status), do: :hook
   defp category_for_type(_other), do: :system
 
-  @spec log_body(Logs.AgentLog.t()) :: String.t()
-  defp log_body(%{payload: %{"text" => text}}) when is_binary(text), do: text
-  defp log_body(%{event_type: type, payload: payload}), do: "#{type} #{inspect(payload)}"
-
   @spec log_time(Logs.AgentLog.t(), String.t()) :: String.t()
   defp log_time(%{inserted_at: %DateTime{} = at}, timezone),
     do: RepoBuilder.Timezones.format_datetime(at, timezone)
@@ -3102,6 +3335,13 @@ defmodule RepoBuilderWeb.ConsoleLive do
   # chat/events separation), so reasoning rows fall through to nil here.
   # (Inference-only spec — a hand-written one would be a supertype under :underspecs.)
   defp chat_for_row(%{category: :response, thinking?: true}), do: nil
+
+  # An operator-marked orchestrator text row is the human side of the transcript:
+  # render it as the distinct :user bubble ("YOU"), not the orchestrator bubble
+  # (issue-operator-persist-operator-chat-messages).
+  defp chat_for_row(%{category: :response, chat_role: "operator", body: body}) do
+    %{role: :user, label: "YOU", content: body, tool_name: nil, params_json: nil}
+  end
 
   defp chat_for_row(%{category: :response, body: body, agent_key: agent_key}) do
     if orchestrator_event?(agent_key) do

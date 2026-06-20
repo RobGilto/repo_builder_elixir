@@ -192,6 +192,47 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
         }
       },
       %{
+        name: "get_logs",
+        description:
+          "Fetch the critical content of persisted console logs by their durable `log-<n>` " <>
+            "number (the labels shown on every event in the console, e.g. `log-8219`). Resolve " <>
+            "a reference in three shapes: a single `log` (`\"log-8219\"` or `8219`), an inclusive " <>
+            "`from`..`to` range (the \"log-8219 to log-8228\" case), or an explicit `numbers` array. " <>
+            "Each returned log carries its label, owner (worker/orchestrator), session, event type, " <>
+            "harness/provider/model, a capped text excerpt, token/cost usage, and timestamp. Numbers " <>
+            "with no row come back under `missing` (never an error); the resolved set is bounded to " <>
+            "100 numbers (`capped: true` when truncated). Distinct from `read_system_logs` " <>
+            "(the separate system-log audit table) and `check_agent_status` (which tails a worker by name).",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "log" => %{
+              "type" => "string",
+              "description" => "A single log number, e.g. \"log-8219\" or \"8219\"."
+            },
+            "from" => %{
+              "type" => "string",
+              "description" => "Inclusive range start, e.g. \"log-8219\" or \"8219\"."
+            },
+            "to" => %{
+              "type" => "string",
+              "description" => "Inclusive range end, e.g. \"log-8228\" or \"8228\"."
+            },
+            "numbers" => %{
+              "type" => "array",
+              "items" => %{"type" => ["integer", "string"]},
+              "description" =>
+                "Explicit list of log numbers (bare ints or \"log-<n>\" strings), e.g. [8219, \"log-8225\", 8228]."
+            },
+            "include_hidden" => %{
+              "type" => "boolean",
+              "description" => "Include soft-hidden (console-cleared) rows (default false)."
+            }
+          },
+          "required" => []
+        }
+      },
+      %{
         name: "check_adw",
         description:
           "Inspect an ADW run by the id `start_adw` returned: status, cost, completed/total progress, a per-step status+cost list, and a recent activity tail. Works for both modes — in-app catalog runs and real portable `adw`-harness runs (whose per-step status/cost come from the canonical event log). Pairs with `start_adw`.",

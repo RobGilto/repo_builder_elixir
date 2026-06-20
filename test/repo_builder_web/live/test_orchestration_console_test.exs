@@ -111,10 +111,11 @@ defmodule RepoBuilderWeb.TestOrchestrationConsoleTest do
     html = render(view)
 
     assert html =~ ~s(id="swimlanes")
-    assert html =~ "lane-agent:#{agent.id}"
-    # The terminal lane broadcast may reach the LiveView process just after the test
-    # process; poll the render so we observe the processed `succeeded` transition
-    # rather than racing it.
+    # The agent now renders as a unified agent card (id "swimlane-<agent_id>"), not a
+    # separate roster row; its status badge carries the terminal transition.
+    assert html =~ "swimlane-#{agent.id}"
+    # The terminal status may reach the LiveView process just after the test process;
+    # poll the render so we observe the processed `succeeded` transition.
     assert wait_render(view, "succeeded")
   end
 

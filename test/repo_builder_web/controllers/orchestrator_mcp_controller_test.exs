@@ -7,7 +7,8 @@ defmodule RepoBuilderWeb.OrchestratorMCPControllerTest do
   """
   use RepoBuilderWeb.ConnCase, async: false
 
-  alias RepoBuilder.{Agents, Orchestrators}
+  alias RepoBuilder.{Agents, Logs, Orchestrators}
+  alias RepoBuilder.Harness.Event
 
   defp uniq, do: System.unique_integer([:positive])
 
@@ -54,6 +55,7 @@ defmodule RepoBuilderWeb.OrchestratorMCPControllerTest do
       assert "update_agent" in names
       assert "delete_agent" in names
       assert "read_system_logs" in names
+      assert "get_logs" in names
       assert "check_adw" in names
       assert "get_config" in names
       assert "configure_tier" in names
@@ -105,6 +107,45 @@ defmodule RepoBuilderWeb.OrchestratorMCPControllerTest do
 
       assert resp["result"]["isError"] == false
       assert {:error, :not_found} = Agents.get_by_name_for_orchestrator(orch.id, name)
+    end
+
+    test "get_logs routes through Tools.call and returns the seeded range", %{conn: conn} do
+      {orch, token} = setup_orchestrator()
+
+      {:ok, agent} =
+        Agents.create_worker(orch.id, %{"name" => "w-#{uniq()}", "harness" => "fake"})
+
+      nos =
+        for i <- 1..3 do
+          {:ok, log} =
+            Logs.persist_event(
+              %Event.TextDelta{harness: :fake, text: "row-#{i}", thinking?: false},
+              %{agent_id: agent.id, session_id: "s"}
+            )
+
+          log.log_no
+        end
+
+      [n1, _n2, n3] = nos
+
+      resp =
+        conn
+        |> post_rpc(orch.id, token, %{
+          "jsonrpc" => "2.0",
+          "id" => 9,
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "get_logs",
+            "arguments" => %{"from" => "log-#{n1}", "to" => "log-#{n3}"}
+          }
+        })
+        |> json_response(200)
+
+      assert resp["result"]["isError"] == false
+      assert [%{"type" => "text", "text" => text}] = resp["result"]["content"]
+      # The JSON payload of the tool result carries each resolved log's label.
+      assert text =~ "log-#{n1}"
+      assert text =~ "log-#{n3}"
     end
 
     test "a tool error is wrapped as isError: true, not a JSON-RPC error", %{conn: conn} do
