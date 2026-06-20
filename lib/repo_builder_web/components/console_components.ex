@@ -236,6 +236,52 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   # --- agent rail -----------------------------------------------------------
 
   attr :id, :string, required: true
+  attr :form, :any, required: true, doc: "the Phoenix.HTML.Form for the agent (as: :agent)"
+  attr :submit, :string, required: true, doc: "phx-submit event"
+  attr :change, :string, required: true, doc: "phx-change validate event"
+  attr :cancel, :string, required: true, doc: "phx-click cancel event"
+  attr :title, :string, required: true
+  attr :submit_label, :string, required: true
+  attr :harness_options, :list, required: true
+
+  @doc """
+  Operator-facing create/edit agent form (issue agent-CRUD). Backs both the New and
+  Edit rail forms; the submitted agent is persisted as an orchestrator-owned worker
+  by the LiveView. name/harness/provider + optional model/system_prompt.
+  """
+  @spec agent_form(map()) :: Phoenix.LiveView.Rendered.t()
+  def agent_form(assigns) do
+    ~H"""
+    <div class="cns-panel mt-2 rounded p-2">
+      <.form for={@form} id={@id} phx-submit={@submit} phx-change={@change} class="space-y-1">
+        <p class="text-[0.625rem] font-semibold uppercase" style="color: var(--cns-text-2)">
+          {@title}
+        </p>
+        <.input field={@form[:name]} type="text" label="Name" />
+        <.input field={@form[:harness]} type="select" label="Harness" options={@harness_options} />
+        <.input
+          field={@form[:provider]}
+          type="select"
+          label="Provider"
+          options={["anthropic", "openai", "local"]}
+        />
+        <.input field={@form[:model]} type="text" label="Model (optional)" />
+        <.input
+          field={@form[:system_prompt]}
+          type="textarea"
+          label="System prompt (optional)"
+          rows="3"
+        />
+        <div class="flex gap-2">
+          <button type="submit" class="btn btn-primary btn-xs flex-1">{@submit_label}</button>
+          <button type="button" phx-click={@cancel} class="btn btn-ghost btn-xs">Cancel</button>
+        </div>
+      </.form>
+    </div>
+    """
+  end
+
+  attr :id, :string, required: true
   attr :name, :string, required: true
   attr :status, :atom, required: true, values: @statuses
   attr :harness, :string, default: nil
@@ -315,18 +361,31 @@ defmodule RepoBuilderWeb.ConsoleComponents do
         </div>
       </button>
 
-      <button
-        id={"archive-agent-#{@id}"}
-        type="button"
-        phx-click="archive_agent"
-        phx-value-id={@id}
-        data-confirm={"Archive #{@name}? Its logs and cost history are preserved; it leaves the rail."}
-        class="cns-agent-archive absolute right-1 top-1"
-        title="Archive agent"
-        aria-label={"Archive agent #{@name}"}
-      >
-        ✕
-      </button>
+      <div class="cns-agent-controls absolute right-1 top-1 flex items-center gap-1">
+        <button
+          id={"edit-agent-#{@id}"}
+          type="button"
+          phx-click="edit_agent"
+          phx-value-id={@id}
+          class="cns-agent-control"
+          title="Edit agent"
+          aria-label={"Edit agent #{@name}"}
+        >
+          Edit
+        </button>
+        <button
+          id={"archive-agent-#{@id}"}
+          type="button"
+          phx-click="archive_agent"
+          phx-value-id={@id}
+          data-confirm={"Archive #{@name}? Its logs and cost history are preserved; it leaves the rail."}
+          class="cns-agent-control"
+          title="Archive agent"
+          aria-label={"Archive agent #{@name}"}
+        >
+          ✕
+        </button>
+      </div>
     </div>
     """
   end

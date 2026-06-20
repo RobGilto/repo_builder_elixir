@@ -331,19 +331,24 @@
 .cns-agent-card--selected { box-shadow: 0 0 0 1px var(--cns-cyan); }
 .cns-agent-card--pulse { animation: cns-pulse 335ms ease-out; }
 
-/* Archive affordance on the expanded rail card (sibling of the select button). */
-.cns-agent-archive {
+/* Edit/Archive affordances on the expanded rail card (siblings of the select button). */
+.cns-agent-controls {
+  opacity: 0;
+  transition: opacity 150ms;
+}
+.cns-agent-card:hover .cns-agent-controls,
+.cns-agent-controls:focus-within { opacity: 1; }
+.cns-agent-control {
   font-size: 0.6875rem;
   line-height: 1;
   padding: 2px 4px;
   border-radius: 4px;
   color: var(--cns-text-3);
-  opacity: 0;
-  transition: opacity 150ms, color 150ms;
+  transition: color 150ms;
 }
-.cns-agent-card:hover .cns-agent-archive,
-.cns-agent-archive:focus-visible { opacity: 1; }
-.cns-agent-archive:hover { color: var(--cns-danger, #ef4444); }
+.cns-agent-control:hover { color: var(--cns-cyan, var(--cns-info)); }
+#archive-agent-:hover,
+.cns-agent-control[id^="archive-agent-"]:hover { color: var(--cns-danger, #ef4444); }
 
 @keyframes cns-pulse {
   0% { background-color: var(--pulse-color); }
