@@ -262,6 +262,11 @@
 .cns-event-row__select:checked { opacity: 1; }
 /* While a drag-select sweep is active, suppress text selection (issue drag-select). */
 .cns-dragging, .cns-dragging * { user-select: none; }
+/* Log Database manager rows (issue-log-db-manager): mirror the event-row select UX. */
+.log-mgr-row--selected { background-color: var(--cns-bg-1); box-shadow: inset 2px 0 0 var(--cns-cyan); }
+.log-mgr-row__select { cursor: pointer; opacity: 0.4; transition: opacity 120ms; }
+.log-mgr-row:hover .log-mgr-row__select,
+.log-mgr-row__select:checked { opacity: 1; }
 /* Lightweight spinner for the explain modal's running state. */
 .cns-spinner { display: inline-block; animation: cns-spin 1s linear infinite; color: var(--cns-cyan); }
 @keyframes cns-spin { to { transform: rotate(360deg); } }

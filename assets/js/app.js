@@ -340,11 +340,116 @@ const LogCopy = {
   },
 }
 
+// Drag-select for the Log Database manager popup (issue-log-db-manager). A self-contained
+// clone of DragSelect scoped to the manager's OWN classes/ids/event so the live main-view
+// hook is untouched: checkbox `.log-mgr-row__select`, row matcher `[id^='log-mgr-row-']`,
+// painted-row class `.log-mgr-row--selected`, commit event `log_select_drag`. Ids here are
+// UUID strings (not the live view's integers), so the two selection systems never collide.
+// Reuses DragSelect's `.cns-dragging` user-select suppression on the stable table host.
+const LogDragSelect = {
+  mounted() {
+    this.dragging = false
+    this.didDrag = false
+    this.mode = "select"
+    this.anchorId = null
+    this.painted = new Set()
+    this.suppressNextClick = false
+
+    this._onPointerDown = (e) => {
+      const box = e.target.closest(".log-mgr-row__select")
+      if (!box || !this.el.contains(box)) return
+      this.dragging = true
+      this.didDrag = false
+      this.anchorId = box.dataset.rowId
+      this.mode = box.checked ? "deselect" : "select"
+      this.painted = new Set()
+      this.el.classList.add("cns-dragging")
+    }
+
+    this._onPointerMove = (e) => {
+      if (!this.dragging) return
+      const row = document.elementFromPoint(e.clientX, e.clientY)?.closest("[id^='log-mgr-row-']")
+      if (!row) return
+      const box = row.querySelector(".log-mgr-row__select")
+      if (!box) return
+      if (box.dataset.rowId !== this.anchorId) this.didDrag = true
+      this.paintRange(box.dataset.rowId)
+    }
+
+    this._onPointerUp = () => {
+      if (!this.dragging) return
+      const wasDrag = this.didDrag
+      const ids = [...this.painted]
+      const mode = this.mode
+      this.dragging = false
+      this.el.classList.remove("cns-dragging")
+
+      if (wasDrag && ids.length > 0) {
+        this.suppressNextClick = true
+        this.pushEvent("log_select_drag", {ids, mode})
+      }
+      this.anchorId = null
+      this.painted = new Set()
+    }
+
+    this._onClickCapture = (e) => {
+      if (!this.suppressNextClick) return
+      this.suppressNextClick = false
+      e.preventDefault()
+      e.stopImmediatePropagation()
+    }
+
+    this.el.addEventListener("pointerdown", this._onPointerDown)
+    document.addEventListener("pointermove", this._onPointerMove)
+    document.addEventListener("pointerup", this._onPointerUp)
+    document.addEventListener("pointercancel", this._onPointerUp)
+    this.el.addEventListener("click", this._onClickCapture, true)
+  },
+
+  paintRange(currentId) {
+    const boxes = [...this.el.querySelectorAll(".log-mgr-row__select")]
+    const ai = boxes.findIndex(b => b.dataset.rowId === this.anchorId)
+    const ci = boxes.findIndex(b => b.dataset.rowId === currentId)
+    if (ai === -1 || ci === -1) return
+
+    const [lo, hi] = ai <= ci ? [ai, ci] : [ci, ai]
+    const want = this.mode === "select"
+    const inRange = new Set()
+
+    for (let i = lo; i <= hi; i++) {
+      const box = boxes[i]
+      inRange.add(box.dataset.rowId)
+      this.paintBox(box, want)
+      this.painted.add(box.dataset.rowId)
+    }
+
+    for (const id of [...this.painted]) {
+      if (inRange.has(id)) continue
+      const box = boxes.find(b => b.dataset.rowId === id)
+      if (box) this.paintBox(box, !want)
+      this.painted.delete(id)
+    }
+  },
+
+  paintBox(box, checked) {
+    box.checked = checked
+    box.closest(".log-mgr-row")?.classList.toggle("log-mgr-row--selected", checked)
+  },
+
+  destroyed() {
+    this.el.removeEventListener("pointerdown", this._onPointerDown)
+    document.removeEventListener("pointermove", this._onPointerMove)
+    document.removeEventListener("pointerup", this._onPointerUp)
+    document.removeEventListener("pointercancel", this._onPointerUp)
+    this.el.removeEventListener("click", this._onClickCapture, true)
+  },
+}
+
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks, AutoScroll, ClipboardCopy, CommandPaste, DragSelect, LogCopy},
+  hooks: {...colocatedHooks, AutoScroll, ClipboardCopy, CommandPaste, DragSelect, LogCopy, LogDragSelect},
 })
 
 // Show progress bar on live navigation and form submits

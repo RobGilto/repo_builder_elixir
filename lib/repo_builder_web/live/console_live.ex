@@ -206,7 +206,17 @@ defmodule RepoBuilderWeb.ConsoleLive do
         adw_steps: [],
         adw_name: "",
         adw_harness: nil,
-        adw_local?: false
+        adw_local?: false,
+        # Log Database manager (issue-log-db-manager): a paginated, filterable DB browser
+        # over `agent_logs`. Selection is a MapSet of `id` UUID STRINGS (distinct from the
+        # live view's integer `selected_ids`) so it persists across pages and never collides
+        # with the live-stream selection. Safe disconnected defaults; seeded on connect.
+        log_mgr_filter: :all,
+        log_mgr_rows: [],
+        log_mgr_total: 0,
+        log_mgr_limit: 50,
+        log_mgr_offset: 0,
+        log_mgr_selected: MapSet.new()
       )
 
     socket =
@@ -233,6 +243,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
         |> seed_cost()
         |> seed_orchestrator_cost()
         |> backfill_events()
+        |> seed_log_manager()
         |> assign_template_rows()
         |> seed_definitions()
         |> subscribe_feeds()
@@ -432,6 +443,30 @@ defmodule RepoBuilderWeb.ConsoleLive do
   # Re-read the live snapshot + durable caps after a breaker event or operator action.
   @spec refresh_budget(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp refresh_budget(socket), do: seed_budget(socket)
+
+  # Re-query the Log Database manager page (rows + total) for the current filter/offset,
+  # clamping the offset down if the active filter shrank below it (e.g. after a purge or a
+  # visibility change moved rows out of the filtered set). Single source of truth for the
+  # manager's table state, shared by the connected mount and every mutating action.
+  @spec seed_log_manager(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp seed_log_manager(socket) do
+    %{log_mgr_filter: filter, log_mgr_limit: limit, log_mgr_offset: offset} = socket.assigns
+    total = Logs.count_agent_logs(filter)
+    offset = clamp_page_offset(offset, limit, total)
+    rows = Logs.query_agent_logs(filter, limit, offset)
+
+    assign(socket, log_mgr_rows: rows, log_mgr_total: total, log_mgr_offset: offset)
+  end
+
+  @spec refresh_log_manager(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp refresh_log_manager(socket), do: seed_log_manager(socket)
+
+  # Largest valid offset is the start of the last page; clamp into `[0, last_page_start]`.
+  @spec clamp_page_offset(integer(), pos_integer(), non_neg_integer()) :: non_neg_integer()
+  defp clamp_page_offset(offset, limit, total) do
+    max_offset = if total == 0, do: 0, else: div(max(total - 1, 0), limit) * limit
+    offset |> max(0) |> min(max_offset)
+  end
 
   # Seed the three file-derived palette assigns from the merged (app + working-dir)
   # root for the orchestrator's current working dir. Re-run when the working dir
@@ -1318,6 +1353,86 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   def handle_event("clear_selection", _params, socket),
     do: {:noreply, clear_selection(socket)}
+
+  # --- Log Database manager (issue-log-db-manager) ---
+  # A paginated, filterable DB browser over `agent_logs`. Its selection is a MapSet of
+  # `id` UUID STRINGS, persisting across pages so a purge/visibility action can span them.
+
+  # Re-query the manager's current filter/page when it opens (its assigns are seeded on
+  # mount, but rows may have changed since; this keeps the first paint authoritative).
+  def handle_event("open_log_manager", _params, socket),
+    do: {:noreply, refresh_log_manager(socket)}
+
+  # Switch the All/Visible/Hidden filter: reset to page 1, clear the selection (so stale,
+  # off-page ids can't apply to a different filtered set), and re-query.
+  def handle_event("select_log_filter", %{"filter" => filter}, socket) do
+    socket =
+      socket
+      |> assign(:log_mgr_filter, log_filter(filter))
+      |> assign(:log_mgr_offset, 0)
+      |> assign(:log_mgr_selected, MapSet.new())
+      |> refresh_log_manager()
+
+    {:noreply, socket}
+  end
+
+  def handle_event("log_page_next", _params, socket) do
+    %{log_mgr_offset: offset, log_mgr_limit: limit} = socket.assigns
+    socket = socket |> assign(:log_mgr_offset, offset + limit) |> refresh_log_manager()
+    {:noreply, socket}
+  end
+
+  def handle_event("log_page_prev", _params, socket) do
+    %{log_mgr_offset: offset, log_mgr_limit: limit} = socket.assigns
+    socket = socket |> assign(:log_mgr_offset, max(offset - limit, 0)) |> refresh_log_manager()
+    {:noreply, socket}
+  end
+
+  def handle_event("log_toggle_select", %{"id" => id}, socket) do
+    {:noreply,
+     assign(socket, :log_mgr_selected, toggle_member(socket.assigns.log_mgr_selected, id))}
+  end
+
+  # Range selection committed by the LogDragSelect JS hook: union/difference the dragged
+  # ids (UUID strings — no integer parse) into the manager selection in one round-trip.
+  def handle_event("log_select_drag", %{"ids" => ids, "mode" => mode}, socket) do
+    current = socket.assigns.log_mgr_selected
+    delta = MapSet.new(Enum.filter(List.wrap(ids), &is_binary/1))
+
+    next =
+      case normalize_mode(mode) do
+        :select -> MapSet.union(current, delta)
+        :deselect -> MapSet.difference(current, delta)
+      end
+
+    {:noreply, assign(socket, :log_mgr_selected, next)}
+  end
+
+  def handle_event("clear_log_selection", _params, socket),
+    do: {:noreply, assign(socket, :log_mgr_selected, MapSet.new())}
+
+  def handle_event("log_make_visible", _params, socket),
+    do: {:noreply, mutate_log_selection(socket, &Logs.unhide_logs/1)}
+
+  def handle_event("log_make_invisible", _params, socket),
+    do: {:noreply, mutate_log_selection(socket, &Logs.hide_logs/1)}
+
+  def handle_event("log_purge_selected", _params, socket),
+    do: {:noreply, mutate_log_selection(socket, &Logs.purge_logs/1)}
+
+  # Guarded purge-EVERYTHING (also reachable from the Log Database settings tab). Resets
+  # the manager to page 1, clears the selection, and re-queries (now empty).
+  def handle_event("purge_all_logs", _params, socket) do
+    _ = Logs.purge_all_logs()
+
+    socket =
+      socket
+      |> assign(:log_mgr_offset, 0)
+      |> assign(:log_mgr_selected, MapSet.new())
+      |> refresh_log_manager()
+
+    {:noreply, socket}
+  end
 
   # EXPLAIN: gather the selected rows (order-preserving), resolve the Fast tier, and
   # start the ephemeral runner. The modal is shown client-side by the button's JS; this
@@ -2694,6 +2809,16 @@ defmodule RepoBuilderWeb.ConsoleLive do
         editing?={@budget_editing?}
       />
 
+      <.log_manager_modal
+        filter={@log_mgr_filter}
+        rows={@log_mgr_rows}
+        total={@log_mgr_total}
+        limit={@log_mgr_limit}
+        offset={@log_mgr_offset}
+        selected={@log_mgr_selected}
+        timezone={@timezone}
+      />
+
       <.settings_modal
         settings_tab={@settings_tab}
         view_mode={@view_mode}
@@ -2798,6 +2923,26 @@ defmodule RepoBuilderWeb.ConsoleLive do
   @spec normalize_mode(term()) :: :select | :deselect
   defp normalize_mode("deselect"), do: :deselect
   defp normalize_mode(_mode), do: :select
+
+  # Apply a context mutation (`hide`/`unhide`/`purge`) to the manager's selected ids, then
+  # clear the selection and re-query so the table, total, and pagination stay correct (the
+  # offset clamps via `seed_log_manager/1` if the last page shrank below it).
+  @spec mutate_log_selection(Phoenix.LiveView.Socket.t(), ([Ecto.UUID.t()] -> non_neg_integer())) ::
+          Phoenix.LiveView.Socket.t()
+  defp mutate_log_selection(socket, fun) do
+    _ = fun.(MapSet.to_list(socket.assigns.log_mgr_selected))
+
+    socket
+    |> assign(:log_mgr_selected, MapSet.new())
+    |> refresh_log_manager()
+  end
+
+  # Guarded string→atom for the manager's visibility filter (never `String.to_atom/1` on
+  # input, AGENTS.md); an unknown value falls back to `:all`.
+  @spec log_filter(term()) :: Logs.log_filter()
+  defp log_filter("visible"), do: :visible
+  defp log_filter("hidden"), do: :hidden
+  defp log_filter(_filter), do: :all
 
   @spec explain_selected(Phoenix.LiveView.Socket.t(), [map()]) ::
           {:noreply, Phoenix.LiveView.Socket.t()}
@@ -2997,12 +3142,13 @@ defmodule RepoBuilderWeb.ConsoleLive do
   defp to_chat_width(_other), do: :sm
 
   @spec settings_tab(String.t()) ::
-          :general | :appearance | :about | :prompt | :templates | :cost_center
+          :general | :appearance | :about | :prompt | :templates | :cost_center | :logs
   defp settings_tab("appearance"), do: :appearance
   defp settings_tab("about"), do: :about
   defp settings_tab("prompt"), do: :prompt
   defp settings_tab("templates"), do: :templates
   defp settings_tab("cost_center"), do: :cost_center
+  defp settings_tab("logs"), do: :logs
   defp settings_tab(_other), do: :general
 
   # Re-derive the Cost Center tab's data from the DB (no reliance on socket state, so a

@@ -999,9 +999,18 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   @spec hide_budget(JS.t()) :: JS.t()
   def hide_budget(js \\ %JS{}), do: JS.hide(js, to: "#budget-modal")
 
+  @doc "Open the log-manager modal (client-side; always in the DOM, just hidden)."
+  @spec show_log_manager(JS.t()) :: JS.t()
+  def show_log_manager(js \\ %JS{}),
+    do: JS.show(js, to: "#log-manager-modal", display: "flex")
+
+  @doc "Close the log-manager modal (client-side)."
+  @spec hide_log_manager(JS.t()) :: JS.t()
+  def hide_log_manager(js \\ %JS{}), do: JS.hide(js, to: "#log-manager-modal")
+
   attr :settings_tab, :atom,
     default: :general,
-    values: [:general, :appearance, :about, :prompt, :templates, :cost_center]
+    values: [:general, :appearance, :about, :prompt, :templates, :cost_center, :logs]
 
   attr :view_mode, :atom, default: :logs
   attr :chat_width, :atom, default: :sm
@@ -1065,6 +1074,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
             <.settings_tab_button tab={:prompt} active={@settings_tab} label="System Prompt" />
             <.settings_tab_button tab={:templates} active={@settings_tab} label="Agent Templates" />
             <.settings_tab_button tab={:cost_center} active={@settings_tab} label="Cost Center" />
+            <.settings_tab_button tab={:logs} active={@settings_tab} label="Log Database" />
             <.settings_tab_button tab={:about} active={@settings_tab} label="About" />
           </nav>
 
@@ -1103,6 +1113,41 @@ defmodule RepoBuilderWeb.ConsoleComponents do
                 </button>
               </.settings_field>
 
+              <.settings_field label="Reasoning effort">
+                <div id="settings-reasoning-effort" class="cns-toggle">
+                  <button
+                    :for={e <- @reasoning_efforts}
+                    type="button"
+                    id={"settings-reasoning-effort-#{e}"}
+                    phx-click="set_reasoning_effort"
+                    phx-value-effort={e}
+                    class={["cns-toggle__seg", @reasoning_effort == e && "cns-toggle__seg--active"]}
+                  >
+                    {e |> Atom.to_string() |> String.upcase()}
+                  </button>
+                </div>
+                <p class="mt-1 text-[0.625rem]" style="color: var(--cns-text-2)">
+                  How hard the orchestrator's model reasons. DEFAULT keeps each harness's
+                  own default (no flag); MAX maps to each harness's top level.
+                </p>
+              </.settings_field>
+
+              <.settings_field label="Timezone">
+                <form id="settings-timezone-form" phx-change="set_timezone" title="Display timezone">
+                  <select id="settings-timezone" name="timezone" class="cns-chip" style="width: 12rem">
+                    <option :for={tz <- @timezones} value={tz} selected={@timezone == tz}>
+                      {tz}
+                    </option>
+                  </select>
+                </form>
+                <p class="mt-1 text-[0.625rem]" style="color: var(--cns-text-2)">
+                  Log timestamps render in this timezone (YYYY-MM-DD HH:MM:SS). The
+                  setting persists across sessions.
+                </p>
+              </.settings_field>
+            </div>
+
+            <div :if={@settings_tab == :logs} class="flex flex-col gap-4">
               <.settings_field label="Release hidden logs & workflows">
                 <div class="flex items-center gap-2">
                   <button
@@ -1139,36 +1184,34 @@ defmodule RepoBuilderWeb.ConsoleComponents do
                 </button>
               </.settings_field>
 
-              <.settings_field label="Reasoning effort">
-                <div id="settings-reasoning-effort" class="cns-toggle">
-                  <button
-                    :for={e <- @reasoning_efforts}
-                    type="button"
-                    id={"settings-reasoning-effort-#{e}"}
-                    phx-click="set_reasoning_effort"
-                    phx-value-effort={e}
-                    class={["cns-toggle__seg", @reasoning_effort == e && "cns-toggle__seg--active"]}
-                  >
-                    {e |> Atom.to_string() |> String.upcase()}
-                  </button>
-                </div>
+              <.settings_field label="Manage log rows">
+                <button
+                  id="open-log-manager"
+                  type="button"
+                  phx-click={JS.push("open_log_manager") |> show_log_manager()}
+                  class="cns-chip cns-chip--active cns-chip--hook"
+                >
+                  Manage log rows…
+                </button>
                 <p class="mt-1 text-[0.625rem]" style="color: var(--cns-text-2)">
-                  How hard the orchestrator's model reasons. DEFAULT keeps each harness's
-                  own default (no flag); MAX maps to each harness's top level.
+                  Open a paginated, filterable inspector to select rows and make them
+                  visible/invisible or purge them permanently.
                 </p>
               </.settings_field>
 
-              <.settings_field label="Timezone">
-                <form id="settings-timezone-form" phx-change="set_timezone" title="Display timezone">
-                  <select id="settings-timezone" name="timezone" class="cns-chip" style="width: 12rem">
-                    <option :for={tz <- @timezones} value={tz} selected={@timezone == tz}>
-                      {tz}
-                    </option>
-                  </select>
-                </form>
+              <.settings_field label="Purge ALL log rows (danger)">
+                <button
+                  id="settings-purge-all-logs"
+                  type="button"
+                  phx-click="purge_all_logs"
+                  data-confirm="Permanently DELETE every log row? This cannot be undone and also clears Cost Center history."
+                  class="cns-chip"
+                >
+                  Purge ALL log rows
+                </button>
                 <p class="mt-1 text-[0.625rem]" style="color: var(--cns-text-2)">
-                  Log timestamps render in this timezone (YYYY-MM-DD HH:MM:SS). The
-                  setting persists across sessions.
+                  Hard-deletes every <code>agent_logs</code>
+                  row. This is permanent and also removes the cost history those rows feed into Cost Center.
                 </p>
               </.settings_field>
             </div>
@@ -1922,6 +1965,199 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     </div>
     """
   end
+
+  attr :filter, :atom, default: :all, values: [:all, :visible, :hidden]
+  attr :rows, :list, default: [], doc: "current page of `AgentLog.t()` rows (newest-first)"
+  attr :total, :integer, default: 0, doc: "total rows for the active filter"
+  attr :limit, :integer, default: 50
+  attr :offset, :integer, default: 0
+  attr :selected, :any, default: %MapSet{}, doc: "MapSet of selected `agent_logs.id` strings"
+  attr :timezone, :string, default: "UTC"
+
+  @doc """
+  Log Database manager popup (issue-log-db-manager). A paginated, drag-selectable table
+  of `agent_logs` rows with an All / Visible / Hidden filter, a selection action bar
+  (make visible/invisible, purge selected), and Prev/Next pagination. Shown and hidden
+  client-side like the other console modals (always in the DOM). The drag-select gesture
+  is owned by a dedicated `LogDragSelect` JS hook on the stable table host so the live
+  main-view `DragSelect` is untouched.
+  """
+  @spec log_manager_modal(map()) :: Phoenix.LiveView.Rendered.t()
+  def log_manager_modal(assigns) do
+    assigns =
+      assign(assigns,
+        selected_count: MapSet.size(assigns.selected),
+        range_lo: if(assigns.total == 0, do: 0, else: assigns.offset + 1),
+        range_hi: min(assigns.offset + length(assigns.rows), assigns.total)
+      )
+
+    ~H"""
+    <div
+      id="log-manager-modal"
+      class="cns-cmd-overlay"
+      style="display:none"
+      phx-window-keydown={hide_log_manager()}
+      phx-key="Escape"
+    >
+      <div
+        class="cns-cmd-panel flex flex-col"
+        style="max-width: 56rem; height: 80vh; overflow: hidden"
+      >
+        <div class="mb-3 flex shrink-0 items-center justify-between">
+          <span class="text-xs font-semibold" style="color: var(--cns-cyan)">LOG DATABASE</span>
+          <button type="button" phx-click={hide_log_manager()} class="cns-chip">Done</button>
+        </div>
+
+        <div class="mb-2 flex shrink-0 items-center gap-2">
+          <div class="cns-toggle">
+            <button
+              :for={{seg, label} <- [{:all, "All"}, {:visible, "Visible"}, {:hidden, "Hidden"}]}
+              type="button"
+              id={"log-filter-#{seg}"}
+              phx-click="select_log_filter"
+              phx-value-filter={seg}
+              class={["cns-toggle__seg", @filter == seg && "cns-toggle__seg--active"]}
+            >
+              {label}
+            </button>
+          </div>
+        </div>
+
+        <div
+          :if={@selected_count > 0}
+          id="log-manager-selection-bar"
+          class="mb-2 flex shrink-0 flex-wrap items-center gap-2 rounded border px-3 py-2"
+          style="border-color: var(--cns-border); background: var(--cns-bg-2, rgba(255,255,255,0.02))"
+        >
+          <span class="text-xs font-semibold" style="color: var(--cns-cyan)">
+            {@selected_count} selected
+          </span>
+          <button id="log-make-visible" type="button" phx-click="log_make_visible" class="cns-chip">
+            Make visible
+          </button>
+          <button
+            id="log-make-invisible"
+            type="button"
+            phx-click="log_make_invisible"
+            class="cns-chip"
+          >
+            Make invisible
+          </button>
+          <button
+            id="log-purge-selected"
+            type="button"
+            phx-click="log_purge_selected"
+            data-confirm="Permanently DELETE the selected log rows? This cannot be undone and also clears their Cost Center history."
+            class="cns-chip"
+          >
+            Purge selected
+          </button>
+          <button
+            id="log-clear-selection"
+            type="button"
+            phx-click="clear_log_selection"
+            class="cns-chip ml-auto"
+          >
+            Clear selection
+          </button>
+        </div>
+
+        <div class="cns-no-scrollbar min-h-0 flex-1 overflow-y-auto">
+          <div id="log-manager-table-wrap" phx-hook="LogDragSelect" class="contents">
+            <table class="w-full text-[0.6875rem]">
+              <thead>
+                <tr style="color: var(--cns-text-2)" class="text-left uppercase">
+                  <th class="w-6 py-1"></th>
+                  <th class="py-1 pr-2">Log</th>
+                  <th class="py-1 pr-2">Time</th>
+                  <th class="py-1 pr-2">Harness / Model</th>
+                  <th class="py-1 pr-2">Type</th>
+                  <th class="py-1 pr-2">Visibility</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr :if={@rows == []}>
+                  <td colspan="6" class="py-6 text-center" style="color: var(--cns-text-2)">
+                    No log rows for this filter.
+                  </td>
+                </tr>
+                <tr
+                  :for={row <- @rows}
+                  id={"log-mgr-row-#{row.id}"}
+                  class={[
+                    "log-mgr-row border-t",
+                    MapSet.member?(@selected, row.id) && "log-mgr-row--selected"
+                  ]}
+                  style="border-color: var(--cns-border)"
+                >
+                  <td class="py-1">
+                    <input
+                      type="checkbox"
+                      class="log-mgr-row__select"
+                      data-row-id={row.id}
+                      checked={MapSet.member?(@selected, row.id)}
+                      phx-click="log_toggle_select"
+                      phx-value-id={row.id}
+                      aria-label={"Select log row #{row.id}"}
+                    />
+                  </td>
+                  <td class="py-1 pr-2 font-semibold" style="color: var(--cns-cyan)">
+                    {RepoBuilder.Logs.log_label(row.log_no)}
+                  </td>
+                  <td class="py-1 pr-2" style="color: var(--cns-text-2)">
+                    {log_mgr_time(row.inserted_at, @timezone)}
+                  </td>
+                  <td class="py-1 pr-2">
+                    {row.harness || "—"}<span :if={row.model} style="color: var(--cns-text-2)"> · {row.model}</span>
+                  </td>
+                  <td class="py-1 pr-2">{row.event_type}</td>
+                  <td class="py-1 pr-2">
+                    <span class={["cns-chip", row.hidden && "cns-chip--active cns-chip--hook"]}>
+                      {if row.hidden, do: "Hidden", else: "Visible"}
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="mt-2 flex shrink-0 items-center justify-between text-[0.6875rem]">
+          <span style="color: var(--cns-text-2)">
+            rows {@range_lo}–{@range_hi} of {@total}
+          </span>
+          <div class="flex items-center gap-2">
+            <button
+              id="log-page-prev"
+              type="button"
+              phx-click="log_page_prev"
+              disabled={@offset <= 0}
+              class="cns-chip"
+            >
+              Prev
+            </button>
+            <button
+              id="log-page-next"
+              type="button"
+              phx-click="log_page_next"
+              disabled={@offset + @limit >= @total}
+              class="cns-chip"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  # Timezone-aware row timestamp (mirrors the center view's formatting); nil-safe.
+  @spec log_mgr_time(DateTime.t() | nil, String.t()) :: String.t()
+  defp log_mgr_time(%DateTime{} = at, timezone),
+    do: RepoBuilder.Timezones.format_datetime(at, timezone)
+
+  defp log_mgr_time(_at, _timezone), do: ""
 
   attr :state, :map, required: true
 

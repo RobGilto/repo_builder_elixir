@@ -21,7 +21,17 @@ defmodule RepoBuilder.Logs do
           thinking: non_neg_integer()
         }
 
+  @typedoc """
+  Visibility filter for the Log Database manager (issue-log-db-manager): `:all` (no
+  filter), `:visible` (`hidden == false`), `:hidden` (`hidden == true`).
+  """
+  @type log_filter :: :all | :visible | :hidden
+
   @empty_counts %{responses: 0, tools: 0, hooks: 0, thinking: 0}
+
+  # Highest `:limit` a single `query_agent_logs/3` page may request (mirrors
+  # `@max_system_log_limit` clamping); the manager's default page is 50 rows.
+  @max_agent_log_limit 200
 
   @doc """
   Redact, map, and persist one canonical event as an `agent_logs` row.
@@ -158,6 +168,109 @@ defmodule RepoBuilder.Logs do
   @spec filter_hidden(Ecto.Queryable.t(), boolean()) :: Ecto.Query.t()
   defp filter_hidden(query, true), do: where(query, [l], true)
   defp filter_hidden(query, false), do: where(query, [l], l.hidden == false)
+
+  @doc """
+  Filter-aware, paginated read of `agent_logs`, newest-first (issue-log-db-manager).
+  Drives the Log Database manager's paginated table. `limit` clamps to
+  #{@max_agent_log_limit} (default 50 when non-positive); `offset` clamps to `>= 0`.
+  """
+  @spec query_agent_logs(log_filter(), pos_integer(), non_neg_integer()) :: [AgentLog.t()]
+  def query_agent_logs(filter \\ :all, limit \\ 50, offset \\ 0) do
+    AgentLog
+    |> apply_filter(filter)
+    |> order_by([l], desc: l.log_no, desc: l.inserted_at)
+    |> limit(^clamp_agent_limit(limit))
+    |> offset(^clamp_offset(offset))
+    |> Repo.all()
+  end
+
+  @doc """
+  Total `agent_logs` row count for a visibility filter (issue-log-db-manager). Feeds the
+  manager's "rows X–Y of N" label and Prev/Next bounds.
+  """
+  @spec count_agent_logs(log_filter()) :: non_neg_integer()
+  def count_agent_logs(filter \\ :all) do
+    AgentLog
+    |> apply_filter(filter)
+    |> Repo.aggregate(:count, :id)
+  end
+
+  @doc """
+  Soft-hide a specific set of `agent_logs` rows by id (issue-log-db-manager per-row
+  visibility). Mirrors `hide_all_logs/0` but scoped to `ids`. An empty list is a no-op
+  returning 0. Returns the count updated.
+  """
+  @spec hide_logs([Ecto.UUID.t()]) :: non_neg_integer()
+  def hide_logs([]), do: 0
+
+  def hide_logs(ids) when is_list(ids) do
+    {count, _} =
+      AgentLog
+      |> where([l], l.id in ^ids)
+      |> Repo.update_all(set: [hidden: true])
+
+    count
+  end
+
+  @doc """
+  Un-hide (reveal) a specific set of `agent_logs` rows by id — the per-row inverse of
+  `hide_logs/1` (issue-log-db-manager). An empty list is a no-op returning 0. Returns the
+  count updated.
+  """
+  @spec unhide_logs([Ecto.UUID.t()]) :: non_neg_integer()
+  def unhide_logs([]), do: 0
+
+  def unhide_logs(ids) when is_list(ids) do
+    {count, _} =
+      AgentLog
+      |> where([l], l.id in ^ids)
+      |> Repo.update_all(set: [hidden: false])
+
+    count
+  end
+
+  @doc """
+  Hard-DELETE a specific set of `agent_logs` rows by id (issue-log-db-manager purge).
+  Permanent — also removes the rows' contribution to Cost Center rollups. An empty list
+  is a no-op returning 0. Returns the count deleted.
+  """
+  @spec purge_logs([Ecto.UUID.t()]) :: non_neg_integer()
+  def purge_logs([]), do: 0
+
+  def purge_logs(ids) when is_list(ids) do
+    {count, _} =
+      from(l in AgentLog, where: l.id in ^ids)
+      |> Repo.delete_all()
+
+    count
+  end
+
+  @doc """
+  Hard-DELETE EVERY `agent_logs` row (issue-log-db-manager guarded purge-all). Permanent
+  and total — empties the log store and clears all Cost Center history derived from it.
+  Returns the count deleted.
+  """
+  @spec purge_all_logs() :: non_neg_integer()
+  def purge_all_logs do
+    {count, _} = Repo.delete_all(AgentLog)
+    count
+  end
+
+  # Visibility filter for the manager queries, mirroring `filter_hidden/2`.
+  @spec apply_filter(Ecto.Queryable.t(), log_filter()) :: Ecto.Query.t()
+  defp apply_filter(query, :visible), do: where(query, [l], l.hidden == false)
+  defp apply_filter(query, :hidden), do: where(query, [l], l.hidden == true)
+  defp apply_filter(query, _all), do: where(query, [l], true)
+
+  @spec clamp_agent_limit(integer()) :: pos_integer()
+  defp clamp_agent_limit(limit) when is_integer(limit) and limit > 0,
+    do: min(limit, @max_agent_log_limit)
+
+  defp clamp_agent_limit(_limit), do: 50
+
+  @spec clamp_offset(integer()) :: non_neg_integer()
+  defp clamp_offset(offset) when is_integer(offset) and offset > 0, do: offset
+  defp clamp_offset(_offset), do: 0
 
   @doc "Sum of all priced `cost_usd` across an agent's logs (unpriced rows contribute nothing)."
   @spec cost_rollup!(Ecto.UUID.t()) :: Decimal.t()

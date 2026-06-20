@@ -43,6 +43,10 @@ defmodule RepoBuilderWeb.TestReleaseHiddenLogsTest do
     # Default view (no troubleshooting flag) does NOT show the cleared row.
     refute has_element?(view, "#event-stream", marker)
 
+    # The Release control now lives in the dedicated "Log Database" settings tab
+    # (issue-log-db-manager) — select it before acting.
+    render_click(view, "select_settings_tab", %{"tab" => "logs"})
+
     # Release: the durable reveal.
     view |> element("#settings-release-hidden") |> render_click()
 
