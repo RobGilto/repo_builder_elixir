@@ -64,8 +64,8 @@ defmodule RepoBuilderWeb.TestAgentCardStreamFilterTest do
     refute has_element?(view, "#event-stream", "bravo-row")
 
     # The card reflects its "active filter" highlight only while filtered.
-    assert has_element?(view, "#agent-#{a.id}.cns-agent-card--selected")
-    refute has_element?(view, "#agent-#{b.id}.cns-agent-card--selected")
+    assert has_element?(view, "#agent-row-#{a.id}.cns-agent-card--selected")
+    refute has_element?(view, "#agent-row-#{b.id}.cns-agent-card--selected")
   end
 
   test "clicking the card again removes the filter and restores all rows", %{conn: conn} do
@@ -86,7 +86,7 @@ defmodule RepoBuilderWeb.TestAgentCardStreamFilterTest do
     refute has_element?(view, "#filter-bar", a.name)
     assert has_element?(view, "#event-stream", "alpha-row")
     assert has_element?(view, "#event-stream", "bravo-row")
-    refute has_element?(view, "#agent-#{a.id}.cns-agent-card--selected")
+    refute has_element?(view, "#agent-row-#{a.id}.cns-agent-card--selected")
   end
 
   test "the pill's × removes exactly that agent's filter", %{conn: conn} do

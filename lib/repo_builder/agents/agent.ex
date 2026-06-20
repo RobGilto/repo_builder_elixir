@@ -26,6 +26,7 @@ defmodule RepoBuilder.Agents.Agent do
           session_id: String.t() | nil,
           model: String.t() | nil,
           system_prompt: String.t() | nil,
+          archived: boolean(),
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
@@ -42,6 +43,9 @@ defmodule RepoBuilder.Agents.Agent do
     field :session_id, :string
     field :model, :string
     field :system_prompt, :string
+    # Soft-archive (issue agent-CRUD): an archived agent is hidden from the default
+    # rail/list but its row + `agent_logs`/cost history are preserved (vs hard delete).
+    field :archived, :boolean, default: false
     timestamps()
   end
 
@@ -93,5 +97,11 @@ defmodule RepoBuilder.Agents.Agent do
   @spec session_changeset(t(), String.t() | nil) :: Ecto.Changeset.t()
   def session_changeset(agent, session_id) do
     change(agent, session_id: session_id)
+  end
+
+  @doc "Soft-archive changeset: flips `archived` to true, preserving log/cost history."
+  @spec archive_changeset(t()) :: Ecto.Changeset.t()
+  def archive_changeset(agent) do
+    change(agent, archived: true)
   end
 end

@@ -13,7 +13,23 @@ defmodule RepoBuilder.Agents do
   @harness_providers %{"pi" => :openai, "cursor" => :anthropic}
 
   @spec list_agents() :: [Agent.t()]
-  def list_agents, do: Repo.all(from(a in Agent, order_by: [asc: a.name]))
+  def list_agents, do: list_agents([])
+
+  @doc """
+  List agents ordered by name. Archived agents (issue agent-CRUD) are excluded by
+  default; pass `include_archived: true` to include them.
+  """
+  @spec list_agents(keyword()) :: [Agent.t()]
+  def list_agents(opts) when is_list(opts) do
+    query = from(a in Agent, order_by: [asc: a.name])
+
+    query =
+      if Keyword.get(opts, :include_archived, false),
+        do: query,
+        else: from(a in query, where: a.archived == false)
+
+    Repo.all(query)
+  end
 
   @spec get_agent(Ecto.UUID.t()) :: Agent.t() | nil
   def get_agent(id), do: Repo.get(Agent, id)
@@ -42,6 +58,19 @@ defmodule RepoBuilder.Agents do
 
   @spec delete_agent(Agent.t()) :: {:ok, Agent.t()} | {:error, Ecto.Changeset.t()}
   def delete_agent(%Agent{} = agent), do: Repo.delete(agent)
+
+  @doc """
+  Soft-archive an agent (`archived: true`) — issue agent-CRUD. Preserves the row and
+  its `agent_logs`/cost history (unlike the hard `delete_agent/1`); the agent is
+  excluded from the default `list_agents/0` but reachable via
+  `list_agents(include_archived: true)`.
+  """
+  @spec archive_agent(Agent.t()) :: {:ok, Agent.t()} | {:error, Ecto.Changeset.t()}
+  def archive_agent(%Agent{} = agent) do
+    agent
+    |> Agent.archive_changeset()
+    |> Repo.update()
+  end
 
   @doc """
   Update an orchestrator-owned worker's `model`/`system_prompt`/`harness` via

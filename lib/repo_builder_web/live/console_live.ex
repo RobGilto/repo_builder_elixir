@@ -1206,6 +1206,39 @@ defmodule RepoBuilderWeb.ConsoleLive do
     {:noreply, socket |> assign(:active_agents, active) |> restream()}
   end
 
+  # Soft-archive a manual agent from the rail (issue agent-CRUD): hide it from the
+  # roster (it is excluded from `list_agents/0`) while preserving its row + cost
+  # history. Reconcile the live total exactly as the reconnect path would (a reseed
+  # uses `list_agents/0`, which now drops the archived agent's spend) and drop it from
+  # the active-filter set / lane stream so the view matches a fresh mount.
+  def handle_event("archive_agent", %{"id" => id}, socket) do
+    with {:ok, agent} <- Agents.fetch_agent(id),
+         {:ok, _archived} <- Agents.archive_agent(agent) do
+      removed = Map.get(socket.assigns.agent_costs, id)
+      removed_est = Map.get(socket.assigns.agent_est_costs, id)
+
+      {:noreply,
+       socket
+       |> assign(:agents, Enum.reject(socket.assigns.agents, &(&1.id == id)))
+       |> assign(:active_agents, List.delete(socket.assigns.active_agents, id))
+       |> assign(:agent_names, Map.delete(socket.assigns.agent_names, id))
+       |> assign(:statuses, Map.delete(socket.assigns.statuses, id))
+       |> assign(:cost, subtract_cost(socket.assigns.cost, removed))
+       |> assign(:cost_estimate, subtract_cost(socket.assigns.cost_estimate, removed_est))
+       |> assign(:agent_costs, Map.delete(socket.assigns.agent_costs, id))
+       |> assign(:agent_est_costs, Map.delete(socket.assigns.agent_est_costs, id))
+       |> stream_delete(:lanes, %{id: "agent:#{id}"})
+       |> restream()
+       |> put_flash(:info, "Archived agent #{agent.name}")}
+    else
+      {:error, :not_found} ->
+        {:noreply, put_flash(socket, :error, "Agent no longer exists")}
+
+      {:error, %Ecto.Changeset{}} ->
+        {:noreply, put_flash(socket, :error, "Could not archive agent")}
+    end
+  end
+
   def handle_event("set_search", %{"q" => q}, socket),
     do: {:noreply, socket |> assign(:search, q) |> restream()}
 

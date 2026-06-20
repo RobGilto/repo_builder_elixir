@@ -262,54 +262,72 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     assigns = assign(assigns, :ctx_pct, context_pct(assigns.context_tokens))
 
     ~H"""
-    <button
-      id={"agent-#{@id}"}
-      type="button"
-      phx-click="toggle_agent_filter"
-      phx-value-id={@id}
+    <div
+      id={"agent-row-#{@id}"}
       style={"--agent-color: #{@color}; --pulse-color: #{@color}"}
       class={[
-        "cns-agent-card w-full text-left",
+        "cns-agent-card relative w-full",
         @selected? && "cns-agent-card--selected",
         @pulse? && "cns-agent-card--pulse"
       ]}
     >
-      <div class="flex items-center justify-between gap-2">
-        <span class="truncate text-sm font-semibold" style={"color: #{@color}"}>{@name}</span>
-        <span class="flex items-center gap-1.5">
-          <.activity_orb variant={:agent} color={@color} active?={@active?} />
-          <span class={["cns-cat", status_cat_class(@status)]}>{@status}</span>
-        </span>
-      </div>
+      <button
+        id={"agent-#{@id}"}
+        type="button"
+        phx-click="toggle_agent_filter"
+        phx-value-id={@id}
+        class="block w-full text-left"
+      >
+        <div class="flex items-center justify-between gap-2 pr-5">
+          <span class="truncate text-sm font-semibold" style={"color: #{@color}"}>{@name}</span>
+          <span class="flex items-center gap-1.5">
+            <.activity_orb variant={:agent} color={@color} active?={@active?} />
+            <span class={["cns-cat", status_cat_class(@status)]}>{@status}</span>
+          </span>
+        </div>
 
-      <div class="mt-2">
+        <div class="mt-2">
+          <div
+            class="flex items-center justify-between text-[0.5625rem]"
+            style="color: var(--cns-text-2)"
+          >
+            <span>CONTEXT WINDOW</span>
+            <span>{ktok(@context_tokens)} / 200k</span>
+          </div>
+          <div class="cns-ctx-bar mt-1">
+            <div class="cns-ctx-bar__fill" style={"width: #{@ctx_pct}%"} />
+          </div>
+        </div>
+
+        <div class="mt-2 flex items-center gap-3 text-[0.625rem]" style="color: var(--cns-text-1)">
+          <span title="responses">💬 {@responses}</span>
+          <span title="tools">🛠️ {@tools}</span>
+          <span title="hooks">🪝 {@hooks}</span>
+          <span title="thinking">🧠 {@thinking}</span>
+        </div>
+
         <div
-          class="flex items-center justify-between text-[0.5625rem]"
+          class="mt-2 flex items-center justify-between text-[0.625rem]"
           style="color: var(--cns-text-2)"
         >
-          <span>CONTEXT WINDOW</span>
-          <span>{ktok(@context_tokens)} / 200k</span>
+          <span class="truncate">{@model || @harness || "—"}</span>
+          <.cost_badge cost={@cost} estimated={@estimate} />
         </div>
-        <div class="cns-ctx-bar mt-1">
-          <div class="cns-ctx-bar__fill" style={"width: #{@ctx_pct}%"} />
-        </div>
-      </div>
+      </button>
 
-      <div class="mt-2 flex items-center gap-3 text-[0.625rem]" style="color: var(--cns-text-1)">
-        <span title="responses">💬 {@responses}</span>
-        <span title="tools">🛠️ {@tools}</span>
-        <span title="hooks">🪝 {@hooks}</span>
-        <span title="thinking">🧠 {@thinking}</span>
-      </div>
-
-      <div
-        class="mt-2 flex items-center justify-between text-[0.625rem]"
-        style="color: var(--cns-text-2)"
+      <button
+        id={"archive-agent-#{@id}"}
+        type="button"
+        phx-click="archive_agent"
+        phx-value-id={@id}
+        data-confirm={"Archive #{@name}? Its logs and cost history are preserved; it leaves the rail."}
+        class="cns-agent-archive absolute right-1 top-1"
+        title="Archive agent"
+        aria-label={"Archive agent #{@name}"}
       >
-        <span class="truncate">{@model || @harness || "—"}</span>
-        <.cost_badge cost={@cost} estimated={@estimate} />
-      </div>
-    </button>
+        ✕
+      </button>
+    </div>
     """
   end
 
