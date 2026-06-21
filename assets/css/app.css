@@ -307,6 +307,25 @@
 .cns-consumed__path { color: var(--cns-text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .cns-consumed__bytes { color: var(--cns-text-2); white-space: nowrap; }
 
+/* file-change event card (issue file-diff-event-cards) */
+.cns-file-change { border: 1px solid var(--cns-border); border-radius: 0.375rem; padding: 0.25rem 0.5rem; background-color: var(--cns-bg-2); font-size: 0.6875rem; }
+.cns-file-change__header { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.cns-file-change__path { font-family: monospace; color: var(--cns-text-1); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: all; }
+.cns-file-change__stats { display: flex; gap: 0.25rem; white-space: nowrap; font-size: 0.625rem; font-weight: 700; }
+.cns-file-change__added { color: var(--cns-success); }
+.cns-file-change__removed { color: var(--cns-error); }
+.cns-file-change__open { font-size: 0.5625rem; padding: 0.0625rem 0.375rem; }
+.cns-file-badge { padding: 0 0.375rem; border-radius: 0.25rem; font-size: 0.5625rem; font-weight: 700; letter-spacing: 0.03em; white-space: nowrap; }
+.cns-file-badge--created { background-color: rgba(16, 185, 129, 0.18); color: var(--cns-success); }
+.cns-file-badge--modified { background-color: rgba(245, 158, 11, 0.18); color: var(--cns-warning); }
+/* diff block */
+.cns-diff { margin-top: 0.25rem; border-radius: 0.25rem; overflow: hidden; font-family: monospace; font-size: 0.625rem; line-height: 1.4; }
+.cns-diff__line { padding: 0 0.375rem; white-space: pre; word-break: break-all; }
+.cns-diff__line--add { background-color: rgba(16, 185, 129, 0.12); color: var(--cns-success); }
+.cns-diff__line--del { background-color: rgba(239, 68, 68, 0.12); color: var(--cns-error); }
+.cns-diff__line--ctx { color: var(--cns-text-2); }
+.cns-diff__truncated { padding: 0.125rem 0.375rem; font-size: 0.5625rem; color: var(--cns-text-3); font-style: italic; }
+
 /* category badge (event row + detail) */
 .cns-cat { padding: 0 0.375rem; border-radius: 0.25rem; font-size: 0.5625rem; font-weight: 700; letter-spacing: 0.06em; white-space: nowrap; }
 .cns-cat--response { background-color: rgba(16, 185, 129, 0.2); color: var(--cns-success); }
@@ -330,25 +349,6 @@
 }
 .cns-agent-card--selected { box-shadow: 0 0 0 1px var(--cns-cyan); }
 .cns-agent-card--pulse { animation: cns-pulse 335ms ease-out; }
-
-/* Edit/Archive affordances on the expanded rail card (siblings of the select button). */
-.cns-agent-controls {
-  opacity: 0;
-  transition: opacity 150ms;
-}
-.cns-agent-card:hover .cns-agent-controls,
-.cns-agent-controls:focus-within { opacity: 1; }
-.cns-agent-control {
-  font-size: 0.6875rem;
-  line-height: 1;
-  padding: 2px 4px;
-  border-radius: 4px;
-  color: var(--cns-text-3);
-  transition: color 150ms;
-}
-.cns-agent-control:hover { color: var(--cns-cyan, var(--cns-info)); }
-#archive-agent-:hover,
-.cns-agent-control[id^="archive-agent-"]:hover { color: var(--cns-danger, #ef4444); }
 
 @keyframes cns-pulse {
   0% { background-color: var(--pulse-color); }

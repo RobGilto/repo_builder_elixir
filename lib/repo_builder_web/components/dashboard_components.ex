@@ -275,6 +275,17 @@ defmodule RepoBuilderWeb.DashboardComponents do
         </div>
       </div>
 
+      <%= if fc = @event[:render][:file_change] do %>
+        <div>
+          <div class="mb-1 text-[0.625rem]" style="color: var(--cns-text-2)">FILE CHANGE</div>
+          <RepoBuilderWeb.ConsoleComponents.file_change_card
+            file_change={fc}
+            expanded?={true}
+            open_enabled?={true}
+          />
+        </div>
+      <% end %>
+
       <div>
         <div class="mb-1 text-[0.625rem]" style="color: var(--cns-text-2)">PAYLOAD</div>
         <pre

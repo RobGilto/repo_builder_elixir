@@ -294,6 +294,13 @@ config :repo_builder, :orchestrator,
   # files, versioned on the filesystem. Overridden to a tmp dir in test.exs.
   agents_dir: Path.expand("~/.repo_builder/agents")
 
+# Editor integration: open files in the operator's editor from the file-diff event cards.
+# Disabled by default in config/test.exs; overridable at runtime via RB_EDITOR_CMD /
+# RB_EDITOR_ENABLED (config/runtime.exs).
+config :repo_builder, :editor,
+  enabled: true,
+  command: ["code"]
+
 # Live-session runtime defaults (BUILD_PROMPT.md §5/§6). Overridable per env.
 config :repo_builder, :session,
   max_live_sessions: 100,

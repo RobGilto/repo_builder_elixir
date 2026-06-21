@@ -117,13 +117,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
         dir_picker_dirs: [],
         view_mode: :logs,
         rail_collapsed?: false,
-        # Operator-facing agent CRUD (issue agent-CRUD): console-created/edited agents
-        # are orchestrator-OWNED workers (create_worker/update_worker) so the
-        # orchestrator manages them. These drive the rail's New/Edit forms.
-        show_new_agent?: false,
-        agent_form: new_agent_form(),
-        editing_agent_id: nil,
-        edit_agent_form: nil,
         chat_width: :sm,
         # Operator display timezone for log timestamps; the connected mount reads the
         # persisted value off the orchestrator (this default is for the static render).
@@ -190,6 +183,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
         # nil (unpriced/no signal) renders "—".
         orchestrator_cost: nil,
         orchestrator_est_cost: nil,
+        # Latest context-window occupancy of the orchestrator's OWN turns (its workers
+        # track their own on the rail cards). Replace-latest; zeroes when the session is
+        # cleared (Clear button / model switch ⇒ a fresh conversation next turn).
+        orchestrator_context: 0,
         connected?: connected?(socket),
         harness_options: HarnessRegistry.known(),
         # File-driven prompt palette (issue-prompt-adw-palette): live, file-derived
@@ -289,6 +286,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
       orchestrator_harness: orchestrator.harness,
       orchestrator_provider: orchestrator.provider,
       orchestrator_model: orchestrator.model,
+      orchestrator_context: orchestrator_context_for(orchestrator),
       provider_options: provider_options_for(orchestrator.harness),
       model_options: model_options_for(orchestrator.harness, orchestrator.provider),
       recent_models: Orchestrators.recent_models(orchestrator, orchestrator.provider),
@@ -497,35 +495,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
       agent_names: Map.new(agents, &{&1.id, &1.name}),
       statuses: Map.new(agents, &{&1.id, &1.status})
     )
-  end
-
-  # A blank create-agent form. Console-created agents are orchestrator-owned workers,
-  # so the form is backed by `worker_changeset/2` (casts model/system_prompt; harness
-  # stays open). `orchestrator_id` is injected at persist time by `create_worker/2`.
-  @spec new_agent_form() :: Phoenix.HTML.Form.t()
-  defp new_agent_form, do: to_form(Agent.worker_changeset(%Agent{}, %{}), as: :agent)
-
-  # Inject the active orchestrator id so a create-form validation reflects the same
-  # ownership `create_worker/2` will persist (its `validate_required(:orchestrator_id)`).
-  @spec worker_params(Phoenix.LiveView.Socket.t(), map()) :: map()
-  defp worker_params(socket, params),
-    do: Map.put(params, "orchestrator_id", socket.assigns.orchestrator_id)
-
-  # Reflect a newly-created worker in the rail roster + ADWS lane stream live, without a
-  # full reseed: reload the agent list (rail) and insert its lane (idempotent dom_id).
-  @spec insert_agent(Phoenix.LiveView.Socket.t(), Agent.t()) :: Phoenix.LiveView.Socket.t()
-  defp insert_agent(socket, %Agent{} = agent) do
-    lane = %{
-      id: "agent:#{agent.id}",
-      kind: :agent,
-      label: agent.name,
-      status: agent.status,
-      harness: agent.harness
-    }
-
-    socket
-    |> load_agents()
-    |> stream_insert(:lanes, lane)
   end
 
   @spec seed_agent_costs(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
@@ -857,10 +826,34 @@ defmodule RepoBuilderWeb.ConsoleLive do
     )
   end
 
-  # Set the orchestrator's model (free text / suggested). Empty clears it.
+  # Set the orchestrator's model (free text / suggested). Empty clears it. Clearing the
+  # resumable session is handled in `Orchestrators.set_model/2`, so the context bar
+  # zeroes via `assign_orchestrator_selection` (a model switch starts the next turn fresh).
   def handle_event("set_model", %{"model" => model}, socket) do
     model = nilify_blank(model)
     update_orchestrator(socket, &Orchestrators.set_model(&1, model), "Could not set model")
+  end
+
+  # Clear the orchestrator's conversation context: drop the resumable session id so the
+  # next turn starts a fresh conversation, which zeroes the context-window bar (the
+  # visible chat log is persisted history and is left in place).
+  def handle_event("clear_orchestrator_context", _params, socket) do
+    case socket.assigns.orchestrator_id do
+      nil ->
+        {:noreply, put_flash(socket, :error, "No orchestrator available")}
+
+      id ->
+        case Orchestrators.set_session(id, nil) do
+          {:ok, orchestrator} ->
+            {:noreply,
+             socket
+             |> assign_orchestrator_selection(orchestrator)
+             |> put_flash(:info, "Context cleared — the next turn starts fresh")}
+
+          {:error, _reason} ->
+            {:noreply, put_flash(socket, :error, "Could not clear context")}
+        end
+    end
   end
 
   # Re-fetch the orchestrator from the DB when the user opens the agent-models modal
@@ -1117,6 +1110,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
   def handle_event("toggle_rail", _params, socket),
     do: {:noreply, assign(socket, :rail_collapsed?, not socket.assigns.rail_collapsed?)}
 
+  # Command-panel header: a single button that cycles sm → md → lg → sm.
+  def handle_event("cycle_chat_width", _params, socket),
+    do: {:noreply, assign(socket, :chat_width, next_chat_width(socket.assigns.chat_width))}
+
+  # Settings → Appearance: explicit 3-segment chat-width picker.
   def handle_event("set_chat_width", %{"width" => width}, socket),
     do: {:noreply, assign(socket, :chat_width, to_chat_width(width))}
 
@@ -1241,129 +1239,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
         else: [id | socket.assigns.active_agents]
 
     {:noreply, socket |> assign(:active_agents, active) |> restream()}
-  end
-
-  # Soft-archive a manual agent from the rail (issue agent-CRUD): hide it from the
-  # roster (it is excluded from `list_agents/0`) while preserving its row + cost
-  # history. Reconcile the live total exactly as the reconnect path would (a reseed
-  # uses `list_agents/0`, which now drops the archived agent's spend) and drop it from
-  # the active-filter set / lane stream so the view matches a fresh mount.
-  def handle_event("archive_agent", %{"id" => id}, socket) do
-    with {:ok, agent} <- Agents.fetch_agent(id),
-         {:ok, _archived} <- Agents.archive_agent(agent) do
-      removed = Map.get(socket.assigns.agent_costs, id)
-      removed_est = Map.get(socket.assigns.agent_est_costs, id)
-
-      {:noreply,
-       socket
-       |> assign(:agents, Enum.reject(socket.assigns.agents, &(&1.id == id)))
-       |> assign(:active_agents, List.delete(socket.assigns.active_agents, id))
-       |> assign(:agent_names, Map.delete(socket.assigns.agent_names, id))
-       |> assign(:statuses, Map.delete(socket.assigns.statuses, id))
-       |> assign(:cost, subtract_cost(socket.assigns.cost, removed))
-       |> assign(:cost_estimate, subtract_cost(socket.assigns.cost_estimate, removed_est))
-       |> assign(:agent_costs, Map.delete(socket.assigns.agent_costs, id))
-       |> assign(:agent_est_costs, Map.delete(socket.assigns.agent_est_costs, id))
-       |> stream_delete(:lanes, %{id: "agent:#{id}"})
-       |> restream()
-       |> put_flash(:info, "Archived agent #{agent.name}")}
-    else
-      {:error, :not_found} ->
-        {:noreply, put_flash(socket, :error, "Agent no longer exists")}
-
-      {:error, %Ecto.Changeset{}} ->
-        {:noreply, put_flash(socket, :error, "Could not archive agent")}
-    end
-  end
-
-  # --- operator-facing agent CRUD (issue agent-CRUD) ---------------------------
-  # Console-created/edited agents are orchestrator-OWNED workers (create_worker/
-  # update_worker), so the active orchestrator can list + command them.
-
-  def handle_event("show_new_agent", _params, socket) do
-    {:noreply, assign(socket, show_new_agent?: true, agent_form: new_agent_form())}
-  end
-
-  def handle_event("cancel_new_agent", _params, socket) do
-    {:noreply, assign(socket, show_new_agent?: false, agent_form: new_agent_form())}
-  end
-
-  def handle_event("validate_agent", %{"agent" => params}, socket) do
-    form =
-      %Agent{}
-      |> Agent.worker_changeset(worker_params(socket, params))
-      |> to_form(action: :validate, as: :agent)
-
-    {:noreply, assign(socket, :agent_form, form)}
-  end
-
-  def handle_event("create_agent", %{"agent" => params}, socket) do
-    case Agents.create_worker(socket.assigns.orchestrator_id, params) do
-      {:ok, agent} ->
-        {:noreply,
-         socket
-         |> insert_agent(agent)
-         |> assign(show_new_agent?: false, agent_form: new_agent_form())
-         |> put_flash(:info, "Created agent #{agent.name}")}
-
-      {:error, %Ecto.Changeset{} = changeset} ->
-        {:noreply, assign(socket, :agent_form, to_form(changeset, as: :agent))}
-    end
-  end
-
-  def handle_event("edit_agent", %{"id" => id}, socket) do
-    case Agents.fetch_agent(id) do
-      {:ok, agent} ->
-        {:noreply,
-         assign(socket,
-           editing_agent_id: agent.id,
-           edit_agent_form: to_form(Agent.worker_changeset(agent, %{}), as: :agent)
-         )}
-
-      {:error, :not_found} ->
-        {:noreply, socket |> load_agents() |> put_flash(:error, "Agent no longer exists")}
-    end
-  end
-
-  def handle_event("cancel_edit_agent", _params, socket) do
-    {:noreply, assign(socket, editing_agent_id: nil, edit_agent_form: nil)}
-  end
-
-  def handle_event("validate_edit_agent", %{"agent" => params}, socket) do
-    case socket.assigns.editing_agent_id && Agents.get_agent(socket.assigns.editing_agent_id) do
-      %Agent{} = agent ->
-        form = agent |> Agent.worker_changeset(params) |> to_form(action: :validate, as: :agent)
-        {:noreply, assign(socket, :edit_agent_form, form)}
-
-      _missing ->
-        {:noreply, assign(socket, editing_agent_id: nil, edit_agent_form: nil)}
-    end
-  end
-
-  def handle_event("update_agent", %{"agent" => params}, socket) do
-    with id when is_binary(id) <- socket.assigns.editing_agent_id,
-         {:ok, agent} <- Agents.fetch_agent(id),
-         {:ok, updated} <- Agents.update_worker(agent, params) do
-      {:noreply,
-       socket
-       |> load_agents()
-       |> assign(editing_agent_id: nil, edit_agent_form: nil)
-       |> put_flash(:info, "Updated agent #{updated.name}")}
-    else
-      {:error, %Ecto.Changeset{} = changeset} ->
-        {:noreply,
-         assign(socket, :edit_agent_form, to_form(changeset, action: :validate, as: :agent))}
-
-      {:error, :not_found} ->
-        {:noreply,
-         socket
-         |> assign(editing_agent_id: nil, edit_agent_form: nil)
-         |> load_agents()
-         |> put_flash(:error, "Agent no longer exists")}
-
-      nil ->
-        {:noreply, assign(socket, editing_agent_id: nil, edit_agent_form: nil)}
-    end
   end
 
   def handle_event("set_search", %{"q" => q}, socket),
@@ -1645,6 +1520,33 @@ defmodule RepoBuilderWeb.ConsoleLive do
   def handle_event("close_event", _params, socket),
     do: {:noreply, assign(socket, :selected_event, nil)}
 
+  # Open a file in the operator's configured editor (issue file-diff-event-cards).
+  # `RepoBuilder.Editor.open/1` validates the path and guards the editor command.
+  def handle_event("open_file", %{"path" => path}, socket) do
+    msg =
+      case RepoBuilder.Editor.open(path) do
+        {:ok, opened} ->
+          {:info, "Opened #{Path.basename(opened)} in editor"}
+
+        {:error, :disabled} ->
+          {:error, "Editor integration is disabled"}
+
+        {:error, :invalid_path} ->
+          {:error, "Invalid file path"}
+
+        {:error, :not_found} ->
+          {:error, "File not found: #{Path.basename(path)}"}
+
+        {:error, {:exit, code}} ->
+          {:error, "Editor exited with code #{code}"}
+      end
+
+    case msg do
+      {:info, text} -> {:noreply, put_flash(socket, :info, text)}
+      {:error, text} -> {:noreply, put_flash(socket, :error, text)}
+    end
+  end
+
   # --- reusable event-stream selection + bulk actions (issue-explain) ---
 
   # Toggle one row's membership in the action-agnostic selection. Re-stream the row so
@@ -1906,6 +1808,16 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   # Run an orchestrator mutation (set_harness/provider/model) and re-reflect the full
   # selection in the header on success; flash on error. Shared by the three setters.
+  # Seed the command-panel context bar: 0 when there's no resumable session (a cleared
+  # or never-started conversation), else the orchestrator's latest persisted own-usage
+  # occupancy. A model/provider/harness/cwd switch clears `session_id`, so this returns
+  # 0 right after — the bar zeroes out exactly when the next turn will start fresh.
+  @spec orchestrator_context_for(RepoBuilder.Orchestrator.Orchestrator.t()) :: non_neg_integer()
+  defp orchestrator_context_for(%{session_id: nil}), do: 0
+
+  defp orchestrator_context_for(orchestrator),
+    do: Logs.orchestrator_context_tokens(orchestrator.id)
+
   @spec update_orchestrator(
           Phoenix.LiveView.Socket.t(),
           (Ecto.UUID.t() ->
@@ -2526,7 +2438,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
       detail: nil,
       tool_name: nil,
       error?: false,
-      files: []
+      files: [],
+      file_change: nil
     }
   end
 
@@ -2765,10 +2678,18 @@ defmodule RepoBuilderWeb.ConsoleLive do
   defp nz(n) when is_integer(n) and n >= 0, do: n
   defp nz(_n), do: 0
 
+  # Route context occupancy by owner (panel parity with cost/estimate): an orchestrator
+  # turn's synthetic `"orch-…"` agent_id updates the single replace-latest
+  # `:orchestrator_context` (driving the command-panel bar, and keeping per-turn keys out
+  # of the per-agent map); a worker's UUID updates its `:context_tokens` rail entry.
   @spec put_context(Phoenix.LiveView.Socket.t(), String.t(), non_neg_integer()) ::
           Phoenix.LiveView.Socket.t()
-  defp put_context(socket, agent_id, tokens),
-    do: assign(socket, :context_tokens, Map.put(socket.assigns.context_tokens, agent_id, tokens))
+  defp put_context(socket, agent_id, tokens) do
+    if orchestrator_owned?(agent_id),
+      do: assign(socket, :orchestrator_context, tokens),
+      else:
+        assign(socket, :context_tokens, Map.put(socket.assigns.context_tokens, agent_id, tokens))
+  end
 
   @spec set_status(Phoenix.LiveView.Socket.t(), String.t(), atom()) :: Phoenix.LiveView.Socket.t()
   defp set_status(socket, agent_id, status) do
@@ -2933,15 +2854,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
             </span>
             <div class="flex items-center gap-1">
               <button
-                id="show-new-agent"
-                type="button"
-                phx-click="show_new_agent"
-                class="cns-chip"
-                title="Create a new agent (owned by this orchestrator)"
-              >
-                + New
-              </button>
-              <button
                 id="toggle-rail"
                 type="button"
                 phx-click="toggle_rail"
@@ -2952,30 +2864,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
               </button>
             </div>
           </div>
-
-          <.agent_form
-            :if={@show_new_agent?}
-            id="new-agent-form"
-            form={@agent_form}
-            submit="create_agent"
-            change="validate_agent"
-            cancel="cancel_new_agent"
-            title="New agent"
-            submit_label="Create"
-            harness_options={@harness_options}
-          />
-
-          <.agent_form
-            :if={@editing_agent_id}
-            id="edit-agent-form"
-            form={@edit_agent_form}
-            submit="update_agent"
-            change="validate_edit_agent"
-            cancel="cancel_edit_agent"
-            title="Edit agent"
-            submit_label="Save"
-            harness_options={@harness_options}
-          />
 
           <div id="agent-rail" class="flex flex-col gap-2">
             <%= for agent <- @agents do %>
@@ -3067,6 +2955,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
                     tool_name={row.render.tool_name}
                     error?={row.render.error?}
                     files={row.render.files}
+                    file_change={row.render[:file_change]}
                     thinking?={row.thinking?}
                     tokens={row.tokens}
                     time={row.time}
@@ -3192,6 +3081,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
             chat_width={@chat_width}
             cost={@orchestrator_cost}
             estimate={@orchestrator_est_cost}
+            context_tokens={@orchestrator_context}
             typing?={
               @orchestrator_queue.busy? || @typing? ||
                 Map.get(@statuses, @orchestrator_id) == :running
@@ -3696,6 +3586,12 @@ defmodule RepoBuilderWeb.ConsoleLive do
   defp to_category("thinking"), do: :thinking
   defp to_category("hook"), do: :hook
   defp to_category(_other), do: nil
+
+  # Cycle the chat-column width sm → md → lg → sm for the single toggle button.
+  @spec next_chat_width(:sm | :md | :lg) :: :sm | :md | :lg
+  defp next_chat_width(:sm), do: :md
+  defp next_chat_width(:md), do: :lg
+  defp next_chat_width(_lg), do: :sm
 
   @spec to_chat_width(String.t()) :: :sm | :md | :lg
   defp to_chat_width("md"), do: :md

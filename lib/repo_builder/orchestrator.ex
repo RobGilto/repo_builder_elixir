@@ -343,7 +343,10 @@ defmodule RepoBuilder.Orchestrators do
 
   @doc """
   Set the orchestrator's model (nil clears it) and remember it in the per-provider
-  "recently selected" list (orchestrator `metadata`, most-recent first).
+  "recently selected" list (orchestrator `metadata`, most-recent first). Clears the
+  resumable session id: a CLI session is model-specific, so switching models must
+  start the next turn fresh (and zero the console context-window bar) rather than
+  resume the prior model's conversation.
   """
   @spec set_model(Ecto.UUID.t(), String.t() | nil) ::
           {:ok, Orchestrator.t()} | {:error, :not_found}
@@ -352,6 +355,7 @@ defmodule RepoBuilder.Orchestrators do
       {:ok, orchestrator} ->
         update_fields(id, %{
           model: model,
+          session_id: nil,
           metadata: record_recent_model(orchestrator.metadata, orchestrator.provider, model)
         })
 

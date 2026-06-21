@@ -142,6 +142,9 @@ config :repo_builder, Oban, testing: :manual
 # Webhook secret for signing tests.
 config :repo_builder, :webhooks, replay_window_seconds: 300, secret: "test-webhook-secret"
 
+# Never shell out to an editor in CI/test (issue file-diff-event-cards).
+config :repo_builder, :editor, enabled: false, command: ["true"]
+
 # Faster, more deterministic session runtime in tests.
 config :repo_builder, :session,
   max_live_sessions: 100,

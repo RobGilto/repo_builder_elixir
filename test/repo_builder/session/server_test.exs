@@ -349,4 +349,98 @@ defmodule RepoBuilder.Session.ServerTest do
       File.rm_rf!(cwd)
     end
   end
+
+  describe "SIGTERM handling (issue-adw-sigterm)" do
+    alias RepoBuilder.Session.Server
+
+    test "blocking_command_detected?/1 detects phx.server in stderr" do
+      assert Server.blocking_command_detected?("Running Phoenix with mix phx.server\n")
+      assert Server.blocking_command_detected?("some output\nmix phx.server started\nmore")
+      refute Server.blocking_command_detected?("mix test passed")
+      refute Server.blocking_command_detected?("")
+    end
+
+    test "sigterm?/1 detects SIGTERM exit status" do
+      # Exit status 143 (SIGTERM) is encoded as 36608 by erlexec (143 * 256)
+      assert Server.sigterm?({:exit_status, 36608})
+      refute Server.sigterm?({:exit_status, 0})
+      refute Server.sigterm?({:exit_status, 256})
+      refute Server.sigterm?(:normal)
+    end
+
+    test "clean_exit?/2 with blocking_command? true treats SIGTERM as clean" do
+      base_state = %Server.State{
+        agent_id: "test",
+        session_id: "s1",
+        harness: :mock,
+        adapter: RepoBuilder.Harness.Mock,
+        prompt: "",
+        cwd: "/tmp",
+        marker: "m1",
+        idle_ms: 1000,
+        max_line_bytes: 1_000_000
+      }
+
+      state_blocking = %{base_state | blocking_command?: true}
+      state_normal = %{base_state | blocking_command?: false}
+
+      # Exit 0 is always clean
+      assert Server.clean_exit?({:exit_status, 0}, state_blocking)
+      assert Server.clean_exit?({:exit_status, 0}, state_normal)
+      assert Server.clean_exit?(:normal, state_blocking)
+      assert Server.clean_exit?(:normal, state_normal)
+
+      # SIGTERM (143 → 36608) is clean ONLY when blocking_command? is true
+      assert Server.clean_exit?({:exit_status, 36608}, state_blocking)
+      refute Server.clean_exit?({:exit_status, 36608}, state_normal)
+
+      # Other non-zero exits are NOT clean regardless of blocking_command?
+      refute Server.clean_exit?({:exit_status, 256}, state_blocking)
+      refute Server.clean_exit?({:exit_status, 256}, state_normal)
+    end
+
+    test "idle timeout with blocking_command? false emits Error immediately" do
+      register_harness("mock", @mock)
+      agent = unique_agent()
+      subscribe(agent)
+
+      stub(@mock, :command, fn _ -> {"sleep", ["100"], [], %{harness: :mock}} end)
+      stub(@mock, :normalize, fn _, _ -> :skip end)
+
+      {:ok, pid} =
+        Supervisor.start_session(agent_id: agent, harness: "mock", prompt: "x", idle_ms: 100)
+
+      ref = Process.monitor(pid)
+
+      # No blocking pattern → idle timeout emits Error{:idle_timeout}
+      assert_receive {:harness_event, %Event.Error{reason: :idle_timeout, retryable: true}},
+                     2_000
+
+      assert_receive {:DOWN, ^ref, :process, _, _}, 2_000
+    end
+
+    test "stderr with blocking pattern sets blocking_command? flag" do
+      register_harness("mock", @mock)
+      agent = unique_agent()
+
+      stub(@mock, :command, fn _ ->
+        # Command that writes to stderr then blocks, so we can inspect state
+        {"sh", ["-c", "echo 'Running Phoenix with mix phx.server' >&2; sleep 10"], [],
+         %{harness: :mock}}
+      end)
+
+      stub(@mock, :normalize, fn _, _ -> :skip end)
+
+      {:ok, pid} = Supervisor.start_session(agent_id: agent, harness: "mock", prompt: "x")
+
+      # Let stderr propagate
+      Process.sleep(100)
+
+      # Check the internal state has the flag set
+      state = :sys.get_state(pid)
+      assert state.blocking_command? == true
+
+      :ok = Supervisor.stop_session(agent)
+    end
+  end
 end

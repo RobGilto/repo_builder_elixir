@@ -13,8 +13,18 @@ defmodule RepoBuilder.Console.EventPresenter do
   reads the persisted `agent_logs.payload` (the scrubbed `raw` for tool events,
   `%{"text", "thinking"}` for text), so older rows render with the new polish too — at
   best-effort fidelity for the variants whose persisted payload is the raw wire frame.
+
+  `file_change` (issue file-diff-event-cards): for `Write`/`Edit`/`MultiEdit` (and pi
+  equivalents) `tool_call` events the render model carries a typed `file_change` sub-model
+  with path, status badge, `+N`/`-N` line stats, and a computed line diff. All other event
+  types keep `file_change: nil`.
+
+  The backfill path also digs into Claude raw frames (`payload["message"]["content"]` →
+  first `"tool_use"` block) so reconnect/backfill renders identically to the live path,
+  fixing the prior latent `from_payload(:tool_call, …)` raw-frame gap.
   """
 
+  alias RepoBuilder.Console.Diff
   alias RepoBuilder.Harness.Event
 
   @typedoc "A file touched during a turn, surfaced in the \"Consumed N files\" card."
@@ -25,9 +35,23 @@ defmodule RepoBuilder.Console.EventPresenter do
         }
 
   @typedoc """
+  File-change sub-model for a `Write`/`Edit`/`MultiEdit` tool-call event
+  (issue file-diff-event-cards). `nil` for all other event types.
+  """
+  @type file_change :: %{
+          path: String.t(),
+          status: :created | :modified,
+          added: non_neg_integer(),
+          removed: non_neg_integer(),
+          diff: Diff.t(),
+          absolute?: boolean()
+        }
+
+  @typedoc """
   The console event-row render model: a one-line `summary`, an optional clean content
   `preview` (collapsed), an optional full `detail` (expanded "Show More"), the
-  `tool_name` driving the pill, an `error?` accent flag, and any consumed `files`.
+  `tool_name` driving the pill, an `error?` accent flag, any consumed `files`, and an
+  optional `file_change` sub-model for file-writing tool events.
   """
   @type render_model :: %{
           summary: String.t(),
@@ -35,7 +59,8 @@ defmodule RepoBuilder.Console.EventPresenter do
           detail: String.t() | nil,
           tool_name: String.t() | nil,
           error?: boolean(),
-          files: [file_activity()]
+          files: [file_activity()],
+          file_change: file_change() | nil
         }
 
   # Longest collapsed preview/summary string before truncation; full text rides on `detail`.
@@ -47,6 +72,12 @@ defmodule RepoBuilder.Console.EventPresenter do
 
   # Fixed payload-string → action atom map (NEVER `String.to_atom/1` on payload data).
   @file_actions %{"read" => :read, "write" => :write, "edit" => :edit}
+
+  # File-writing tool names for Claude and pi (issue file-diff-event-cards).
+  # `"create_file"` and `"edit_file"` are the reference-app pi names included for
+  # forward-compat; the live harness uses `"write"`/`"edit"` (same strings as Claude).
+  @file_write_tools ~w(Write write create_file)
+  @file_edit_tools ~w(Edit edit edit_file MultiEdit multi_edit)
 
   @doc "Render model for a live canonical `Event.t()` (high fidelity)."
   @spec from_event(Event.t()) :: render_model()
@@ -78,10 +109,18 @@ defmodule RepoBuilder.Console.EventPresenter do
   Render model from a persisted `event_type` + `payload` (backfill). Mirrors `from_event/1`
   where the persisted shape allows; degrades cleanly (never raising, never dumping raw maps
   into the collapsed body) where the payload is the raw wire frame (tool/usage/status/done).
+
+  For `:tool_call` payloads the name/input are extracted from two places in priority order:
+  1. Top-level `payload["name"]` / `payload["input"]` (normalized / pi / already-clean rows).
+  2. `payload["message"]["content"]` → first `%{"type" => "tool_use"}` block (Claude raw
+     stream frames where name/input are nested inside the assistant message content array).
+  This fixes the latent raw-frame gap that caused degraded backfill cards (issue file-diff).
   """
   @spec from_payload(atom(), map()) :: render_model()
-  def from_payload(:tool_call, payload),
-    do: tool_call_model(payload_string(payload, "name") || "", payload_map(payload, "input"), [])
+  def from_payload(:tool_call, payload) do
+    {name, input} = extract_tool_name_input(payload)
+    tool_call_model(name, input, [])
+  end
 
   def from_payload(:tool_result, payload),
     do: tool_result_model(nil, payload_error?(payload), payload, payload)
@@ -132,7 +171,8 @@ defmodule RepoBuilder.Console.EventPresenter do
       detail: pretty_inputs(input),
       tool_name: blank_to_nil(name),
       error?: false,
-      files: files
+      files: files,
+      file_change: file_change_from_tool(name, input)
     }
   end
 
@@ -146,7 +186,8 @@ defmodule RepoBuilder.Console.EventPresenter do
       detail: long_detail(flat),
       tool_name: blank_to_nil(tool_name),
       error?: !!error?,
-      files: extract_files(files_source)
+      files: extract_files(files_source),
+      file_change: nil
     }
   end
 
@@ -158,7 +199,8 @@ defmodule RepoBuilder.Console.EventPresenter do
       detail: long_detail(text),
       tool_name: nil,
       error?: false,
-      files: files
+      files: files,
+      file_change: nil
     }
   end
 
@@ -174,7 +216,8 @@ defmodule RepoBuilder.Console.EventPresenter do
       detail: pretty_inputs(detail),
       tool_name: nil,
       error?: false,
-      files: []
+      files: [],
+      file_change: nil
     }
   end
 
@@ -188,8 +231,116 @@ defmodule RepoBuilder.Console.EventPresenter do
       detail: nil,
       tool_name: nil,
       error?: Map.get(fields, :error?, false),
-      files: []
+      files: [],
+      file_change: nil
     }
+  end
+
+  # --- file-change sub-model (issue file-diff-event-cards) ------------------
+
+  # Build the file_change sub-model for file-writing tool calls.
+  # Returns nil for non-file tools so the generic preview/detail renders instead.
+  @spec file_change_from_tool(String.t(), map()) :: file_change() | nil
+  defp file_change_from_tool(name, input) when name in @file_write_tools do
+    path = Map.get(input, "file_path") || Map.get(input, "path")
+
+    if is_binary(path) and path != "" do
+      content = Map.get(input, "content", "")
+      after_text = if is_binary(content), do: content, else: ""
+      diff = Diff.diff("", after_text)
+      build_file_change(path, :created, diff)
+    else
+      nil
+    end
+  end
+
+  defp file_change_from_tool(name, input) when name in @file_edit_tools do
+    path = Map.get(input, "file_path") || Map.get(input, "path")
+
+    if is_binary(path) and path != "" do
+      {before_text, after_text} = extract_edit_texts(name, input)
+      diff = Diff.diff(before_text, after_text)
+      build_file_change(path, :modified, diff)
+    else
+      nil
+    end
+  end
+
+  defp file_change_from_tool(_name, _input), do: nil
+
+  @spec build_file_change(String.t(), :created | :modified, Diff.t()) :: file_change()
+  defp build_file_change(path, status, diff) do
+    %{
+      path: path,
+      status: status,
+      added: diff.added,
+      removed: diff.removed,
+      diff: diff,
+      absolute?: Path.type(path) == :absolute
+    }
+  end
+
+  # Extract (before_text, after_text) for Edit/MultiEdit/edit/edit_file.
+  @spec extract_edit_texts(String.t(), map()) :: {String.t(), String.t()}
+  defp extract_edit_texts("MultiEdit", input), do: extract_multi_edit_texts(input)
+  defp extract_edit_texts("multi_edit", input), do: extract_multi_edit_texts(input)
+
+  defp extract_edit_texts(_name, input) do
+    old_str = Map.get(input, "old_string", "")
+    new_str = Map.get(input, "new_string", "")
+    {ensure_binary(old_str), ensure_binary(new_str)}
+  end
+
+  @spec extract_multi_edit_texts(map()) :: {String.t(), String.t()}
+  defp extract_multi_edit_texts(input) do
+    edits = Map.get(input, "edits", [])
+
+    if is_list(edits) do
+      before_parts = Enum.map(edits, &ensure_binary(Map.get(&1, "old_string", "")))
+      after_parts = Enum.map(edits, &ensure_binary(Map.get(&1, "new_string", "")))
+      {Enum.join(before_parts, "\n"), Enum.join(after_parts, "\n")}
+    else
+      {"", ""}
+    end
+  end
+
+  @spec ensure_binary(term()) :: String.t()
+  defp ensure_binary(value) when is_binary(value), do: value
+  defp ensure_binary(_value), do: ""
+
+  # --- payload extraction (tool_call backfill) --------------------------------
+
+  # Extract (name, input) from a persisted tool_call payload.
+  # Priority 1: top-level "name"/"input" (normalized rows, pi rows, fake rows).
+  # Priority 2: message.content tool_use block (Claude raw stream frames).
+  @spec extract_tool_name_input(map()) :: {String.t(), map()}
+  defp extract_tool_name_input(payload) do
+    case payload_string(payload, "name") do
+      name when is_binary(name) ->
+        {name, payload_map(payload, "input")}
+
+      nil ->
+        dig_tool_use_block(payload)
+    end
+  end
+
+  # Dig into `payload["message"]["content"]` for the first `"type" => "tool_use"` block.
+  @spec dig_tool_use_block(map()) :: {String.t(), map()}
+  defp dig_tool_use_block(payload) do
+    content =
+      case payload do
+        %{"message" => %{"content" => list}} when is_list(list) -> list
+        _ -> []
+      end
+
+    Enum.find_value(content, {"", %{}}, fn
+      %{"type" => "tool_use", "name" => name, "input" => input}
+      when is_binary(name) and is_map(input) ->
+        {name, input}
+
+      _ ->
+        nil
+    end)
   end
 
   # --- content flattening ---------------------------------------------------

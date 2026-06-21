@@ -442,6 +442,30 @@ defmodule RepoBuilder.Logs do
   end
 
   @doc """
+  Latest context-window size for an orchestrator's OWN turns (issue orchestrator
+  context bar): `context_size/1` of the most-recent `usage` row scoped to this
+  orchestrator with no `agent_id` (orchestrator-own rows carry `orchestrator_id` and
+  a nil `agent_id`; its workers' rows carry both, so the nil filter excludes them).
+  Seeds the command-panel CONTEXT WINDOW bar on mount/reconnect. Returns 0 when the
+  orchestrator has logged no own usage yet.
+  """
+  @spec orchestrator_context_tokens(Ecto.UUID.t()) :: non_neg_integer()
+  def orchestrator_context_tokens(orchestrator_id) do
+    AgentLog
+    |> where(
+      [l],
+      l.event_type == :usage and l.orchestrator_id == ^orchestrator_id and is_nil(l.agent_id)
+    )
+    |> order_by([l], desc: l.inserted_at, desc: l.id)
+    |> limit(1)
+    |> Repo.one()
+    |> case do
+      nil -> 0
+      log -> context_size(log.usage)
+    end
+  end
+
+  @doc """
   Per-agent event counts mapped to the console's four card counters
   (`responses`/`tools`/`hooks`/`thinking`), mirroring the live
   `record_event`→`bump_counter` category derivation so seeded values agree with

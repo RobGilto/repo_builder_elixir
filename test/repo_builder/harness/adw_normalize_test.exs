@@ -74,6 +74,36 @@ defmodule RepoBuilder.Harness.AdwNormalizeTest do
       assert {"uv", ["run", script | _rest], _env, _ctx} = Adw.command(opts)
       assert script == "/tmp/p/adws/adw_workflows/adw_plan_build.py"
     end
+
+    test "injects CLAUDE_CODE_PATH so nested Claude subagents can locate the binary" do
+      opts = %{
+        prompt: "x",
+        model: nil,
+        cwd: "/tmp/p",
+        sink: self(),
+        config: %{"adw_type" => "plan_build"}
+      }
+
+      assert {_exe, _args, env, _ctx} = Adw.command(opts)
+      assert {"CLAUDE_CODE_PATH", path} = List.keyfind(env, "CLAUDE_CODE_PATH", 0)
+      assert is_binary(path) and path != ""
+    end
+
+    test "preserves secrets in env alongside CLAUDE_CODE_PATH" do
+      opts = %{
+        prompt: "x",
+        model: nil,
+        cwd: "/tmp/p",
+        sink: self(),
+        config: %{"adw_type" => "plan_build"},
+        secrets: %{ANTHROPIC_API_KEY: "sk-123"}
+      }
+
+      assert {_exe, _args, env, _ctx} = Adw.command(opts)
+      assert {"ADW_EMIT", "json"} in env
+      assert {"CLAUDE_CODE_PATH", _path} = List.keyfind(env, "CLAUDE_CODE_PATH", 0)
+      assert {"ANTHROPIC_API_KEY", "sk-123"} in env
+    end
   end
 
   describe "normalize/2 — per-type mapping" do

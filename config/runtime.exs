@@ -33,7 +33,6 @@ end
 # referenced by env-var name and NEVER persisted to the DB. The session runtime
 # resolves these into the child's env (never argv) and drops unset (nil) values.
 config :repo_builder, :harness_secrets, %{
-  "claude" => %{"ANTHROPIC_API_KEY" => System.get_env("ANTHROPIC_API_KEY")},
   "pi" => %{
     "OPENAI_API_KEY" => System.get_env("OPENAI_API_KEY"),
     "ANTHROPIC_API_KEY" => System.get_env("ANTHROPIC_API_KEY")
@@ -72,6 +71,20 @@ case System.get_env("REPO_BUILDER_MAX_LINE_BYTES") do
       _invalid ->
         :ok
     end
+end
+
+# Editor integration (issue file-diff-event-cards) — runtime overrides.
+# RB_EDITOR_CMD: space-delimited command (e.g. "code" or "cursor --wait").
+# RB_EDITOR_ENABLED: "true" to enable, "false" to disable.
+if cmd = System.get_env("RB_EDITOR_CMD") do
+  parts = String.split(cmd, " ", trim: true)
+  editor_cfg = Application.get_env(:repo_builder, :editor, [])
+  config :repo_builder, :editor, Keyword.put(editor_cfg, :command, parts)
+end
+
+if raw_enabled = System.get_env("RB_EDITOR_ENABLED") do
+  editor_cfg = Application.get_env(:repo_builder, :editor, [])
+  config :repo_builder, :editor, Keyword.put(editor_cfg, :enabled, raw_enabled == "true")
 end
 
 if config_env() == :prod do

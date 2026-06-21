@@ -62,3 +62,7 @@ __pycache__/
 
 # Local MCP server config — contains a live orchestrator bearer token; never commit.
 /.mcp.json
+
+# Local environment variables — contains API keys and secrets; never commit.
+# Use .env.sample as a template.
+/.env

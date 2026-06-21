@@ -141,6 +141,7 @@ defmodule RepoBuilder.Harness.Event do
       field :type, :done, default: :done
       field :harness, atom()
       field :ok, boolean()
+      field :partial?, boolean(), default: false
 
       field :reason,
             :success
@@ -151,6 +152,7 @@ defmodule RepoBuilder.Harness.Event do
             | :max_budget
             | :max_structured_output_retries
             | :idle_timeout
+            | :sigterm_on_blocking_step
 
       field :duration_ms, integer(), enforce: false
       field :num_turns, integer(), enforce: false

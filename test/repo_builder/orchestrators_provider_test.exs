@@ -27,6 +27,16 @@ defmodule RepoBuilder.OrchestratorsProviderTest do
       assert updated2.model == "glm-4.6"
     end
 
+    test "set_model clears the resumable session id (switch ⇒ fresh conversation)" do
+      orch = orchestrator_fixture(%{session_id: "claude-resume-abc"})
+
+      assert {:ok, updated} = Orchestrators.set_model(orch.id, "glm-4.6")
+      assert updated.model == "glm-4.6"
+      # A CLI session is model-specific, so switching models must start the next turn
+      # fresh — this is what zeroes the console context-window bar.
+      assert updated.session_id == nil
+    end
+
     test "nil clears the provider" do
       orch = orchestrator_fixture(%{provider: "openai"})
       assert {:ok, cleared} = Orchestrators.set_provider(orch.id, nil)

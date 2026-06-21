@@ -173,7 +173,8 @@ defmodule RepoBuilder.Console.EventPresenterTest do
                detail: nil,
                tool_name: nil,
                error?: false,
-               files: []
+               files: [],
+               file_change: nil
              }
     end
   end
@@ -201,6 +202,238 @@ defmodule RepoBuilder.Console.EventPresenterTest do
     test "skips malformed entries" do
       files = %{"files" => [%{"no_path" => 1}, %{"path" => "/ok.ex"}]}
       assert P.extract_files(files) == [%{path: "/ok.ex", action: :read, bytes: nil}]
+    end
+  end
+
+  describe "file_change — Write (live path)" do
+    test "Write tool sets file_change.status = :created, added > 0, removed = 0" do
+      m =
+        P.from_event(%Event.ToolCall{
+          harness: :fake,
+          name: "Write",
+          input: %{"file_path" => "/app/new.ex", "content" => "defmodule A, do: :ok\n"}
+        })
+
+      assert %{
+               path: "/app/new.ex",
+               status: :created,
+               added: added,
+               removed: 0,
+               absolute?: true
+             } = m.file_change
+
+      assert added > 0
+    end
+
+    test "lowercase write (pi) is also recognized as :created" do
+      m =
+        P.from_event(%Event.ToolCall{
+          harness: :fake,
+          name: "write",
+          input: %{"file_path" => "/tmp/file.ex", "content" => "hello\nworld"}
+        })
+
+      assert m.file_change.status == :created
+      assert m.file_change.added == 2
+    end
+
+    test "Write with empty content yields added = 0" do
+      m =
+        P.from_event(%Event.ToolCall{
+          harness: :fake,
+          name: "Write",
+          input: %{"file_path" => "/x.ex", "content" => ""}
+        })
+
+      assert m.file_change.added == 0
+      assert m.file_change.removed == 0
+    end
+
+    test "relative file_path sets absolute? = false" do
+      m =
+        P.from_event(%Event.ToolCall{
+          harness: :fake,
+          name: "Write",
+          input: %{"file_path" => "relative/path.ex", "content" => "x"}
+        })
+
+      refute m.file_change.absolute?
+    end
+  end
+
+  describe "file_change — Edit (live path)" do
+    test "Edit tool sets file_change.status = :modified with correct added/removed" do
+      m =
+        P.from_event(%Event.ToolCall{
+          harness: :fake,
+          name: "Edit",
+          input: %{
+            "file_path" => "/app/foo.ex",
+            "old_string" => "old line\nshared",
+            "new_string" => "new line\nshared"
+          }
+        })
+
+      assert m.file_change.status == :modified
+      assert m.file_change.path == "/app/foo.ex"
+      assert m.file_change.added >= 1
+      assert m.file_change.removed >= 1
+    end
+
+    test "Edit with old_string == new_string gives 0/0 stats (no-op)" do
+      m =
+        P.from_event(%Event.ToolCall{
+          harness: :fake,
+          name: "Edit",
+          input: %{
+            "file_path" => "/app/foo.ex",
+            "old_string" => "unchanged",
+            "new_string" => "unchanged"
+          }
+        })
+
+      assert m.file_change.added == 0
+      assert m.file_change.removed == 0
+    end
+
+    test "Edit that only deletes lines has added = 0 and removed > 0" do
+      m =
+        P.from_event(%Event.ToolCall{
+          harness: :fake,
+          name: "Edit",
+          input: %{
+            "file_path" => "/app/foo.ex",
+            "old_string" => "gone1\ngone2",
+            "new_string" => ""
+          }
+        })
+
+      assert m.file_change.added == 0
+      assert m.file_change.removed >= 1
+    end
+  end
+
+  describe "file_change — MultiEdit (live path)" do
+    test "MultiEdit folds edits into a combined diff" do
+      m =
+        P.from_event(%Event.ToolCall{
+          harness: :fake,
+          name: "MultiEdit",
+          input: %{
+            "file_path" => "/app/bar.ex",
+            "edits" => [
+              %{"old_string" => "alpha", "new_string" => "ALPHA"},
+              %{"old_string" => "beta", "new_string" => "BETA"}
+            ]
+          }
+        })
+
+      assert m.file_change.status == :modified
+      assert m.file_change.added >= 1
+      assert m.file_change.removed >= 1
+    end
+  end
+
+  describe "file_change — non-file tools" do
+    test "Bash tool yields file_change = nil" do
+      m =
+        P.from_event(%Event.ToolCall{
+          harness: :fake,
+          name: "Bash",
+          input: %{"command" => "ls"}
+        })
+
+      assert m.file_change == nil
+    end
+
+    test "unknown tool name yields file_change = nil" do
+      m =
+        P.from_event(%Event.ToolCall{
+          harness: :fake,
+          name: "Read",
+          input: %{"file_path" => "/tmp/x.ex"}
+        })
+
+      assert m.file_change == nil
+    end
+
+    test "ToolResult always yields file_change = nil" do
+      m = P.from_event(%Event.ToolResult{harness: :fake, is_error: false, content: "ok"})
+      assert m.file_change == nil
+    end
+  end
+
+  describe "file_change — backfill parity (from_payload)" do
+    test "clean top-level payload (already-normalized) extracts file_change for Write" do
+      back =
+        P.from_payload(:tool_call, %{
+          "name" => "Write",
+          "input" => %{"file_path" => "/app/a.ex", "content" => "hello\nworld"}
+        })
+
+      assert %{status: :created, added: 2, removed: 0} = back.file_change
+    end
+
+    test "Claude raw frame (name/input nested under message.content tool_use block) works" do
+      raw_frame = %{
+        "type" => "assistant",
+        "message" => %{
+          "content" => [
+            %{
+              "type" => "tool_use",
+              "id" => "tu_123",
+              "name" => "Edit",
+              "input" => %{
+                "file_path" => "/app/b.ex",
+                "old_string" => "old line",
+                "new_string" => "new line"
+              }
+            }
+          ]
+        }
+      }
+
+      back = P.from_payload(:tool_call, raw_frame)
+
+      assert back.tool_name == "Edit"
+      assert %{status: :modified, path: "/app/b.ex"} = back.file_change
+      assert back.file_change.added >= 1
+      assert back.file_change.removed >= 1
+    end
+
+    test "Claude raw frame for Write matches the live from_event render" do
+      live =
+        P.from_event(%Event.ToolCall{
+          harness: :claude,
+          name: "Write",
+          input: %{"file_path" => "/app/c.ex", "content" => "line1\nline2"}
+        })
+
+      raw_frame = %{
+        "type" => "assistant",
+        "message" => %{
+          "content" => [
+            %{
+              "type" => "tool_use",
+              "name" => "Write",
+              "input" => %{"file_path" => "/app/c.ex", "content" => "line1\nline2"}
+            }
+          ]
+        }
+      }
+
+      back = P.from_payload(:tool_call, raw_frame)
+
+      assert live.file_change.status == back.file_change.status
+      assert live.file_change.added == back.file_change.added
+      assert live.file_change.removed == back.file_change.removed
+      assert live.tool_name == back.tool_name
+    end
+
+    test "degraded raw frame (missing tool_use block) still degrades cleanly with nil file_change" do
+      back = P.from_payload(:tool_call, %{"type" => "assistant", "message" => %{"x" => 1}})
+      assert back.file_change == nil
+      assert back.tool_name == nil
     end
   end
 

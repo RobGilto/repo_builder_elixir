@@ -9,7 +9,7 @@ defmodule RepoBuilder.LogsRollupsTest do
   """
   use RepoBuilder.DataCase, async: true
 
-  alias RepoBuilder.Agents
+  alias RepoBuilder.{Agents, Orchestrators}
   alias RepoBuilder.Harness.Event
   alias RepoBuilder.Logs
 
@@ -22,6 +22,11 @@ defmodule RepoBuilder.LogsRollupsTest do
       })
 
     agent
+  end
+
+  defp orchestrator_fixture do
+    {:ok, orch} = Orchestrators.get_or_create_default("fake")
+    orch
   end
 
   defp persist(event, agent_id),
@@ -69,6 +74,51 @@ defmodule RepoBuilder.LogsRollupsTest do
       persist(%Event.TextDelta{harness: :fake, text: "x", thinking?: false}, agent.id)
 
       refute Map.has_key?(Logs.context_tokens_by_agent(), agent.id)
+    end
+  end
+
+  describe "orchestrator_context_tokens/1" do
+    defp persist_orch(event, orch_id),
+      do:
+        {:ok, _} =
+          Logs.persist_orchestrator_event(event, %{orchestrator_id: orch_id, session_id: "s"})
+
+    test "returns the latest own-usage context size incl. cache" do
+      orch = orchestrator_fixture()
+
+      persist_orch(
+        %Event.Usage{harness: :fake, input_tokens: 5, output_tokens: 1, cache_read: 100},
+        orch.id
+      )
+
+      persist_orch(
+        %Event.Usage{
+          harness: :fake,
+          input_tokens: 54,
+          output_tokens: 1_646,
+          cache_read: 160_059,
+          cache_creation: 32_758
+        },
+        orch.id
+      )
+
+      assert Logs.orchestrator_context_tokens(orch.id) == 192_871
+    end
+
+    test "excludes worker usage (worker rows are owned by agent_id, not the orchestrator)" do
+      orch = orchestrator_fixture()
+
+      persist(
+        %Event.Usage{harness: :fake, input_tokens: 9_000, output_tokens: 1},
+        agent_fixture().id
+      )
+
+      assert Logs.orchestrator_context_tokens(orch.id) == 0
+    end
+
+    test "0 when the orchestrator has no own usage" do
+      orch = orchestrator_fixture()
+      assert Logs.orchestrator_context_tokens(orch.id) == 0
     end
   end
 

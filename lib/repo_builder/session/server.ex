@@ -89,6 +89,9 @@ defmodule RepoBuilder.Session.Server do
       # per-agent topic (the only channel the ephemeral Explain runner observes).
       # Defaults true — workers and the orchestrator keep their current behavior.
       field :broadcast_feed?, boolean(), default: true
+      # Set true when stderr contains known blocking-command patterns (e.g. "phx.server");
+      # used to gate SIGTERM (exit 143) as a clean exit vs error (issue-adw-sigterm).
+      field :blocking_command?, boolean(), default: false
     end
   end
 
@@ -366,26 +369,35 @@ defmodule RepoBuilder.Session.Server do
   def handle_info({:stderr, os_pid, chunk}, %State{os_pid: os_pid} = state) do
     # stderr is process diagnostics, NOT stream output: keep it out of stdout line
     # framing and the idle timer, but retain a bounded tail for the terminal error.
-    {:noreply, %{state | stderr_tail: append_stderr(state.stderr_tail, chunk)}}
+    tail = append_stderr(state.stderr_tail, chunk)
+    blocking? = state.blocking_command? or blocking_command_detected?(tail)
+    {:noreply, %{state | stderr_tail: tail, blocking_command?: blocking?}}
   end
 
   def handle_info({:stderr, _os_pid, _chunk}, state), do: {:noreply, state}
 
-  def handle_info(:idle_timeout, %State{os_pid: os_pid} = state) do
+  def handle_info(:idle_timeout, %State{os_pid: os_pid, blocking_command?: blocking?} = state) do
     _ = if is_integer(os_pid), do: :exec.stop(os_pid)
 
-    state =
-      dispatch(
-        %Event.Error{
-          harness: state.harness,
-          message: "idle timeout",
-          reason: :idle_timeout,
-          retryable: true
-        },
-        state
-      )
+    # If this is a blocking command, the :DOWN handler will synthesize a clean
+    # Done{partial?: true} when it sees the SIGTERM exit. Otherwise, idle timeout
+    # on a normal command is a genuine error (hung without progress).
+    if blocking? do
+      {:noreply, state}
+    else
+      state =
+        dispatch(
+          %Event.Error{
+            harness: state.harness,
+            message: "idle timeout",
+            reason: :idle_timeout,
+            retryable: true
+          },
+          state
+        )
 
-    {:stop, :normal, state}
+      {:stop, :normal, state}
+    end
   end
 
   def handle_info({:DOWN, os_pid, :process, _pid, reason}, %State{os_pid: os_pid} = state) do
@@ -572,8 +584,21 @@ defmodule RepoBuilder.Session.Server do
   end
 
   defp maybe_synthesize_terminal(reason, %State{stderr_tail: tail} = state) do
-    if clean_exit?(reason) do
-      dispatch(%Event.Done{harness: state.harness, ok: true, reason: :clean_exit}, state)
+    if clean_exit?(reason, state) do
+      # SIGTERM on a blocking command is a clean partial success
+      event =
+        if sigterm?(reason) and state.blocking_command? do
+          %Event.Done{
+            harness: state.harness,
+            ok: true,
+            partial?: true,
+            reason: :sigterm_on_blocking_step
+          }
+        else
+          %Event.Done{harness: state.harness, ok: true, reason: :clean_exit}
+        end
+
+      dispatch(event, state)
     else
       # Fold the captured stderr tail into the message so the provider's real
       # diagnostic (e.g. pi's `Failed to load extension …`) is visible in the UI
@@ -591,17 +616,36 @@ defmodule RepoBuilder.Session.Server do
     end
   end
 
-  @spec clean_exit?(term()) :: boolean()
-  defp clean_exit?(:normal), do: true
+  @doc false
+  @spec clean_exit?(term(), State.t()) :: boolean()
+  def clean_exit?(:normal, _state), do: true
 
-  defp clean_exit?({:exit_status, status}) do
+  def clean_exit?({:exit_status, status}, state) do
     case :exec.status(status) do
       {:status, 0} -> true
+      {:status, 143} -> state.blocking_command?
       _ -> false
     end
   end
 
-  defp clean_exit?(_reason), do: false
+  def clean_exit?(_reason, _state), do: false
+
+  @doc false
+  @spec sigterm?(term()) :: boolean()
+  def sigterm?({:exit_status, status}) do
+    case :exec.status(status) do
+      {:status, 143} -> true
+      _ -> false
+    end
+  end
+
+  def sigterm?(_reason), do: false
+
+  @doc false
+  @spec blocking_command_detected?(binary()) :: boolean()
+  def blocking_command_detected?(stderr) do
+    String.contains?(stderr, "phx.server")
+  end
 
   # --- idle timer ---
 

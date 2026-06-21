@@ -77,4 +77,87 @@ defmodule RepoBuilder.Logs.WriterTest do
     :ok = record(agent_id: feed_id, broadcast_feed?: false, persist: nil)
     refute_receive {:agent_event, ^feed_id, _event, _log_no}, 300
   end
+
+  describe "agent status updates (issue-adw-sigterm)" do
+    test "Done{ok: true, partial?: false} sets agent status to :idle" do
+      agent = agent_fixture()
+
+      event = %Event.Done{harness: :fake, ok: true, partial?: false, reason: :clean_exit}
+
+      :ok =
+        record(
+          event: event,
+          agent_id: agent.id,
+          persist: {:agent, %{agent_id: agent.id, session_id: "s1", provider: nil, model: nil}}
+        )
+
+      :ok = Writer.sync(agent.id)
+      agent = Agents.get_agent(agent.id)
+      assert agent.status == :idle
+    end
+
+    test "Done{ok: true, partial?: true} sets agent status to :idle" do
+      agent = agent_fixture()
+
+      event = %Event.Done{
+        harness: :fake,
+        ok: true,
+        partial?: true,
+        reason: :sigterm_on_blocking_step
+      }
+
+      :ok =
+        record(
+          event: event,
+          agent_id: agent.id,
+          persist: {:agent, %{agent_id: agent.id, session_id: "s1", provider: nil, model: nil}}
+        )
+
+      :ok = Writer.sync(agent.id)
+      agent = Agents.get_agent(agent.id)
+      assert agent.status == :idle
+    end
+
+    test "Done{ok: false} sets agent status to :error" do
+      agent = agent_fixture()
+
+      event = %Event.Done{
+        harness: :fake,
+        ok: false,
+        reason: :error_during_execution
+      }
+
+      :ok =
+        record(
+          event: event,
+          agent_id: agent.id,
+          persist: {:agent, %{agent_id: agent.id, session_id: "s1", provider: nil, model: nil}}
+        )
+
+      :ok = Writer.sync(agent.id)
+      agent = Agents.get_agent(agent.id)
+      assert agent.status == :error
+    end
+
+    test "Error{} sets agent status to :error" do
+      agent = agent_fixture()
+
+      event = %Event.Error{
+        harness: :fake,
+        message: "provider crashed",
+        reason: :provider_error
+      }
+
+      :ok =
+        record(
+          event: event,
+          agent_id: agent.id,
+          persist: {:agent, %{agent_id: agent.id, session_id: "s1", provider: nil, model: nil}}
+        )
+
+      :ok = Writer.sync(agent.id)
+      agent = Agents.get_agent(agent.id)
+      assert agent.status == :error
+    end
+  end
 end

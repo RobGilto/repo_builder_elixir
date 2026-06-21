@@ -96,6 +96,8 @@ defmodule RepoBuilder.Harness.Adw do
 
   # Secrets stay in env (never argv, never logged). `ADW_EMIT=json` mirrors the `--emit
   # json` flag for scripts that prefer the env toggle; both select the neutral mode.
+  # `CLAUDE_CODE_PATH` allows nested Claude subagents spawned by the Python ADW to locate
+  # the `claude` binary (adws/adw_modules/agent.py replaces the parent env).
   @spec env(RepoBuilder.Harness.start_opts()) :: [{String.t(), String.t()}]
   defp env(opts) do
     secret_env =
@@ -103,7 +105,10 @@ defmodule RepoBuilder.Harness.Adw do
       |> Map.get(:secrets, %{})
       |> Enum.map(fn {k, v} -> {to_string(k), to_string(v)} end)
 
-    [{"ADW_EMIT", "json"} | secret_env]
+    claude_path =
+      System.get_env("CLAUDE_CODE_PATH") || System.find_executable("claude") || "claude"
+
+    [{"ADW_EMIT", "json"}, {"CLAUDE_CODE_PATH", claude_path} | secret_env]
   end
 
   @spec string(term()) :: String.t() | nil
