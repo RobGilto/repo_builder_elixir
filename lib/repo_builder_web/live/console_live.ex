@@ -3083,6 +3083,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
             cost={@orchestrator_cost}
             estimate={@orchestrator_est_cost}
             context_tokens={@orchestrator_context}
+            harness={@orchestrator_harness}
+            model={@orchestrator_model}
             typing?={
               @orchestrator_queue.busy? || @typing? ||
                 Map.get(@statuses, @orchestrator_id) == :running

@@ -50,7 +50,10 @@ defmodule RepoBuilderWeb.DashboardComponents do
   @event_categories [:response, :tool, :thinking, :hook, :system]
 
   attr :id, :string, required: true
-  attr :title, :string, required: true, doc: "human-friendly display name (ADW type or worker name)"
+
+  attr :title, :string,
+    required: true,
+    doc: "human-friendly display name (ADW type or worker name)"
 
   attr :subtitle, :string,
     default: nil,

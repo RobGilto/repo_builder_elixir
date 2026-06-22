@@ -36,4 +36,34 @@ defmodule RepoBuilder.Harness.Pi.ModelsTest do
   test "list/1 is empty when discovery is disabled (test env)" do
     assert Models.list("minimax") == []
   end
+
+  describe "parse_windows/1" do
+    test "captures the context column and scales K/M suffixes" do
+      windows = Models.parse_windows(@sample)
+
+      assert windows["claude-3-5-haiku-latest"] == 200_000
+      assert windows["claude-sonnet-4-5"] == 200_000
+      assert windows["MiniMax-M2.7-highspeed"] == 204_800
+      assert windows["MiniMax-M3"] == 1_000_000
+      refute Map.has_key?(windows, "provider")
+    end
+
+    test "parses bare integers and omits rows without a context column" do
+      windows = Models.parse_windows("provider model context\nzai glm-4.6 8192\nopenai gpt-x\n")
+
+      assert windows["glm-4.6"] == 8192
+      refute Map.has_key?(windows, "gpt-x")
+    end
+
+    test "omits rows whose context value is unparseable" do
+      windows = Models.parse_windows("provider model context\nzai glm-4.6 n/a\n")
+      assert windows == %{}
+    end
+  end
+
+  test "windows/0 and context_window/1 are empty/nil when discovery is disabled (test env)" do
+    assert Models.windows() == %{}
+    assert Models.context_window("MiniMax-M3") == nil
+    assert Models.context_window(nil) == nil
+  end
 end

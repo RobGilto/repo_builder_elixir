@@ -14,6 +14,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   import RepoBuilderWeb.DashboardComponents, only: [cost_badge: 1]
 
   alias RepoBuilder.Agents.Agent
+  alias RepoBuilder.Orchestrator.ContextWindow
 
   # A normalized prompt-palette chip. `:status` is optional — file-derived chips
   # (slash/agents/adws) omit it; live-agent chips carry the worker's runtime status
@@ -259,7 +260,12 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   @doc "Rich left-rail agent card: status badge, context-window bar, category counters, model+cost footer."
   @spec agent_card(map()) :: Phoenix.LiveView.Rendered.t()
   def agent_card(assigns) do
-    assigns = assign(assigns, :ctx_pct, context_pct(assigns.context_tokens))
+    window = ContextWindow.size(assigns.harness || "", assigns.model)
+
+    assigns =
+      assigns
+      |> assign(:window, window)
+      |> assign(:ctx_pct, context_pct(assigns.context_tokens, window))
 
     ~H"""
     <div
@@ -292,7 +298,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
             style="color: var(--cns-text-2)"
           >
             <span>CONTEXT WINDOW</span>
-            <span>{ktok(@context_tokens)} / 200k</span>
+            <span>{ktok(@context_tokens)} / {ktok(@window)}</span>
           </div>
           <div class="cns-ctx-bar mt-1">
             <div class="cns-ctx-bar__fill" style={"width: #{@ctx_pct}%"} />
@@ -886,6 +892,9 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     default: 0,
     doc: "the orchestrator's own context-window occupancy"
 
+  attr :harness, :string, default: nil, doc: "the orchestrator's harness (drives window sizing)"
+  attr :model, :string, default: nil, doc: "the orchestrator's model (drives window sizing)"
+
   attr :typing?, :boolean, default: false
   attr :auto_follow?, :boolean, default: true
   slot :messages, doc: "rendered chat bubbles"
@@ -893,7 +902,12 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   @doc "Right chat/command panel: chat header (context bar + clear + width toggle + cost) + the orchestrator text stream. Input is the ⌘K command modal."
   @spec command_panel(map()) :: Phoenix.LiveView.Rendered.t()
   def command_panel(assigns) do
-    assigns = assign(assigns, :ctx_pct, context_pct(assigns.context_tokens))
+    window = ContextWindow.size(assigns.harness || "", assigns.model)
+
+    assigns =
+      assigns
+      |> assign(:window, window)
+      |> assign(:ctx_pct, context_pct(assigns.context_tokens, window))
 
     ~H"""
     <div id="command-panel" class="flex h-full flex-col gap-3">
@@ -928,7 +942,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
               style="color: var(--cns-text-2)"
             >
               <span>CONTEXT WINDOW</span>
-              <span>{ktok(@context_tokens)} / 200k</span>
+              <span>{ktok(@context_tokens)} / {ktok(@window)}</span>
             </div>
             <div class="cns-ctx-bar mt-1">
               <div class="cns-ctx-bar__fill" style={"width: #{@ctx_pct}%"} />
@@ -3229,8 +3243,8 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   defp category_label(:hook), do: "HOOK"
   defp category_label(:system), do: "SYS"
 
-  @spec context_pct(non_neg_integer()) :: non_neg_integer()
-  defp context_pct(tokens), do: min(100, div(tokens * 100, 200_000))
+  @spec context_pct(non_neg_integer(), pos_integer()) :: non_neg_integer()
+  defp context_pct(tokens, window), do: min(100, div(tokens * 100, max(window, 1)))
 
   @spec ktok(non_neg_integer()) :: String.t()
   defp ktok(tokens), do: "#{div(tokens, 1000)}k"

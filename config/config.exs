@@ -95,11 +95,26 @@ harnesses = %{
     autonomous: true,
     # Per-harness orchestrator defaults — switching to Claude sets Opus automatically.
     # `models` drives the header model dropdown (latest first). The `claude` CLI
-    # resolves the aliases `opus`/`sonnet`/`haiku` to the latest of each family.
+    # accepts BOTH the family aliases `opus`/`sonnet`/`haiku` (each resolves to the
+    # latest of its family) AND concrete pinned model ids. We offer both so an
+    # operator can pin a specific model instead of only the generic tier alias —
+    # the dropdown still accepts any custom string the operator types. Edit here to
+    # track new releases (one config edit, §10).
     orchestrator: %{
       default_provider: "anthropic",
       default_model: "opus",
-      models: %{"anthropic" => ["opus", "sonnet", "haiku"]}
+      models: %{
+        "anthropic" => [
+          "opus",
+          "sonnet",
+          "haiku",
+          "claude-opus-4-8",
+          "claude-sonnet-4-6",
+          "claude-haiku-4-5",
+          "claude-opus-4-5",
+          "claude-sonnet-4-5"
+        ]
+      }
     }
   },
   "pi" => %{
@@ -258,10 +273,12 @@ config :repo_builder, :alerting, cost_threshold_usd: 10.0
 # `:alerting` and reconciles spent-so-far from CostCenter on start (runtime-overridable).
 config :repo_builder, :budget, refresh_ms: 60_000, reconcile_on_boot?: true
 
-# Context-window sizes (tokens) for orchestrator/worker usage-% reporting. A
-# `{harness, model}` tuple overrides the `:default`; harness-blind at the call site
-# (RepoBuilder.Orchestrator.ContextWindow). Operator-tunable; pi's live model catalog
-# could later supply real per-model sizes (Future Consideration).
+# Context-window sizes (tokens) for orchestrator/worker usage-% reporting. This map is
+# the operator OVERRIDE layer only — `RepoBuilder.Orchestrator.ContextWindow` resolves a
+# `{harness, model}` window as: this config override → derived/live source (pi's
+# `--list-models` `context` column via RepoBuilder.Harness.Pi.Models, else the built-in
+# `@known_windows` catalog for Claude/known models) → `:default`. Entries here win over
+# the built-in catalog and the live source; harness-blind at the call site.
 config :repo_builder, :context_windows, %{
   :default => 200_000,
   {"claude", "claude-opus-4-8"} => 200_000,

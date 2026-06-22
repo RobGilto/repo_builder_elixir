@@ -362,7 +362,7 @@ defmodule RepoBuilder.Session.ServerTest do
 
     test "sigterm?/1 detects SIGTERM exit status" do
       # Exit status 143 (SIGTERM) is encoded as 36608 by erlexec (143 * 256)
-      assert Server.sigterm?({:exit_status, 36608})
+      assert Server.sigterm?({:exit_status, 36_608})
       refute Server.sigterm?({:exit_status, 0})
       refute Server.sigterm?({:exit_status, 256})
       refute Server.sigterm?(:normal)
@@ -391,8 +391,8 @@ defmodule RepoBuilder.Session.ServerTest do
       assert Server.clean_exit?(:normal, state_normal)
 
       # SIGTERM (143 → 36608) is clean ONLY when blocking_command? is true
-      assert Server.clean_exit?({:exit_status, 36608}, state_blocking)
-      refute Server.clean_exit?({:exit_status, 36608}, state_normal)
+      assert Server.clean_exit?({:exit_status, 36_608}, state_blocking)
+      refute Server.clean_exit?({:exit_status, 36_608}, state_normal)
 
       # Other non-zero exits are NOT clean regardless of blocking_command?
       refute Server.clean_exit?({:exit_status, 256}, state_blocking)
