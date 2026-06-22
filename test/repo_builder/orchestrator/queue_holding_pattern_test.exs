@@ -122,4 +122,83 @@ defmodule RepoBuilder.Orchestrator.QueueHoldingPatternTest do
     refute_receive {:turn_started, _prompt, _}, 200
     assert %{busy?: false, depth: 0} = Queue.snapshot(id)
   end
+
+  test "duplicate worker_id signals are deduped to a single resume (issue holding-pattern-duplicate-resumes)" do
+    enable_auto_resume()
+    {id, pid} = start_queue(controllable_starter(self()))
+
+    # The queue is idle — first signal fires the resume immediately.
+    worker_id = Ecto.UUID.generate()
+    send(pid, {:worker_terminal, %{worker_id: worker_id, name: "documenter", ok?: true}})
+    assert_receive {:turn_started, prompt, turn}, 1_000
+    assert prompt =~ "documenter"
+
+    # Duplicate signal for the same worker while the resume turn is in flight.
+    send(pid, {:worker_terminal, %{worker_id: worker_id, name: "documenter", ok?: true}})
+    finish_turn(turn)
+
+    # No second resume — the duplicate was dropped.
+    refute_receive {:turn_started, _prompt, _}, 200
+    assert %{busy?: false, depth: 0} = Queue.snapshot(id)
+  end
+
+  test "duplicate signals across multiple turns are all deduped" do
+    enable_auto_resume()
+    {id, pid} = start_queue(controllable_starter(self()))
+
+    # Simulate 4 fires for the same worker (like a 4-step ADW emitting per-step dones).
+    worker_id = Ecto.UUID.generate()
+    send(pid, {:worker_terminal, %{worker_id: worker_id, name: "adw", ok?: true}})
+    assert_receive {:turn_started, _, turn1}, 1_000
+
+    # Fires 2-4 arrive during turn1 — all deduped (no pending is set).
+    send(pid, {:worker_terminal, %{worker_id: worker_id, name: "adw", ok?: true}})
+    send(pid, {:worker_terminal, %{worker_id: worker_id, name: "adw", ok?: true}})
+    send(pid, {:worker_terminal, %{worker_id: worker_id, name: "adw", ok?: true}})
+    finish_turn(turn1)
+
+    # Queue drains cleanly — no pending owed and no more turns.
+    refute_receive {:turn_started, _, _}, 200
+    assert %{busy?: false, depth: 0} = Queue.snapshot(id)
+  end
+
+  test "operator message resets dedup so the same worker can trigger a fresh resume" do
+    enable_auto_resume()
+    {id, pid} = start_queue(controllable_starter(self()))
+
+    worker_id = Ecto.UUID.generate()
+    send(pid, {:worker_terminal, %{worker_id: worker_id, name: "w1", ok?: true}})
+    assert_receive {:turn_started, _, turn1}, 1_000
+    finish_turn(turn1)
+
+    # Duplicate signal still suppressed within the same operator context.
+    send(pid, {:worker_terminal, %{worker_id: worker_id, name: "w1", ok?: true}})
+    refute_receive {:turn_started, _, _}, 100
+
+    # Operator message resets the dedup context.
+    assert {:ok, :started, _} = Queue.enqueue(id, "operator resets context")
+    assert_receive {:turn_started, "operator resets context", turn2}, 1_000
+    finish_turn(turn2)
+
+    # Same worker returning again is now a fresh signal.
+    send(pid, {:worker_terminal, %{worker_id: worker_id, name: "w1", ok?: true}})
+    assert_receive {:turn_started, prompt, _turn3}, 1_000
+    assert prompt =~ "w1"
+  end
+
+  test "different worker_ids are not deduped" do
+    enable_auto_resume()
+    {_id, pid} = start_queue(controllable_starter(self()))
+
+    # Worker A returns.
+    send(pid, {:worker_terminal, %{worker_id: "worker-a", name: "a", ok?: true}})
+    assert_receive {:turn_started, prompt_a, turn_a}, 1_000
+    assert prompt_a =~ "a"
+    finish_turn(turn_a)
+
+    # Worker B returns (different id) — NOT a duplicate.
+    send(pid, {:worker_terminal, %{worker_id: "worker-b", name: "b", ok?: true}})
+    assert_receive {:turn_started, prompt_b, _turn_b}, 1_000
+    assert prompt_b =~ "b"
+  end
 end

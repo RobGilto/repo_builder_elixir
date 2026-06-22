@@ -50,7 +50,12 @@ defmodule RepoBuilderWeb.DashboardComponents do
   @event_categories [:response, :tool, :thinking, :hook, :system]
 
   attr :id, :string, required: true
-  attr :label, :string, required: true
+  attr :title, :string, required: true, doc: "human-friendly display name (ADW type or worker name)"
+
+  attr :subtitle, :string,
+    default: nil,
+    doc: "the machine-ish worker name, shown under the title when the title is the ADW type"
+
   attr :status, :atom, required: true, values: @statuses
   attr :harness, :string, default: nil
   slot :inner_block, doc: "the per-stage lanes of event squares"
@@ -67,7 +72,10 @@ defmodule RepoBuilderWeb.DashboardComponents do
       <div class="flex items-start justify-between">
         <div class="flex flex-col gap-0.5">
           <span class="cns-card__key">AGENT</span>
-          <span class="cns-card__title">{@label}</span>
+          <span class="cns-card__title">{@title}</span>
+          <span :if={@subtitle} class="text-[0.625rem]" style="color: var(--cns-text-2)">
+            {@subtitle}
+          </span>
           <span class="flex items-center gap-1.5">
             <.adw_orb active?={@status == :running} />
             <span class={["badge", status_class(@status)]}>{@status}</span>

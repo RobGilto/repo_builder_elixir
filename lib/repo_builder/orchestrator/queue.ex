@@ -72,6 +72,12 @@ defmodule RepoBuilder.Orchestrator.Queue do
       # prompt can name which worker to review (nil when no resume is owed; a burst
       # keeps the most recent return).
       field :pending_info, map() | nil
+      # Dedup set: worker_ids that already triggered a resume in the current operator
+      # context (issue holding-pattern-duplicate-resumes). A duplicate signal (same
+      # worker_id) is dropped so spurious multi-fire from Path A + Path B can't cause
+      # the orchestrator to waste turns dismissing "already handled" wakeups. Cleared
+      # only when an operator message arrives (which represents a new dispatch context).
+      field :seen_worker_ids, MapSet.t()
     end
   end
 
@@ -171,7 +177,8 @@ defmodule RepoBuilder.Orchestrator.Queue do
       current: nil,
       starter: opts[:starter] || (&Server.start_turn/2),
       pending_resume?: false,
-      pending_info: nil
+      pending_info: nil,
+      seen_worker_ids: MapSet.new()
     }
 
     {:ok, state}
@@ -291,25 +298,40 @@ defmodule RepoBuilder.Orchestrator.Queue do
   end
 
   # Holding pattern (event-driven, coalesced single-resume): a worker returned.
-  #   * disabled        → unchanged (fully opt-out via config).
-  #   * enabled + idle   → start the resume turn now.
+  #   * disabled          → unchanged (fully opt-out via config).
+  #   * duplicate worker  → dropped (same worker_id already triggered a resume in this
+  #     operator context — prevents spurious multi-fire from the same worker wasting
+  #     billed turns; see issue holding-pattern-duplicate-resumes).
+  #   * enabled + idle    → start the resume turn now.
   #   * enabled + busy/backlogged → record the OWED resume in `pending_resume?` rather
   #     than dropping it (anti-amnesia); a burst coalesces to one flag, keeping the most
   #     recent worker for the prompt. The owed resume is consumed when the queue next
   #     drains to idle (see `maybe_consume_pending_resume/1`).
   @spec maybe_auto_resume(State.t(), map()) :: State.t()
   defp maybe_auto_resume(%State{} = state, info) do
+    worker_id = Map.get(info, :worker_id)
+    duplicate? = is_binary(worker_id) and MapSet.member?(state.seen_worker_ids, worker_id)
+
     cond do
       not Orchestrators.auto_resume?() ->
         state
 
+      duplicate? ->
+        state
+
       idle?(state) ->
-        state |> start_auto_resume(info) |> clear_pending()
+        seen = add_seen(state.seen_worker_ids, worker_id)
+        %{state | seen_worker_ids: seen} |> start_auto_resume(info) |> clear_pending()
 
       true ->
-        %{state | pending_resume?: true, pending_info: info}
+        seen = add_seen(state.seen_worker_ids, worker_id)
+        %{state | pending_resume?: true, pending_info: info, seen_worker_ids: seen}
     end
   end
+
+  @spec add_seen(MapSet.t(), term()) :: MapSet.t()
+  defp add_seen(seen, worker_id) when is_binary(worker_id), do: MapSet.put(seen, worker_id)
+  defp add_seen(seen, _worker_id), do: seen
 
   # Consume an owed holding-pattern resume once the queue has drained to idle. The flag
   # is cleared BEFORE starting the resume so an auto-resume turn that dispatches no new
@@ -332,11 +354,19 @@ defmodule RepoBuilder.Orchestrator.Queue do
   defp idle?(%State{current: nil} = state), do: :queue.is_empty(state.queue)
   defp idle?(%State{}), do: false
 
-  # Operator work supersedes an owed auto-resume; other kinds leave the flag intact.
+  # Operator work supersedes an owed auto-resume AND resets the dedup set: an operator
+  # message starts a new dispatch context, so the same worker returning again is fresh.
   @spec clear_pending_resume_for(State.t(), kind()) :: State.t()
-  defp clear_pending_resume_for(%State{} = state, :operator), do: clear_pending(state)
+  defp clear_pending_resume_for(%State{} = state, :operator), do: clear_pending_operator(state)
   defp clear_pending_resume_for(%State{} = state, _kind), do: state
 
+  # Full reset for operator context: clears pending flags AND the dedup seen-set.
+  @spec clear_pending_operator(State.t()) :: State.t()
+  defp clear_pending_operator(%State{} = state),
+    do: %{state | pending_resume?: false, pending_info: nil, seen_worker_ids: MapSet.new()}
+
+  # Clears only the pending flags (used after a non-operator turn drains — does NOT
+  # reset seen_worker_ids so subsequent duplicate fires are still suppressed).
   @spec clear_pending(State.t()) :: State.t()
   defp clear_pending(%State{} = state), do: %{state | pending_resume?: false, pending_info: nil}
 

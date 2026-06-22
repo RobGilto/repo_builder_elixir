@@ -3049,7 +3049,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
                 <.adw_agent_card
                   :for={lane <- @swimlanes}
                   id={"swimlane-#{lane.key}"}
-                  label={lane.name}
+                  title={lane.title}
+                  subtitle={lane.subtitle}
                   status={lane.status}
                 >
                   <.stage_lane
@@ -3385,17 +3386,33 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   @spec agent_swimlanes(map()) :: [map()]
   defp agent_swimlanes(assigns) do
+    configs = Map.new(assigns.agents, &{&1.id, &1.config})
+
     assigns.event_buffer
     |> Enum.group_by(& &1.agent_key)
     |> Enum.map(fn {key, rows} ->
+      name = Map.get(assigns.agent_names, key, short_id(key))
+      adw_type = adw_type(Map.get(configs, key))
+
       %{
         key: key,
-        name: Map.get(assigns.agent_names, key, short_id(key)),
+        name: name,
+        # An ADW worker's card titles with its workflow type (e.g. "plan_build_review_fix"),
+        # demoting the machine-ish worker name (e.g. "orch-adw-3156290") to a subtitle. Manual
+        # agents (no `adw_type`) keep the worker name as the title with no subtitle.
+        title: adw_type || name,
+        subtitle: adw_type && name,
         status: Map.get(assigns.statuses, key, :idle),
         stages: group_by_step(rows)
       }
     end)
   end
+
+  # The ADW workflow type from a worker's `config` (set when the orchestrator launches an
+  # ADW), or `nil` for a manual/non-workflow agent.
+  @spec adw_type(map() | nil) :: String.t() | nil
+  defp adw_type(%{"adw_type" => type}) when is_binary(type), do: presence(type)
+  defp adw_type(_config), do: nil
 
   # Group an agent's rows into ordered `%{step, rows}` stage lanes, keyed by `:step` in
   # first-appearance (chronological) order — mirroring the reference's insertion-ordered
