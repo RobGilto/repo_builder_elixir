@@ -16,6 +16,7 @@ defmodule RepoBuilder.Orchestrator.Tools do
   alias RepoBuilder.Dashboard
   alias RepoBuilder.Definitions
   alias RepoBuilder.Harness.McpTools
+  alias RepoBuilder.Harness.ModelResolver
   alias RepoBuilder.Harness.Pi.Models, as: PiModels
   alias RepoBuilder.Harness.Registry
   alias RepoBuilder.Orchestrator.{ContextWindow, Orchestrator, Template, Templates}
@@ -151,6 +152,17 @@ defmodule RepoBuilder.Orchestrator.Tools do
           {:ok, %{harness: String.t(), provider: String.t() | nil, model: String.t() | nil}}
           | {:error, reason()}
   defp resolve_agent_spec(orchestrator_id, args) do
+    # Single chokepoint: whichever branch builds the spec, the selected model is mapped
+    # to the latest of its family BEFORE it is returned (and thus persisted/spawned).
+    with {:ok, spec} <- build_agent_spec(orchestrator_id, args) do
+      {:ok, %{spec | model: ModelResolver.latest(spec.harness, spec.provider, spec.model)}}
+    end
+  end
+
+  @spec build_agent_spec(Ecto.UUID.t(), map()) ::
+          {:ok, %{harness: String.t(), provider: String.t() | nil, model: String.t() | nil}}
+          | {:error, reason()}
+  defp build_agent_spec(orchestrator_id, args) do
     case blank_to_nil(args["category"]) do
       nil ->
         with {:ok, harness} <- resolve_harness(orchestrator_id, args) do
@@ -915,9 +927,12 @@ defmodule RepoBuilder.Orchestrator.Tools do
   @spec configure_tier(Ecto.UUID.t(), map()) :: result()
   defp configure_tier(orchestrator_id, args) do
     with {:ok, category} <- fetch_string(args, "category"),
-         {:ok, model} <- fetch_string(args, "model"),
+         {:ok, selected} <- fetch_string(args, "model"),
          {:ok, harness} <- resolve_harness(orchestrator_id, args) do
       provider = blank_to_nil(args["provider"])
+      # Resolve to the latest of the family before persisting, and echo the resolved
+      # model so the orchestrator sees what was actually stored on the roster.
+      model = ModelResolver.latest(harness, provider, selected)
       attrs = %{"harness" => harness, "provider" => provider, "model" => model}
 
       case Orchestrators.set_agent_model(orchestrator_id, category, attrs) do
