@@ -25,6 +25,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
   use RepoBuilderWeb, :live_view
 
   import RepoBuilderWeb.ConsoleComponents
+  import RepoBuilderWeb.ProjectComponents, only: [switcher: 1]
 
   import RepoBuilderWeb.DashboardComponents,
     only: [
@@ -44,6 +45,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
     Explain,
     Logs,
     Orchestrators,
+    Projects,
     Session,
     WorkflowEngine,
     Workflows
@@ -196,6 +198,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
         slash_commands: [],
         agent_defs: [],
         adws: [],
+        # Agentic-layer adaptor (Phase 5): the global project switcher. `active_project_id`
+        # scopes the rail roster; nil = the unscoped "all / platform" view (current behaviour).
+        projects: [],
+        active_project_id: nil,
         # Budget guardrails (issue-budget-guardrails): live breaker snapshot + caps + form.
         # Safe disconnected defaults; reseeded from Budget.Guard.snapshot/0 on connect and
         # updated live over the "budget:events" topic.
@@ -235,6 +241,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
     socket =
       if connected?(socket) do
         socket
+        |> assign(:projects, Projects.list_projects())
         |> load_agents()
         |> seed_agent_costs()
         |> seed_context_tokens()
@@ -488,7 +495,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   @spec load_agents(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp load_agents(socket) do
-    agents = Agents.list_agents()
+    # Scope the rail roster to the active project (agentic-layer adaptor). A nil active
+    # project is the unscoped, back-compatible view — every non-archived agent.
+    agents = Agents.list_for_project(socket.assigns[:active_project_id])
 
     assign(socket,
       agents: agents,
@@ -803,6 +812,17 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   @impl true
   def handle_event("toggle_view", _params, socket), do: {:noreply, toggle_view(socket)}
+
+  # Project switcher (agentic-layer adaptor, Phase 5): set the active project and re-scope
+  # the rail roster. A blank id is the unscoped "all / platform" view.
+  def handle_event("select_project", %{"project_id" => id}, socket) do
+    active = if id == "", do: nil, else: id
+
+    {:noreply,
+     socket
+     |> assign(:active_project_id, active)
+     |> load_agents()}
+  end
 
   # Switch the orchestrator's harness (Claude ⇄ pi ⇄ …). Applies that harness's
   # provider/model defaults (Claude ⇒ anthropic/opus; pi ⇒ operator-chosen), so the
@@ -2836,6 +2856,12 @@ defmodule RepoBuilderWeb.ConsoleLive do
         model_options={@model_options}
         recent_models={@recent_models}
       />
+
+      <div class="flex items-center gap-3 border-b border-zinc-800 px-3 py-1">
+        <.switcher projects={@projects} active_project_id={@active_project_id} />
+        <.link navigate={~p"/projects"} class="text-xs text-cyan-400">manage</.link>
+        <.link navigate={~p"/plan"} class="text-xs text-cyan-400">plan a run</.link>
+      </div>
 
       <.budget_banner state={@budget_state} />
 

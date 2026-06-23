@@ -6,10 +6,12 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
   tells the LLM it is a meta-agent that creates/commands worker agents via its
   tools rather than doing the work itself.
   """
+  alias RepoBuilder.Commands
   alias RepoBuilder.Definitions
   alias RepoBuilder.Harness.Registry
   alias RepoBuilder.Orchestrator.{Orchestrator, Templates, ToolCatalog}
   alias RepoBuilder.Orchestrators
+  alias RepoBuilder.Projects
   alias RepoBuilder.WorkflowEngine.Catalog
 
   @doc "Build the system prompt for `orchestrator`."
@@ -100,6 +102,7 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
 
     Working directory:
     #{working_dir_block(orchestrator)}
+    #{project_primer_block(orchestrator)}
 
     Worker specialization (name workers by the role they play):
     - builder: implement features, write code
@@ -180,6 +183,23 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
   # from (the repo root where the orchestrator's prompts/scripts live).
   @spec platform_root() :: String.t()
   defp platform_root, do: File.cwd!()
+
+  # Inject the active project's primed context (agentic-layer adaptor) when the
+  # orchestrator's working dir maps to a registered Project carrying a stored primer.
+  # No project / no primer ⇒ "" (back-compatible: prompt is unchanged when nil).
+  @spec project_primer_block(Orchestrator.t()) :: String.t()
+  defp project_primer_block(%Orchestrator{working_dir: working_dir})
+       when is_binary(working_dir) and working_dir != "" do
+    case Projects.get_by_root_path(working_dir) do
+      %Projects.Project{context_primer: primer} when is_binary(primer) and primer != "" ->
+        "\n" <> primer
+
+      _ ->
+        ""
+    end
+  end
+
+  defp project_primer_block(%Orchestrator{}), do: ""
 
   # Make the brain self-aware of its execution context (harness + provider + model).
   @spec own_harness_block(Orchestrator.t()) :: String.t()
@@ -262,6 +282,28 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
   defp slash_commands_block(%Orchestrator{working_dir: working_dir}) do
     dir = if is_binary(working_dir) and working_dir != "", do: working_dir, else: nil
 
+    case dir && Projects.get_by_root_path(dir) do
+      %Projects.Project{} = project -> resolved_slash_block(project)
+      _ -> discovered_slash_block(dir)
+    end
+  end
+
+  # Agentic-layer adaptor: list the RESOLVED command set for the active project with
+  # provenance (which layer/pack won), so the orchestrator sees stack-correct commands.
+  @spec resolved_slash_block(Projects.Project.t()) :: String.t()
+  defp resolved_slash_block(project) do
+    case Commands.resolve_all(project) do
+      [] ->
+        "  (none resolved for this project)"
+
+      resolved ->
+        Enum.map_join(resolved, "\n", fn r -> "  - /#{r.name} (#{r.provenance})" end)
+    end
+  end
+
+  # Nil-project fallback: today's path-based merged (app ∪ working-dir) discovery.
+  @spec discovered_slash_block(String.t() | nil) :: String.t()
+  defp discovered_slash_block(dir) do
     case Definitions.list(:slash_command, dir) do
       [] ->
         "  (none discovered — drop a markdown file in `.claude/commands/`)"

@@ -23,6 +23,7 @@ defmodule RepoBuilder.Agents.Agent do
           status: status(),
           config: map(),
           orchestrator_id: Ecto.UUID.t() | nil,
+          project_id: Ecto.UUID.t() | nil,
           session_id: String.t() | nil,
           model: String.t() | nil,
           system_prompt: String.t() | nil,
@@ -40,6 +41,8 @@ defmodule RepoBuilder.Agents.Agent do
     # Additive worker-ownership/resume fields (§8). `orchestrator_id` ties a worker
     # to the orchestrator that spawned it; `session_id` resumes its CLI session.
     field :orchestrator_id, :binary_id
+    # Nullable target-repo scope (agentic-layer adaptor). nil = "the platform itself".
+    field :project_id, :binary_id
     field :session_id, :string
     field :model, :string
     field :system_prompt, :string
@@ -52,7 +55,7 @@ defmodule RepoBuilder.Agents.Agent do
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(agent, params) do
     agent
-    |> cast(params, [:name, :harness, :provider, :status, :config])
+    |> cast(params, [:name, :harness, :provider, :status, :config, :project_id])
     |> validate_required([:name, :harness, :provider])
     |> validate_length(:name, min: 1, max: 200)
     |> validate_inclusion(:harness, Registry.known(), message: "is not a registered harness")
@@ -79,6 +82,7 @@ defmodule RepoBuilder.Agents.Agent do
       :status,
       :config,
       :orchestrator_id,
+      :project_id,
       :session_id,
       :model,
       :system_prompt

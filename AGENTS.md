@@ -7,6 +7,13 @@ This is a web application written using the Phoenix web framework.
 - Use `mix precommit` alias when you are done with all changes and fix any pending issues
 - Use the already included and available `:req` (`Req`) library for HTTP requests, **avoid** `:httpoison`, `:tesla`, and `:httpc`. Req is included by default and is the preferred HTTP client for Phoenix apps
 
+### Agentic layer adaptor (target-repo Projects)
+
+- A **target repository** is a first-class `RepoBuilder.Projects.Project`. `RepoBuilder.Projects` is the ONLY `Repo` caller for `projects` (§8); `RepoBuilder.Plans` is the only caller for `plans`. Scope other tables with the **nullable** `project_id` FK — `nil` means "the platform itself" (the back-compatible default); never make it required.
+- **Adding a target repo**: register at `/projects` (paste an absolute path). `Projects.create_and_profile/1` runs `Projects.Profiler.profile/1` (git/stack/conventions/capabilities) and `Projects.ContextPrimer.render/1`, persisting the detected stack, capability map, and primed orchestrator context. `Projects.refresh_profile/1` re-runs it. The Profiler is fail-silent — never raises on a missing/unreadable repo.
+- **Commands are stack-aware**: do NOT hard-wire a toolchain into a command body. Use the capability tokens (`{{TEST_COMMAND}}`, `{{SPEC_DIR}}`, …) and let `RepoBuilder.Commands.Resolver` fill them per project. Author/override command bodies in versioned packs under `priv/command_packs/<pack>/<version>/commands/` — repo-local `.claude/commands` always wins. See `ai_docs/agentic-layer-adaptor.md`.
+- **Worktree isolation** (`Projects.Worktree`) is opt-in via `project.isolation_mode == :worktree`; the session runtime honours `opts[:isolation_mode]`. `:direct` is the default and unchanged.
+
 ### Phoenix v1.8 guidelines
 
 - **Always** begin your LiveView templates with `<Layouts.app flash={@flash} ...>` which wraps all inner content

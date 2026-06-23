@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan: Agentic Layer Adaptor &amp; Planning-Mode Wizard</title>
+<style>
+  :root {
+    /* Synced visual identity — professional, focused, minimal. Dark "orchestration console"
+       theme: deep slate canvas, cyan = the adaptor/connection seam, violet = agent intelligence,
+       amber = caution/decision. All embedded images are generated to match this palette. */
+    --bg:        #0d1117;
+    --bg-2:      #131a24;
+    --panel:     #161d29;
+    --panel-2:   #1b2430;
+    --border:    #243140;
+    --border-2:  #30404f;
+    --text:      #e6edf3;
+    --text-dim:  #9aa9b8;
+    --text-mute: #6b7a8a;
+    --cyan:      #2dd4bf;
+    --cyan-dim:  #14534d;
+    --violet:    #a78bfa;
+    --violet-dim:#3b2d63;
+    --amber:     #f4b740;
+    --amber-dim: #4a3a14;
+    --green:     #3fb950;
+    --red:       #f85149;
+    --mono: "SFMono-Regular", "JetBrains Mono", "Fira Code", ui-monospace, Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --radius: 10px;
+    --maxw: 1080px;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: var(--maxw); margin: 0 auto; padding: 48px 28px 120px; }
+
+  h1, h2, h3, h4 { line-height: 1.25; font-weight: 650; letter-spacing: -0.01em; }
+  h1 { font-size: 2.1rem; margin: 0 0 8px; }
+  h2 { font-size: 1.5rem; margin: 0 0 18px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1.18rem; margin: 0 0 10px; }
+  h4 { font-size: 1.0rem; margin: 22px 0 8px; color: var(--cyan); }
+  p { color: var(--text-dim); margin: 0 0 14px; }
+  strong { color: var(--text); font-weight: 620; }
+  a { color: var(--cyan); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 1px 6px;
+    color: #cde8e3;
+  }
+  pre {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--cyan);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+    overflow-x: auto;
+    margin: 14px 0;
+  }
+  pre code { background: none; border: none; padding: 0; color: #cde8e3; font-size: 0.82rem; line-height: 1.55; }
+
+  header.page { margin-bottom: 38px; }
+  .subtitle { color: var(--text-mute); font-size: 1.02rem; margin-top: 2px; }
+
+  details.meta { margin-top: 18px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); }
+  details.meta > summary { cursor: pointer; padding: 12px 16px; font-weight: 600; color: var(--text-dim); list-style: none; }
+  details.meta > summary::-webkit-details-marker { display: none; }
+  details.meta[open] > summary { border-bottom: 1px solid var(--border); }
+  details.meta dl { display: grid; grid-template-columns: 130px 1fr; gap: 6px 18px; margin: 0; padding: 14px 16px; font-size: 0.86rem; }
+  details.meta dt { color: var(--text-mute); font-family: var(--mono); }
+  details.meta dd { margin: 0; color: var(--text-dim); word-break: break-word; }
+
+  section { margin: 46px 0; scroll-margin-top: 24px; }
+
+  figure { margin: 22px 0; text-align: center; }
+  figure img { max-width: 100%; height: auto; border-radius: var(--radius); border: 1px solid var(--border-2); box-shadow: 0 8px 30px rgba(0,0,0,0.4); }
+  figcaption { color: var(--text-mute); font-size: 0.84rem; margin-top: 10px; font-style: italic; }
+  .img-placeholder {
+    border: 1px dashed var(--border-2); border-radius: var(--radius); padding: 34px 20px;
+    color: var(--text-mute); font-family: var(--mono); font-size: 0.82rem; background: var(--panel);
+  }
+
+  ul, ol { color: var(--text-dim); padding-left: 22px; }
+  li { margin: 5px 0; }
+
+  .tag { display: inline-block; font-family: var(--mono); font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+         letter-spacing: 0.04em; padding: 2px 7px; border-radius: 5px; vertical-align: middle; margin-right: 4px; }
+  .tag.existing { background: var(--violet-dim); color: var(--violet); border: 1px solid var(--violet); }
+  .tag.new { background: var(--cyan-dim); color: var(--cyan); border: 1px solid var(--cyan); }
+
+  .files ul { list-style: none; padding-left: 0; }
+  .files li { padding: 7px 0; border-bottom: 1px solid var(--border); }
+
+  .phase { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px 24px; margin: 20px 0; }
+  .phase h3 { display: flex; align-items: baseline; gap: 10px; }
+  .status { font-family: var(--mono); font-size: 0.78rem; color: var(--amber); background: var(--panel-2); border: 1px solid var(--border-2); padding: 1px 6px; border-radius: 5px; }
+
+  ul.checklist { list-style: none; padding-left: 4px; }
+  ul.checklist li { margin: 7px 0; color: var(--text-dim); }
+  ul.checklist .status { margin-right: 8px; }
+
+  .loop { margin: 16px 0 4px; padding: 12px 16px; background: var(--amber-dim); border: 1px solid var(--amber); border-radius: 8px; color: #f6dca0; font-size: 0.9rem; }
+  #validation .loop { background: var(--cyan-dim); border-color: var(--cyan); color: #b8f0e9; }
+
+  .callout { background: var(--panel-2); border: 1px solid var(--border-2); border-left: 3px solid var(--violet); border-radius: 8px; padding: 14px 18px; margin: 16px 0; }
+  .callout.cyan { border-left-color: var(--cyan); }
+  .callout.amber { border-left-color: var(--amber); }
+
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--text-mute); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  td { color: var(--text-dim); }
+
+  #questionables details, #amendments details { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; margin: 10px 0; }
+  #questionables summary, #amendments summary { cursor: pointer; padding: 12px 16px; font-weight: 600; color: var(--text); }
+  #questionables .qa-answer { padding: 0 16px 14px; margin: 0; }
+
+  nav.toc { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 22px; margin: 28px 0; }
+  nav.toc ol { columns: 2; column-gap: 40px; margin: 0; }
+  nav.toc a { color: var(--text-dim); }
+</style>
+</head>
+<body>
+<main>
+
+  <!-- ===== HEADER + UPDATABLE METADATA ===== -->
+  <header class="page">
+    <h1>Plan: Agentic Layer Adaptor &amp; Planning-Mode Wizard</h1>
+    <p class="subtitle">Turn <code>repo_builder_elixir</code> from a self-hosted orchestration console into a portable agentic layer that adapts to <em>any</em> target repository — with a guided planning-mode wizard on top.</p>
+    <details class="meta">
+      <summary>Metadata</summary>
+      <dl>
+        <dt>created</dt>      <dd>2026-06-23</dd>
+        <dt>modified</dt>     <dd>2026-06-23, 2026-06-23</dd>
+        <dt>commits</dt>      <dd>9ea54ab</dd>
+        <dt>agent name</dt>   <dd>Claude Opus 4.8 (1M)</dd>
+        <dt>session id</dt>   <dd>9c142005-6722-4474-9441-6f28a25fe075</dd>
+        <dt>back refs</dt>    <dd>specs/issue-c-adw-orchbrain-sdlc_planner-orchestrator-agent-multi-harness.md, specs/issue-a-adw-multi-layered-sdlc_planner-orchestration-console.md, specs/issue-the-adw-directory-sdlc_planner-dir-picker-paste-path.md, specs/issue-d-adw-b7f4c2a9-sdlc_planner-orchestrator-harness-provider-switching.md</dd>
+        <dt>forward refs</dt> <dd>—</dd>
+      </dl>
+    </details>
+  </header>
+
+  <!-- Hero image — synced to the :root visual identity. -->
+  <figure>
+    <img src="agentic-layer-adaptor-and-planning-wizard/hero.png" alt="One orchestration hub connected by cyan adaptor cables to several distinct repositories">
+
+    <figcaption>One deterministic orchestration core, adapting to any repository through a project-scoped adaptor seam.</figcaption>
+  </figure>
+
+  <nav class="toc">
+    <ol>
+      <li><a href="#purpose">Purpose</a></li>
+      <li><a href="#problem">Problem</a></li>
+      <li><a href="#solution">Solution</a></li>
+      <li><a href="#files">Relevant Files</a></li>
+      <li><a href="#phases">Implementation Phases</a></li>
+      <li><a href="#validation">Validation</a></li>
+      <li><a href="#questionables">Questionables</a></li>
+      <li><a href="#notes">Notes</a></li>
+    </ol>
+  </nav>
+
+  <!-- ===== PURPOSE ===== -->
+  <section id="purpose">
+    <h2>Purpose</h2>
+    <p>Make <code>repo_builder_elixir</code> genuinely useful as an <strong>agentic layer adaptor</strong> — a control plane an operator can point at <em>any</em> repository and immediately drive deterministic, observable AI workflows over it, regardless of harness (Claude / pi / Cursor / future). Today the platform is a superb orchestration runtime, but the <em>target repo</em> it works on is an ephemeral, loosely-structured <code>working_dir</code> string with no identity, profiling, isolation, or scoping. This plan promotes the target repo to a first-class <strong>Project</strong> abstraction, adds a <strong>repo onboarding/adaptation</strong> step that lets the platform fit itself to a repo's existing agent conventions, introduces a <strong>stack-aware command resolution layer</strong> so the plan/build/review/fix command bodies stop being hard-wired to one language and repo shape (today: Python + <code>uv</code>), optionally isolates each run in a git worktree, scopes the console UI to the active project, and layers a guided <strong>Planning-Mode Wizard</strong> that takes an operator from "a repo + a goal" to a launched, budgeted, previewed ADW run — producing a durable plan artifact along the way.</p>
+    <div class="callout amber"><strong>Architectural driver added 2026-06-23:</strong> the platform's slash-commands, ADW step prompts, and validators currently bake in one repo structure and toolchain (Python/<code>uv</code>; this Elixir repo's own commands were hand-ported once already). A real adaptor must hold <em>different versions of command <code>.md</code> files</em> per language/repo shape and resolve the right one per project. Phase 3 (Stack-Aware Command Resolution) is the answer; it extends the seams that already exist rather than inventing a parallel templating system.</div>
+  </section>
+
+  <!-- ===== PROBLEM ===== -->
+  <section id="problem">
+    <h2>Problem</h2>
+    <p>The platform can already <em>run</em> against an arbitrary directory: the orchestrator carries a nullable <code>working_dir</code> (<code>orchestrator.ex</code>), <code>FileBrowser</code> powers a cwd picker, the session runtime honours an operator-provided cwd (<code>session/server.ex</code> <code>resolve_workspace/3</code>), and <code>Definitions.Adw.scan/2</code> discovers ADW scripts in that dir. But that is the <em>floor</em>, not a product. Concretely:</p>
+    <ul>
+      <li><strong>No first-class target-repo identity.</strong> <code>working_dir</code> is a bare string on one orchestrator. There is no registry of repos, no per-repo defaults (preferred harness, model tier, budget cap, allowed ADWs), no per-repo history, and no metadata (git remote, default branch, language stack).</li>
+      <li><strong>No adaptation to the repo.</strong> A true "adaptor layer" should <em>profile</em> a repo on connect: detect stack, discover <code>.claude/</code> commands, <code>AGENTS.md</code>/<code>CLAUDE.md</code>, ADW scripts, and prime an orchestrator context doc. Right now ADW globbing is the only adaptation, and the system prompt only gets a raw path.</li>
+      <li><strong>No safe per-run isolation on a real repo.</strong> When the operator supplies a working dir, sessions run directly in it (<code>managed? == false</code>), so concurrent agents on the same repo can stomp each other's files and the operator's git state. There is no worktree/branch-per-run option.</li>
+      <li><strong>No project scoping of observability.</strong> Agents, <code>workflow_runs</code>, logs, and cost are global; you cannot answer "what has the platform done <em>to this repo</em>, and what did it cost?"</li>
+      <li><strong>Planning is implicit.</strong> Launching an ADW means knowing the catalog slug, harness, model, and budget up front. There is no guided path from intent → previewed, costed, durable plan → launch.</li>
+    </ul>
+    <figure>
+      <img src="agentic-layer-adaptor-and-planning-wizard/problem.png" alt="A bare folder shared unsafely by tangled, colliding agent threads">
+
+      <figcaption>Today the "target repo" is an unscoped path that concurrent agents share unsafely.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== SOLUTION ===== -->
+  <section id="solution">
+    <h2>Solution</h2>
+    <p>Introduce a <strong>Project (Target Repo)</strong> domain that everything in the platform can scope to, plus a <strong>Repo Adapter</strong> that profiles and primes a repo on connect, a <strong>stack-aware command resolution layer</strong>, optional <strong>git-worktree isolation</strong> per run, a <strong>project-aware console</strong>, and a <strong>Planning-Mode Wizard</strong>. Each piece reuses the existing harness-blind seams — no change to the canonical <code>Event</code> sum type, the registry, or the session runtime contract.</p>
+    <ol>
+      <li><strong>Project domain &amp; persistence</strong> — a <code>projects</code> table + <code>RepoBuilder.Projects</code> context. A project is <code>{name, root_path, git_remote, default_branch, stack, capabilities, command_pack, command_pack_version, default_harness, default_model_tier, budget_cap_usd, isolation_mode}</code>. Add a <em>nullable</em> <code>project_id</code> FK to <code>agents</code>, <code>workflow_runs</code>, and orchestrator config (back-compat: <code>nil</code> = "platform itself", today's behaviour).</li>
+      <li><strong>Repo Adapter / onboarding</strong> — <code>Projects.Profiler</code> inspects a root path (git metadata, stack heuristics, a typed <em>capability map</em>, discovered <code>.claude/</code> commands, <code>AGENTS.md</code>/<code>CLAUDE.md</code>, ADW scripts) and writes a primed <em>project context</em> consumed by <code>orchestrator/system_prompt.ex</code> and surfaced in the UI.</li>
+      <li><strong>Stack-aware command resolution</strong> — versioned <strong>command packs</strong> (<code>priv/command_packs/&lt;pack&gt;/&lt;version&gt;/</code>) plus a <code>Commands.Resolver</code> that picks the right command body per project through a precedence chain (<em>repo-local → pinned project pack → stack-matched pack → generic base</em>) and fills <em>capability tokens</em> (<code>{{TEST_COMMAND}}</code>, <code>{{SPEC_DIR}}</code>, …). It extends the existing <code>SlashCommand.scan/2</code> precedence, <code>SlashExpander</code> expansion, and <code>PromptStandard.TokenRegistry</code>/<code>Builder.render/2</code> — not a new engine.</li>
+      <li><strong>Worktree isolation (opt-in)</strong> — <code>Projects.Worktree</code> creates a git worktree + branch per run under a scratch base, so parallel agents never collide and changes land on a reviewable branch; falls through to direct-cwd for non-git repos or when disabled.</li>
+      <li><strong>Project-aware console</strong> — a global project switcher in the <code>ConsoleLive</code> header and a Project dashboard (repo health, capability map, resolved command set with provenance, discovered ADWs, recent runs, cost rollup) via new <code>ProjectComponents</code>.</li>
+      <li><strong>Planning-Mode Wizard</strong> — a multi-step <code>PlanningLive</code> at <code>/plan</code>: pick project → state goal → resolve workflow type/harness/model/budget (reusing <code>WorkflowEngine.Catalog</code>, the <code>Commands.Resolver</code>, <code>PromptStandard.Builder</code>, <code>ContextWindow</code>, <code>Budget</code>) → preview <em>stack-correct</em> resolved steps + estimated cost/context → launch. It persists a durable <strong>Plan artifact</strong> tied to the project.</li>
+    </ol>
+    <figure>
+      <img src="agentic-layer-adaptor-and-planning-wizard/solution.png" alt="A layered stack: Project layer wrapping a repo, feeding the orchestrator core and harness adapters">
+
+      <figcaption>The Project layer is the new seam: it adapts any repo to the existing harness-blind core.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== RELEVANT FILES ===== -->
+  <section id="files" class="files">
+    <h2>Relevant Files</h2>
+
+    <h3>Existing Files</h3>
+    <ul>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/orchestrator.ex</code> — holds <code>working_dir</code>; gains an optional <code>project_id</code> and resolves project defaults.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/system_prompt.ex</code> — <code>working_dir_block/1</code>, <code>discovered_adws/1</code>, <code>slash_commands_block/1</code>; extend with the primed project-context block.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/server.ex</code> — spawns sessions with <code>cwd: orchestrator.working_dir</code>; route through the project/worktree resolver.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/session/server.ex</code> — <code>resolve_workspace/3</code> (<code>managed?</code> flag); add worktree-backed cwd resolution.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/file_browser.ex</code> — directory picker reused by the project-registration flow.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/definitions/adw.ex</code> — <code>scan/2</code>; called per-project by the Profiler.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/definitions/slash_command.ex</code> — <code>scan/2</code> already merges app ∪ working-dir (working-dir wins); becomes the top of the formal resolution precedence.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/prompts/slash_expander.ex</code> — control-owned expansion + <code>$ARGUMENTS</code>/<code>$1</code> substitution; routed through the new <code>Commands.Resolver</code>.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/prompt_standard/token_registry.ex</code> — closed <code>{{TOKEN}}</code> registry; extended with capability tokens (<code>{{TEST_COMMAND}}</code>, <code>{{SPEC_DIR}}</code>, …).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/workflow_engine/catalog.ex</code> — ADW type registry the wizard renders and validates against.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/workflows.ex</code> &amp; <code>workflows/workflow_run.ex</code> — add nullable <code>project_id</code>; scope listing/rollup.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/agents.ex</code> &amp; <code>agents/agent.ex</code> — add nullable <code>project_id</code>; project-scoped roster.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/budget.ex</code>, <code>cost_center.ex</code> — reuse for per-project budget cap + cost rollup.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/prompt_standard/builder.ex</code> — wizard reuses for prompt assembly/preview.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/context_window.ex</code> — wizard reuses for context-budget estimate.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/live/console_live.ex</code> — add the global project switcher + active-project assign.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/components/console_components.ex</code> — host the switcher chip + project header.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/router.ex</code> — add <code>/plan</code> and <code>/projects</code> live routes.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/schema.ex</code> — shared <code>binary_id</code> + timestamps macro for the new schema.</li>
+      <li><span class="tag existing">existing</span> <code>priv/repo/seeds.exs</code> — seed a default "self" project for back-compat.</li>
+    </ul>
+
+    <h3>New Files</h3>
+    <ul>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/projects.ex</code> — the <code>Projects</code> context (only <code>Repo</code> caller for projects).</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/projects/project.ex</code> — typed Ecto schema + changeset (<code>@enforce_keys</code>, <code>@spec</code>, validated harness/isolation enums).</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/projects/profiler.ex</code> — pure-ish repo profiler: git metadata, stack heuristics, discovered conventions → <code>profile()</code> struct.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/projects/context_primer.ex</code> — renders the profile into an orchestrator context block + a stored project README excerpt.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/projects/capabilities.ex</code> — typed capability map (<code>language</code>, <code>package_manager</code>, <code>test/build/lint/format/typecheck/run</code> commands, <code>spec_dir</code>, <code>source_dirs</code>, <code>test_dir</code>) + per-stack detection rules; operator-overridable.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/commands.ex</code> &amp; <code>lib/repo_builder/commands/resolver.ex</code> — the resolution context + the precedence-chain resolver returning <code>{:ok, %Resolved{body, layer, pack, version, provenance}}</code>.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/commands/pack.ex</code> — a command pack value (id, version, root path) + pure discovery/listing of <code>priv/command_packs</code> and the operator packs dir; semver/"latest"/"auto" resolution.</li>
+      <li><span class="tag new">new</span> <code>priv/command_packs/generic/&lt;version&gt;/commands/**/*.md</code> — base, language-agnostic command bodies written against capability tokens.</li>
+      <li><span class="tag new">new</span> <code>priv/command_packs/{elixir,python-uv,node,rust,go}/&lt;version&gt;/commands/**/*.md</code> — stack packs that override individual commands where token-templating is insufficient.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/projects/worktree.ex</code> — git-worktree create/cleanup per run; idempotent; non-git fallthrough.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/plans/plan.ex</code> &amp; <code>lib/repo_builder/plans.ex</code> — durable Plan artifact (project_id, goal, workflow_type, resolved steps, estimate) + context.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/plans/planner.ex</code> — pure resolver: goal + project defaults + catalog → a previewable, costed plan (no side effects).</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder_web/live/planning_live.ex</code> — the multi-step Planning-Mode Wizard at <code>/plan</code>.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder_web/live/projects_live.ex</code> — project list/registration + project dashboard at <code>/projects</code>.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder_web/components/project_components.ex</code> — typed project switcher chip, repo-health panel, capability/command-pack panel (resolved command + provenance), plan-preview card.</li>
+      <li><span class="tag new">new</span> <code>priv/repo/migrations/*_create_projects_and_scope.exs</code> — <code>projects</code> + <code>plans</code> tables and nullable <code>project_id</code> FKs.</li>
+    </ul>
+  </section>
+
+  <!-- ===== IMPLEMENTATION PHASES ===== -->
+  <section id="phases">
+    <h2>Implementation Phases</h2>
+    <p><strong>IMPORTANT:</strong> Execute every phase and task step by step, in order, top to bottom. Each phase must leave the green gate passing before the next begins.</p>
+    <p>Status markers: <code>[]</code> idle · <code>[wip]</code> in progress · <code>[x]</code> complete · <code>[f]</code> failed. All start as <code>[]</code>.</p>
+
+    <!-- ===== PHASE 1 ===== -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 1: Project (Target Repo) domain &amp; persistence</h3>
+      <p>Promote the target repo to a first-class entity without breaking the current "platform works on itself" default. Everything new is <em>additive</em> and the <code>project_id</code> FKs are nullable.</p>
+
+      <figure>
+        <img src="agentic-layer-adaptor-and-planning-wizard/phase1.png" alt="Entity-relationship diagram: a Project box linked by dotted nullable lines to Agent, Workflow Run, and Plan">
+
+        <figcaption>The Project entity and its nullable, back-compatible relationships.</figcaption>
+      </figure>
+
+      <h4>1. Schema &amp; migration</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Create <code>RepoBuilder.Projects.Project</code> using <code>RepoBuilder.Schema</code>: fields <code>name</code>, <code>root_path</code>, <code>git_remote</code>, <code>default_branch</code>, <code>stack</code> (<code>:map</code>), <code>capabilities</code> (<code>:map</code> — the resolved capability token values, Phase 2/3), <code>command_pack</code> (<code>:string</code>, default <code>"auto"</code>), <code>command_pack_version</code> (<code>:string</code>, default <code>"latest"</code>), <code>default_harness</code> (validated against <code>Harness.Registry.known/0</code>), <code>default_model_tier</code>, <code>budget_cap_usd</code> (<code>:decimal</code>), <code>isolation_mode</code> (<code>Ecto.Enum [:direct, :worktree]</code>, default <code>:direct</code>), <code>context_primer</code> (<code>:text</code>), <code>status</code>.</li>
+        <li><code class="status">[]</code> Write <code>@type t</code> + <code>@enforce_keys</code> + a <code>changeset/2</code> with <code>@spec</code>, <code>validate_required</code>, <code>validate_inclusion(:default_harness, ...)</code>, and a unique constraint on <code>name</code>.</li>
+        <li><code class="status">[]</code> Migration: create <code>projects</code> (binary_id); add nullable <code>project_id</code> FK + index to <code>agents</code> and <code>workflow_runs</code>; create <code>plans</code> table (Phase 5 uses it, define now).</li>
+        <li><code class="status">[]</code> Seed a default project row in <code>seeds.exs</code> representing the platform repo itself (<code>root_path = File.cwd!()</code>), so existing global records logically map to it.</li>
+      </ul>
+
+      <h4>2. Projects context</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Implement <code>RepoBuilder.Projects</code> with <code>list_projects/0</code>, <code>get_project!/1</code>, <code>create_project/1</code>, <code>update_project/2</code>, <code>delete_project/1</code>, <code>active_or_default/1</code> — all <code>@spec</code>'d, the only <code>Repo</code> caller for projects.</li>
+        <li><code class="status">[]</code> Add <code>scope_by_project/2</code> query helpers in <code>Agents</code> and <code>Workflows</code> (nil project_id ⇒ unscoped, current behaviour).</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>ExUnit context tests against the test repo via the existing <code>DataCase</code>. Cover: changeset validation (bad harness rejected, name uniqueness), CRUD round-trips, nullable-FK back-compat (an agent/run with <code>project_id == nil</code> still lists), and the seeded default project.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/projects_test.exs</code> — context CRUD + changeset + scoping pass.</li>
+        <li><code class="status">[]</code> <code>mix ecto.migrate &amp;&amp; mix ecto.rollback &amp;&amp; mix ecto.migrate</code> — migration is reversible.</li>
+        <li><code class="status">[]</code> <code>mix dialyzer</code> — new specs are sound.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- ===== PHASE 2 ===== -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 2: Repo Adapter — profiling &amp; context priming</h3>
+      <p>Make the platform <em>adapt</em> to a repo on connect: read what the repo already declares about agentic work and feed it into the orchestrator's system prompt and the UI.</p>
+
+      <h4>1. Profiler</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Implement <code>RepoBuilder.Projects.Profiler.profile/1</code> returning a typed <code>profile()</code>: git remote + default branch (via <code>git</code> shell-out, fail-silent to <code>nil</code>), stack heuristics (<code>mix.exs</code>/<code>package.json</code>/<code>pyproject.toml</code>/<code>Cargo.toml</code>/<code>go.mod</code> → language + build tool), and discovered conventions: <code>.claude/commands/*</code>, <code>AGENTS.md</code>/<code>CLAUDE.md</code> presence, and <code>Definitions.Adw.scan(root, :working_dir)</code>.</li>
+        <li><code class="status">[]</code> Implement <code>Projects.Capabilities.detect/1</code>: derive the typed capability map (test/build/lint/format/typecheck/run commands, package manager, spec/source/test dirs) from the detected stack — the data Phase 3 templates against. Persist it on <code>project.capabilities</code>; allow operator overrides in the changeset.</li>
+        <li><code class="status">[]</code> Reuse <code>FileBrowser</code> path validation; never raise on a missing/unreadable repo — return partial profiles and a best-effort capability map (<code>:unknown</code> language ⇒ empty/generic capabilities).</li>
+      </ul>
+
+      <h4>2. Context primer + orchestrator wiring</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Implement <code>Projects.ContextPrimer.render/1</code>: profile → a concise markdown block (stack, conventions, discovered ADWs/commands) stored on <code>project.context_primer</code>.</li>
+        <li><code class="status">[]</code> Extend <code>orchestrator/system_prompt.ex</code> to inject the active project's primer alongside <code>working_dir_block/1</code> (no change when project is nil).</li>
+        <li><code class="status">[]</code> On project create/refresh, run the Profiler and persist the primer; expose a <code>refresh_profile/1</code> in <code>Projects</code>.</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>Use fixture repo directories under <code>test/support/fixtures/</code> (a mini Elixir repo, a mini Node repo, a bare dir) to assert deterministic profiling. Git calls are exercised against the project's own repo and guarded for absence.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/projects/profiler_test.exs</code> — stack + convention detection across fixtures, fail-silent on missing dirs.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/system_prompt_test.exs</code> — primer appears when project set, absent when nil.</li>
+        <li><code class="status">[]</code> <code>mix credo --strict</code> — every public fn specced.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- ===== PHASE 3 ===== -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 3: Stack-aware command resolution layer</h3>
+      <p>Stop hard-wiring command bodies to one language and repo shape. The architecture has three cooperating pieces, each <em>extending an existing seam</em>: a <strong>capability map</strong> (the small per-stack data that varies — avoids duplicating every command per language), <strong>versioned command packs</strong> (full <code>.md</code> overrides + explicit versioning for when templating is not enough — the "hold different versions" requirement), and a <strong>resolver</strong> that combines a precedence chain with capability-token fill and reports provenance.</p>
+
+      <figure>
+        <img src="agentic-layer-adaptor-and-planning-wizard/phase3.png" alt="A command request falling through four resolution layers, first match glowing, capability tokens filled on the right">
+        <figcaption>A command resolves through repo-local → pinned pack → stack pack → generic base, then capability tokens are filled.</figcaption>
+      </figure>
+
+      <div class="callout cyan"><strong>Design principle — the repo wins.</strong> Because this is an <em>adaptor</em>, the target repo's own <code>.claude/commands/&lt;name&gt;.md</code> always takes precedence: the platform adapts to the repo, not the reverse. <code>Definitions.SlashCommand.scan/2</code> already encodes exactly this (working-dir beats app-root); Phase 3 generalizes it into a formal, versioned chain.</div>
+
+      <h4>1. Capability tokens (anti-duplication core)</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Extend <code>PromptStandard.TokenRegistry</code> with a documented, closed set of capability tokens: <code>{{TEST_COMMAND}}</code>, <code>{{BUILD_COMMAND}}</code>, <code>{{LINT_COMMAND}}</code>, <code>{{FORMAT_COMMAND}}</code>, <code>{{TYPECHECK_COMMAND}}</code>, <code>{{RUN_COMMAND}}</code>, <code>{{PACKAGE_MANAGER}}</code>, <code>{{SPEC_DIR}}</code>, <code>{{SOURCE_DIRS}}</code>, <code>{{TEST_DIR}}</code>.</li>
+        <li><code class="status">[]</code> Fill these via the existing <code>PromptStandard.Builder.render/2</code> machinery from the project's <code>capabilities</code> map (Phase 2) — one base command body works across every stack that supplies the tokens; no per-language copy needed for the common case.</li>
+      </ul>
+
+      <h4>2. Versioned command packs</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Implement <code>Commands.Pack</code>: discover packs under <code>priv/command_packs/&lt;pack&gt;/&lt;version&gt;/commands/**/*.md</code> plus a configurable operator-packs dir; resolve <code>"latest"</code> (newest version) and <code>"auto"</code> (the pack matching the project's detected stack). Pure, fail-silent listing — a missing dir yields <code>[]</code>.</li>
+        <li><code class="status">[]</code> Ship a <code>generic</code> base pack (commands written entirely against capability tokens) plus stack packs (<code>elixir</code>, <code>python-uv</code>, <code>node</code>, <code>rust</code>, <code>go</code>) that override only the individual commands where prose genuinely differs. Port this repo's current Elixir/<code>mix</code> commands into the <code>elixir</code> pack as the reference migration.</li>
+      </ul>
+
+      <h4>3. Resolver + integration</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Implement <code>Commands.Resolver.resolve(project, name)</code> walking the precedence chain — <strong>repo-local <code>.claude/commands</code> → pinned project pack/version → stack-matched pack → <code>generic</code> base</strong> — first hit wins, then fill capability tokens, returning <code>{:ok, %Resolved{body, layer, pack, version, provenance}}</code> or <code>{:error, :not_found}</code>.</li>
+        <li><code class="status">[]</code> Route <code>Prompts.SlashExpander</code> through the resolver (keeping its <code>$ARGUMENTS</code>/<code>$1</code> substitution and reserved-command protection), and make <code>system_prompt.ex</code> <code>slash_commands_block/1</code> list the <em>resolved</em> set for the active project with provenance. Nil project ⇒ today's app ∪ working-dir behaviour, unchanged.</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>Fixture packs under <code>test/support/command_packs/</code> + fixture repos (one with a repo-local override, one without). Assert: precedence order (repo-local beats pinned pack beats stack pack beats generic), <code>"auto"</code>/<code>"latest"</code>/pinned-version resolution, capability-token fill from a project capability map, provenance correctness, and that an unknown command yields <code>{:error, :not_found}</code> (SlashExpander then passes the literal through, unchanged).</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/commands/resolver_test.exs</code> — precedence, version resolution, token fill, provenance.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/prompts/slash_expander_test.exs</code> — expansion via resolver; no regression to existing pass-through/reserved behaviour.</li>
+        <li><code class="status">[]</code> <code>mix dialyzer</code> — resolver/pack/capabilities contracts sound.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- ===== PHASE 4 ===== -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 4: Git-worktree isolation per run (opt-in)</h3>
+      <p>Give parallel agents a safe, reviewable place to work on a real repo without stomping the operator's tree. Strictly opt-in via <code>project.isolation_mode == :worktree</code>; <code>:direct</code> preserves today's behaviour exactly.</p>
+
+      <h4>1. Worktree module</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Implement <code>Projects.Worktree.checkout/2</code>: <code>git worktree add &lt;scratch_base&gt;/&lt;run_id&gt; -b adw/&lt;run_id&gt; &lt;default_branch&gt;</code>; returns <code>{:ok, path}</code> or falls through to direct cwd for non-git repos.</li>
+        <li><code class="status">[]</code> Implement <code>cleanup/1</code> (<code>git worktree remove --force</code>) — idempotent, tolerant of already-removed trees; retain-on-failure option mirroring the session workspace policy.</li>
+      </ul>
+
+      <h4>2. Session-runtime integration</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Thread <code>isolation_mode</code> through <code>orchestrator/server.ex</code> spawn opts into <code>session/server.ex</code> <code>resolve_workspace/3</code>: <code>:worktree</code> ⇒ provision a worktree-backed cwd (managed cleanup); <code>:direct</code> ⇒ unchanged.</li>
+        <li><code class="status">[]</code> Record the worktree path + branch on the <code>workflow_run</code> for the UI handoff (branch name surfaced for PR/merge).</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>Drive against a throwaway git fixture repo created in <code>setup</code>; assert worktree creation, branch naming, isolation (two runs get distinct trees), and idempotent cleanup. Non-git dir asserts the direct fallthrough. No external harness needed (Fake adapter).</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/projects/worktree_test.exs</code> — create/isolate/cleanup + non-git fallthrough.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/session/server_test.exs</code> — worktree cwd wired without regressing direct/managed paths.</li>
+        <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — no regressions in the session suite.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- ===== PHASE 5 ===== -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 5: Project-aware console UI</h3>
+      <p>Surface projects in the live UI: a global switcher, a registration flow reusing the directory picker, and a project dashboard. Keep <code>ConsoleLive</code>'s streams-based, flat-memory rendering intact.</p>
+
+      <figure>
+        <img src="agentic-layer-adaptor-and-planning-wizard/phase4.png" alt="Dark dashboard mockup with project switcher chip, repo-health panel, and recent-runs list">
+
+        <figcaption>The console gains a project switcher and a per-repo health dashboard.</figcaption>
+      </figure>
+
+      <h4>1. Project switcher + scoping</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add <code>ProjectComponents.switcher/1</code> to the <code>ConsoleLive</code> header; selecting a project sets an <code>active_project</code> assign and scopes the agent roster / run lists / cost badges.</li>
+        <li><code class="status">[]</code> Registration modal reuses <code>FileBrowser</code> (paste-path + navigate); on confirm, create the project and run the Profiler (Phase 2), showing the detected stack/conventions before save.</li>
+      </ul>
+
+      <h4>2. Project dashboard</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Build <code>ProjectsLive</code> (<code>/projects</code>): list projects; per-project panel with repo health (stack badges, branch, isolation mode), discovered ADWs/commands, recent runs, and a cost rollup via <code>CostCenter.Rollup</code>.</li>
+        <li><code class="status">[]</code> Add a <strong>command-pack panel</strong>: show the project's capability map, the pinned pack + version (with a picker for <code>auto</code>/<code>latest</code>/explicit version), and a per-command resolved preview with provenance (which layer/pack/version won) — letting an operator confirm or override how each command resolves for this repo.</li>
+        <li><code class="status">[]</code> Add routes for <code>/projects</code> in <code>router.ex</code>; link the switcher's "manage" action to it.</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p><code>Phoenix.LiveViewTest</code> for switcher selection, registration round-trip (with a fixture dir), and dashboard rendering. Assert scoping changes the rendered roster and that nil-project ("platform") remains selectable.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder_web/live/projects_live_test.exs</code> — register, switch, dashboard render.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder_web/live/console_live_test.exs</code> — switcher scopes roster; no regression to existing console flows.</li>
+        <li><code class="status">[]</code> <code>mix format --check-formatted</code> — heex/ex formatting clean.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- ===== PHASE 6 ===== -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 6: Planning-Mode Wizard</h3>
+      <p>A guided, multi-step LiveView that takes the operator from <em>project + goal</em> to a <em>previewed, costed, launched</em> ADW run, persisting a durable Plan artifact. It composes existing engines; it does not invent a new execution path.</p>
+
+      <figure>
+        <img src="agentic-layer-adaptor-and-planning-wizard/phase5.png" alt="Five-step wizard flow: Project, Goal, Workflow, Preview, Launch as connected pill nodes">
+
+        <figcaption>Project → Goal → Workflow → Preview → Launch, with a durable plan artifact at the end.</figcaption>
+      </figure>
+
+      <h4>1. Pure planner + Plan artifact</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Implement <code>RepoBuilder.Plans.Planner.resolve/1</code>: <code>{project, goal, workflow_type, overrides}</code> → a previewable plan — resolved step list (via <code>WorkflowEngine.Catalog.steps/2</code>), per-step prompt previews resolved <em>for the project's stack</em> (via <code>Commands.Resolver</code> + <code>PromptStandard.Builder</code>, so the preview shows the real stack-correct command body and its provenance), estimated context (via <code>Orchestrator.ContextWindow</code>), and an estimated cost band (via <code>Harness.Pricing</code> / cost estimate). Pure, no side effects.</li>
+        <li><code class="status">[]</code> Implement <code>RepoBuilder.Plans</code> + <code>Plans.Plan</code> schema to persist a plan (<code>project_id</code>, <code>goal</code>, <code>workflow_type</code>, <code>resolved_steps</code> JSONB, <code>estimate</code> JSONB, <code>status</code>, optional <code>workflow_run_id</code> once launched).</li>
+      </ul>
+
+      <h4>2. Wizard LiveView</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Build <code>PlanningLive</code> at <code>/plan</code> with steps: (1) pick/register project, (2) state goal + classify intent (feat/fix/chore via lightweight keyword heuristic), (3) choose workflow type + harness + model tier + budget cap (defaults pre-filled from the project), (4) preview resolved steps, prompt previews, context + cost estimate, and worktree branch name, (5) confirm → persist Plan + launch.</li>
+        <li><code class="status">[]</code> Launch reuses the existing path: enforce <code>Budget.Guard</code> against the cap, then create the <code>workflow_run</code> / start the ADW exactly as the console does today; link the run back to the Plan.</li>
+        <li><code class="status">[]</code> Render the persisted Plan as a shareable read-only page (project-scoped), so plans are durable artifacts — mirroring this HTML plan's lifecycle.</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>Unit-test the pure <code>Planner.resolve/1</code> (deterministic steps, estimate shape, budget-cap interplay). <code>LiveViewTest</code> walks the full wizard against the Fake adapter and asserts a launched run + persisted plan. Assert the budget guard blocks a plan whose estimate exceeds the cap.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/plans/planner_test.exs</code> — resolution + estimate + budget interplay.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder_web/live/planning_live_test.exs</code> — full wizard → launch + persisted plan.</li>
+        <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — full suite green.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- ===== PHASE 7 ===== -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 7: Docs, seeds &amp; full green gate</h3>
+      <p>Make the new capability discoverable and prove the whole platform is still green end-to-end.</p>
+
+      <h4>1. Documentation &amp; seeds</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Update <code>README.md</code>: new routes (<code>/plan</code>, <code>/projects</code>), the Project/adaptor model, isolation modes, and the planning wizard.</li>
+        <li><code class="status">[]</code> Update <code>AGENTS.md</code> with the Projects context conventions and the "adding a target repo" flow.</li>
+        <li><code class="status">[]</code> Add an <code>ai_docs/agentic-layer-adaptor.md</code> describing the adaptor seam, plus a <strong>command-pack authoring guide</strong> (capability tokens, pack layout, versioning, precedence, how to add a new stack pack).</li>
+      </ul>
+
+      <h4>2. Testing Strategy — the project-wide green gate</h4>
+      <p>The five-command green gate is the contract for "done". It must pass verbatim, plus a manual live-acceptance against a real external repo (the one new manual step).</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix compile --warnings-as-errors</code> — clean compile.</li>
+        <li><code class="status">[]</code> <code>mix format --check-formatted</code> — formatting clean.</li>
+        <li><code class="status">[]</code> <code>mix credo --strict</code> — lint + @spec gate clean.</li>
+        <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — full suite green (existing + new).</li>
+        <li><code class="status">[]</code> <code>mix dialyzer</code> — no new contract violations.</li>
+        <li><code class="status">[]</code> Manual: register an <em>external</em> git repo as a project, run the wizard end-to-end with the Fake adapter, confirm a worktree branch + persisted plan.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+  </section>
+
+  <!-- ===== GLOBAL VALIDATION ===== -->
+  <section id="validation">
+    <h2>Validation Commands</h2>
+    <p>Execute these to validate the entire plan is complete:</p>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>mix compile --warnings-as-errors</code> — the new modules compile clean under set-theoretic + warnings-as-errors.</li>
+      <li><code class="status">[]</code> <code>mix format --check-formatted</code> — all new/changed files formatted.</li>
+      <li><code class="status">[]</code> <code>mix credo --strict</code> — every public function carries an <code>@spec</code>.</li>
+      <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — existing 146+ tests plus the new Projects/Profiler/Commands.Resolver/Worktree/Planner/LiveView tests all pass.</li>
+      <li><code class="status">[]</code> <code>mix dialyzer</code> — no new contract or opacity violations.</li>
+      <li><code class="status">[]</code> <code>mix ecto.rollback --all &amp;&amp; mix ecto.migrate</code> — the new migration is fully reversible.</li>
+      <li><code class="status">[]</code> Live acceptance: point a new Project at an external repo of a <em>different language</em> (e.g. a Node or Rust repo) and run the Planning wizard to a launched run — confirming the resolved command bodies use that repo's stack (capability tokens / stack pack), not Python/<code>uv</code>.</li>
+    </ul>
+    <div class="loop">🔁 <strong>The plan is not complete until every box is checked and every command passes. If a step is genuinely impossible, mark it <code>[f]</code> and move on if possible.</strong></div>
+  </section>
+
+  <!-- ===== QUESTIONABLES ===== -->
+  <section id="questionables">
+    <h2>Questionables</h2>
+    <figure>
+      <img src="agentic-layer-adaptor-and-planning-wizard/questionables.png" alt="A path forking into two branches, the chosen branch glowing cyan, the other dimmed">
+
+      <figcaption>The open decisions; the assumption taken is stated in each.</figcaption>
+    </figure>
+
+    <details>
+      <summary>Should "Project" be a new entity, or just richer metadata on the orchestrator's <code>working_dir</code>?</summary>
+      <p class="qa-answer"><strong>Assumption: new entity.</strong> A bare <code>working_dir</code> cannot carry per-repo defaults, history, cost rollup, or be shared across multiple orchestrators/runs. A first-class <code>projects</code> row with nullable FKs is additive and back-compatible (nil = today's "platform itself"), and it is what makes scoping, dashboards, and the wizard coherent. Reversible: the orchestrator keeps <code>working_dir</code> as the resolved path.</p>
+    </details>
+    <details>
+      <summary>Command adaptation: capability tokens (one template) vs full per-stack <code>.md</code> files (N copies)?</summary>
+      <p class="qa-answer"><strong>Assumption: both, layered — tokens first, full override as the escape hatch.</strong> Most language variation is a handful of values (test/build/lint/run commands, spec dir), so a single templated command using <code>{{TEST_COMMAND}}</code>-style capability tokens covers most stacks with <em>zero</em> duplication. When prose genuinely diverges (e.g. Elixir's compile-warnings-as-errors + Dialyzer flow vs Python's <code>uv</code> flow), a stack pack overrides just that one command file. This avoids both extremes: no giant token-soup template that fits no language well, and no N-fold copy of every command. The resolver makes the choice per-command, not per-pack.</p>
+    </details>
+    <details>
+      <summary>Where do operator-authored packs live, and how are they versioned?</summary>
+      <p class="qa-answer"><strong>Assumption: built-in packs ship in <code>priv/command_packs/</code>; operator packs live in a configurable dir; both are versioned by directory.</strong> A pack is <code>&lt;pack&gt;/&lt;version&gt;/commands/**</code>. A Project pins <code>{command_pack, command_pack_version}</code> with <code>"auto"</code> (resolve by detected stack) and <code>"latest"</code> (newest) as the convenient defaults, and an explicit version for reproducibility. This is exactly the "hold different versions of command md files" requirement — versions are first-class and pinnable, so evolving a pack never silently changes a pinned project's behaviour.</p>
+    </details>
+    <details>
+      <summary>Should the target repo's own commands always win over a pinned pack?</summary>
+      <p class="qa-answer"><strong>Assumption: yes — repo-local is the top of the precedence chain.</strong> This is the adaptor principle: a repo that ships its own <code>.claude/commands</code> knows itself best, and the platform should defer to it (this also matches the existing <code>SlashCommand.scan/2</code> "working-dir wins" behaviour). The operator can still force a pack by authoring a repo-local override or, as future work, a per-project "ignore repo-local commands" toggle — but the default honours the repo.</p>
+    </details>
+    <details>
+      <summary>Default isolation mode — <code>:direct</code> or <code>:worktree</code>?</summary>
+      <p class="qa-answer"><strong>Assumption: default <code>:direct</code>.</strong> Worktree isolation is powerful but surprises operators who expect changes in their actual tree, and it requires a git repo. Default to today's behaviour and make <code>:worktree</code> an explicit, per-project opt-in surfaced in the registration flow. Revisit if parallel-run collisions prove common.</p>
+    </details>
+    <details>
+      <summary>Does the Planning wizard call an LLM to draft the plan, or stay deterministic?</summary>
+      <p class="qa-answer"><strong>Assumption: deterministic first.</strong> The wizard resolves the plan purely from the catalog + project defaults + prompt builder + cost estimate (no model call), keeping it fast, free, and testable. An optional "ask the orchestrator to refine this plan" step (which <em>does</em> spend tokens) is noted as future work, not in scope for the first cut.</p>
+    </details>
+    <details>
+      <summary>How are non-git target repos handled?</summary>
+      <p class="qa-answer"><strong>Assumption: graceful degradation.</strong> The Profiler returns partial metadata (no remote/branch) and <code>:worktree</code> falls through to <code>:direct</code>. A non-git directory is still a valid Project; it just loses branch-per-run isolation and git metadata.</p>
+    </details>
+    <details>
+      <summary>Should <code>project_id</code> become required after migration?</summary>
+      <p class="qa-answer"><strong>Assumption: stays nullable.</strong> Making it NOT NULL would force a backfill and break the "platform-on-itself" path that all current tests assume. The seeded default project gives a logical home for legacy rows without a hard constraint. Re-evaluate only if a future milestone makes every record project-bound.</p>
+    </details>
+    <details>
+      <summary>Per-project budget — new mechanism or reuse cost centers?</summary>
+      <p class="qa-answer"><strong>Assumption: reuse.</strong> <code>Budget</code>/<code>Budget.Guard</code> and <code>CostCenter.Rollup</code> already exist; a project's <code>budget_cap_usd</code> feeds the existing guard and the rollup is filtered by <code>project_id</code>. No parallel budgeting system.</p>
+    </details>
+  </section>
+
+  <!-- ===== NOTES ===== -->
+  <section id="notes">
+    <h2>Notes</h2>
+
+    <h3>Why this is the right leverage point</h3>
+    <p>The hard, novel parts of this platform — the canonical harness-blind <code>Event</code> sum type, the erlexec session runtime, the zero-orphan ledger, the durable workflow engine — are <em>already built and proven</em> (M0–M7, 146+ tests). The thing standing between "a great orchestration console for this repo" and "a control plane for <em>any</em> repo" is not more runtime; it is a thin <strong>Project/adaptor layer</strong> and a <strong>guided on-ramp</strong>. This plan deliberately adds only seams and UI on top of the existing engines, touching no canonical contract.</p>
+
+    <div class="callout cyan">
+      <strong>Reuse map (do not reinvent):</strong>
+      <ul>
+        <li>Repo path picking → <code>FileBrowser</code> (already powers the cwd picker).</li>
+        <li>ADW discovery per repo → <code>Definitions.Adw.scan/2</code> with <code>source: :working_dir</code>.</li>
+        <li>Command precedence (repo wins) → <code>Definitions.SlashCommand.scan/2</code> (already working-dir-wins) + <code>SlashExpander</code>.</li>
+        <li>Token substitution → <code>PromptStandard.TokenRegistry</code> + <code>Builder.render/2</code> (extended with capability tokens).</li>
+        <li>Workflow shapes → <code>WorkflowEngine.Catalog</code>.</li>
+        <li>Prompt previews → <code>PromptStandard.Builder</code>.</li>
+        <li>Cost/context estimate → <code>Harness.Pricing</code> + <code>Orchestrator.ContextWindow</code>.</li>
+        <li>Budget enforcement + rollup → <code>Budget.Guard</code> + <code>CostCenter.Rollup</code>.</li>
+        <li>Live rendering discipline → <code>ConsoleLive</code> streams + typed components.</li>
+      </ul>
+    </div>
+
+    <h3>Command resolution architecture (Phase 3, in depth)</h3>
+    <p>The "every command assumes Python + <code>uv</code>" problem is solved by separating <em>what varies</em> from <em>what's written once</em>, across three layers:</p>
+    <table>
+      <thead><tr><th>Layer</th><th>What it holds</th><th>Varies per</th><th>Extends</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Capability map</strong></td><td>Small typed values: test/build/lint/format/typecheck/run commands, package manager, spec/source/test dirs</td><td>Stack (auto-detected, operator-overridable)</td><td><code>Profiler</code> → <code>project.capabilities</code></td></tr>
+        <tr><td><strong>Command packs</strong></td><td>Versioned dirs of command <code>.md</code> bodies; <code>generic</code> (token-templated) + per-stack overrides</td><td>Stack <em>and</em> version</td><td><code>priv/command_packs</code>; <code>Definitions.SlashCommand</code> shape</td></tr>
+        <tr><td><strong>Resolver</strong></td><td>Precedence walk + token fill + provenance</td><td>Project (active)</td><td><code>SlashExpander</code>, <code>TokenRegistry</code>, <code>Builder.render/2</code></td></tr>
+      </tbody>
+    </table>
+    <p>Resolution precedence for a command name, first match wins:</p>
+    <pre><code>1. &lt;project.root&gt;/.claude/commands/&lt;name&gt;.md      # the target repo wins (adaptor principle)
+2. priv/command_packs/&lt;pinned_pack&gt;/&lt;pinned_version&gt;/commands/&lt;name&gt;.md
+3. priv/command_packs/&lt;detected_stack&gt;/&lt;resolved_version&gt;/commands/&lt;name&gt;.md
+4. priv/command_packs/generic/&lt;version&gt;/commands/&lt;name&gt;.md
+   └─ then fill {{TEST_COMMAND}} … from project.capabilities, attach provenance</code></pre>
+    <p>The win: a new language is usually <em>just a capability map</em> (a dozen values) — no command files at all, because the <code>generic</code> pack's token-templated bodies already work. Only genuinely divergent commands need a stack-pack override, and versioning lets packs evolve without breaking pinned projects. Crucially, none of this touches the harness-blind core or the canonical <code>Event</code> contract.</p>
+
+    <h3>Typed-standard compliance</h3>
+    <p>Every new module obeys the enforced standard (<code>ai_docs/typed-elixir-standard.md</code>): <code>@spec</code> on every public function (hard Credo gate), <code>typedstruct</code>/<code>@enforce_keys</code> for domain structs, <code>{:ok, t} | {:error, reason}</code> over raising, validated enums over open strings (except the intentionally-open <code>harness</code> identity), and Dialyzer-clean contracts. The <code>projects</code>/<code>plans</code> contexts are the <em>only</em> <code>Repo</code> callers for their tables.</p>
+
+    <h3>Sequencing &amp; risk</h3>
+    <p>Phases are ordered so each is independently shippable and green: Phase 1 (data) and Phase 2 (adaptation) deliver value even without UI; Phase 3 (worktrees) is opt-in and isolated; Phase 4 (UI) and Phase 5 (wizard) are the operator-facing payoff. The largest risk is UI surface area in the 3,700-line <code>ConsoleLive</code> — mitigated by isolating new UI in <code>ProjectsLive</code>/<code>PlanningLive</code> and a dedicated <code>ProjectComponents</code> module, touching <code>ConsoleLive</code> only for the switcher.</p>
+
+    <h3>Future work (explicitly out of scope)</h3>
+    <ul>
+      <li>LLM-assisted plan refinement step in the wizard (token-spending).</li>
+      <li>Auto-PR/merge handoff from a worktree branch (push + <code>gh pr create</code>).</li>
+      <li>Multi-repo workflows (one ADW spanning several projects).</li>
+      <li>Per-project secret scoping beyond the current app-wide env model.</li>
+    </ul>
+
+    <figure>
+      <img src="agentic-layer-adaptor-and-planning-wizard/notes.png" alt="Layered diagram: a solid proven core of three engine blocks with a translucent new overlay layer above">
+
+      <figcaption>New work (overlay) sits on the proven, untouched core engines.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== AMENDMENTS ===== -->
+  <section id="amendments">
+    <h2>Amendments</h2>
+    <details open>
+      <summary>2026-06-23 — Added Phase 3: Stack-Aware Command Resolution Layer</summary>
+      <p>The operator flagged that the platform's commands, ADW step prompts, and validators are geared to one repo structure and toolchain (Python + <code>uv</code>), whereas real target repos span many languages — and that the platform needs to <em>hold different versions of command <code>.md</code> files</em>. Inserted a new Phase 3 designing a three-layer architecture: a per-stack <strong>capability map</strong> (the small varying data, avoids duplicating commands per language), <strong>versioned command packs</strong> under <code>priv/command_packs/&lt;pack&gt;/&lt;version&gt;/</code> (full <code>.md</code> overrides + explicit pinnable versions), and a <strong>Commands.Resolver</strong> that walks a precedence chain (repo-local → pinned pack → stack pack → generic base), fills capability tokens, and reports provenance. The design deliberately extends existing seams (<code>SlashCommand.scan/2</code> already does repo-local-wins, <code>SlashExpander</code>, <code>TokenRegistry</code>/<code>Builder.render/2</code>) rather than adding a parallel templating engine. Renumbered the former Phases 3–6 (Worktree→4, UI→5, Wizard→6, Docs→7); extended Phase 1 schema (<code>capabilities</code>, <code>command_pack</code>, <code>command_pack_version</code>) and Phase 2 (capability detection); added files, three Questionables, a Notes architecture section + diagram, and tightened global validation + live acceptance to prove cross-language adaptation.</p>
+    </details>
+  </section>
+
+</main>
+</body>
+</html>

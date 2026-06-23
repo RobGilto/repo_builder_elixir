@@ -30,6 +30,7 @@ defmodule RepoBuilder.Session.Server do
   alias RepoBuilder.Harness.McpTools
   alias RepoBuilder.Harness.Registry, as: HarnessRegistry
   alias RepoBuilder.OsPidLedger
+  alias RepoBuilder.Projects.Worktree
   alias RepoBuilder.Session.Admission
 
   @pubsub RepoBuilder.PubSub
@@ -97,6 +98,11 @@ defmodule RepoBuilder.Session.Server do
       # Set true when stderr contains known blocking-command patterns (e.g. "phx.server");
       # used to gate SIGTERM (exit 143) as a clean exit vs error (issue-adw-sigterm).
       field :blocking_command?, boolean(), default: false
+      # Set (issue agentic-layer adaptor, Phase 4) when this session runs in a git
+      # worktree provisioned for project `isolation_mode == :worktree`. Carries
+      # `%{path, branch, repo}`; nil for every direct/managed session. Drives the
+      # git-aware cleanup (`git worktree remove`, not `rm -rf`).
+      field :worktree, map(), enforce: false
     end
   end
 
@@ -135,7 +141,8 @@ defmodule RepoBuilder.Session.Server do
   defp build_state(opts, harness, config) do
     cfg = Application.get_env(:repo_builder, :session, [])
     session_id = opts[:session_id] || generate_token()
-    {cwd, managed?} = resolve_workspace(opts, cfg, session_id)
+    {base_cwd, base_managed?} = resolve_workspace(opts, cfg, session_id)
+    {cwd, managed?, worktree} = maybe_worktree(opts, base_cwd, base_managed?, session_id)
 
     %State{
       agent_id: to_string(opts[:agent_id]),
@@ -152,6 +159,7 @@ defmodule RepoBuilder.Session.Server do
       price_table: resolve_price_table(harness, config),
       cwd: cwd,
       managed_workspace?: managed?,
+      worktree: worktree,
       marker: generate_token(),
       idle_ms: cfg_value(opts, cfg, :idle_ms, 300_000),
       max_line_bytes: cfg_value(opts, cfg, :max_line_bytes, 1_048_576),
@@ -775,6 +783,25 @@ defmodule RepoBuilder.Session.Server do
 
   defp blank_to_nil(_value), do: nil
 
+  # Project worktree isolation (agentic-layer adaptor, Phase 4). Opt-in via
+  # `opts[:isolation_mode] == :worktree` on a git-backed cwd: provision a worktree+branch
+  # and run there with MANAGED cleanup (git worktree remove). A non-git repo or any git
+  # failure falls through to the resolved direct cwd, unchanged (`:direct` behaviour).
+  @spec maybe_worktree(keyword(), Path.t(), boolean(), String.t()) ::
+          {Path.t(), boolean(), map() | nil}
+  defp maybe_worktree(opts, cwd, managed?, session_id) do
+    if opts[:isolation_mode] == :worktree and is_binary(cwd) do
+      run_id = to_string(opts[:run_id] || opts[:agent_id] || session_id)
+
+      case Worktree.checkout(cwd, run_id: run_id, default_branch: opts[:default_branch]) do
+        {:ok, info} -> {info.path, true, info}
+        _ -> {cwd, managed?, nil}
+      end
+    else
+      {cwd, managed?, nil}
+    end
+  end
+
   # Workers get a fresh per-session workspace (ephemeral, cleaned on exit). An
   # ORCHESTRATOR is a long-lived conversation resumed across turns via the harness
   # CLI's cwd-scoped session store (pi keys sessions by project cwd), so it MUST
@@ -796,6 +823,13 @@ defmodule RepoBuilder.Session.Server do
   # keep the orchestrator's persistent managed workspace between turns (its CLI
   # session store is keyed to this cwd). Only ephemeral worker workspaces are removed.
   @spec cleanup_workspace(State.t()) :: :ok
+  # A worktree-backed session cleans via `git worktree remove` (keeping the branch for
+  # review), regardless of the managed flag — checked first.
+  defp cleanup_workspace(%State{worktree: %{} = info}) do
+    Worktree.cleanup(info)
+    :ok
+  end
+
   defp cleanup_workspace(%State{managed_workspace?: false}), do: :ok
   defp cleanup_workspace(%State{orchestrator_db_id: id}) when not is_nil(id), do: :ok
 

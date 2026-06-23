@@ -153,11 +153,38 @@ Routes:
 | LIVE | `/agents/:id` | `AgentLive` | Single-agent view |
 | LIVE | `/workflows/:id` | `WorkflowLive` | Workflow run (async cost/status) |
 | LIVE | `/system-logs` | `SystemLogsLive` | System log stream |
+| LIVE | `/projects` | `ProjectsLive` | Target-repo registry + per-repo dashboard (agentic-layer adaptor) |
+| LIVE | `/plan` | `PlanningLive` | Planning-Mode Wizard → previewed, costed, launched ADW run |
+| LIVE | `/plans/:id` | `PlanningLive :show` | A durable, shareable Plan artifact |
 | POST | `/webhooks/trigger` | `WebhookController :trigger` | Signed workflow trigger |
 | LIVE | `/dev/dashboard` | Phoenix LiveDashboard | **Dev only** (telemetry/metrics) |
 | FORWARD | `/dev/mailbox` | `Plug.Swoosh.MailboxPreview` | **Dev only** |
 
 The `/dev/*` routes exist only when `:dev_routes` is enabled (development).
+
+## Agentic layer adaptor
+
+The platform can be pointed at **any** target repository, not just itself. A target repo
+is promoted to a first-class **Project** (`RepoBuilder.Projects`) carrying its identity,
+auto-detected stack + capability map, a pinned command pack, a budget cap, and an
+isolation mode. Everything else scopes to a project via a **nullable** `project_id`
+(`nil` = "the platform itself", the back-compatible default).
+
+- **Register a target repo** at `/projects`: paste its absolute path; the `Profiler`
+  detects git metadata, the stack (`mix.exs`/`package.json`/`pyproject.toml`/`Cargo.toml`/
+  `go.mod`), discovered `.claude/commands`/`AGENTS.md`/ADWs, and a capability map, then
+  primes an orchestrator context block.
+- **Stack-aware commands**: `RepoBuilder.Commands.Resolver` resolves each `/command` for a
+  project through a precedence chain — repo-local `.claude/commands` → pinned pack → stack
+  pack → the `generic` base — filling capability tokens (`{{TEST_COMMAND}}` …) so one
+  command body adapts to every stack. Versioned packs live in `priv/command_packs/`. See
+  `ai_docs/agentic-layer-adaptor.md` for the command-pack authoring guide.
+- **Worktree isolation** (opt-in per project, `isolation_mode: :worktree`): each run works
+  in `git worktree add <scratch>/<run_id> -b adw/<run_id>` so parallel agents never collide
+  and changes land on a reviewable branch. `:direct` (default) preserves today's behaviour.
+- **Planning-Mode Wizard** at `/plan`: project → goal → workflow/harness/model/budget →
+  stack-correct previewed steps + cost/context estimate → launch, persisting a durable
+  Plan artifact (`/plans/:id`).
 
 ## Configuration
 

@@ -15,6 +15,9 @@ defmodule RepoBuilder.Workflows.WorkflowRun do
           id: Ecto.UUID.t() | nil,
           workflow_id: Ecto.UUID.t() | nil,
           orchestrator_id: Ecto.UUID.t() | nil,
+          project_id: Ecto.UUID.t() | nil,
+          worktree_path: String.t() | nil,
+          worktree_branch: String.t() | nil,
           status: status() | nil,
           current_step: String.t() | nil,
           artifacts: map(),
@@ -32,6 +35,12 @@ defmodule RepoBuilder.Workflows.WorkflowRun do
     # The orchestrator that launched this run (issue-fallback), or nil when not
     # orchestrator-launched. Drives the terminal holding-pattern resume emit.
     field :orchestrator_id, :binary_id
+    # Nullable target-repo scope (agentic-layer adaptor). nil = "the platform itself".
+    field :project_id, :binary_id
+    # Worktree isolation handoff (Phase 4): the run's isolated git worktree path + the
+    # reviewable branch (`adw/<run_id>`). Both nil for :direct-isolation runs.
+    field :worktree_path, :string
+    field :worktree_branch, :string
     field :status, Ecto.Enum, values: @statuses, default: :queued
     field :current_step, :string
     field :artifacts, :map, default: %{}
@@ -52,6 +61,9 @@ defmodule RepoBuilder.Workflows.WorkflowRun do
     |> cast(params, [
       :workflow_id,
       :orchestrator_id,
+      :project_id,
+      :worktree_path,
+      :worktree_branch,
       :status,
       :current_step,
       :artifacts,

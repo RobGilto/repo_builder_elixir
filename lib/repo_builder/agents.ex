@@ -31,6 +31,26 @@ defmodule RepoBuilder.Agents do
     Repo.all(query)
   end
 
+  @doc """
+  Scope a query to a target project (agentic-layer adaptor). A `nil` project id is
+  the unscoped, back-compatible default — every agent, "the platform itself"
+  included — so callers can pass the active project id straight through.
+  """
+  @spec scope_by_project(Ecto.Queryable.t(), Ecto.UUID.t() | nil) :: Ecto.Query.t()
+  def scope_by_project(query, nil), do: from(a in query, [])
+
+  def scope_by_project(query, project_id),
+    do: from(a in query, where: a.project_id == ^project_id)
+
+  @doc "List non-archived agents scoped to a project (`nil` ⇒ unscoped), ordered by name."
+  @spec list_for_project(Ecto.UUID.t() | nil) :: [Agent.t()]
+  def list_for_project(project_id) do
+    Agent
+    |> scope_by_project(project_id)
+    |> then(&from(a in &1, where: a.archived == false, order_by: [asc: a.name]))
+    |> Repo.all()
+  end
+
   @spec get_agent(Ecto.UUID.t()) :: Agent.t() | nil
   def get_agent(id), do: Repo.get(Agent, id)
 

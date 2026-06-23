@@ -7,7 +7,7 @@ defmodule RepoBuilder.PromptStandard.BuilderTest do
   use ExUnit.Case, async: true
 
   alias RepoBuilder.PromptStandard
-  alias RepoBuilder.PromptStandard.{Builder, PopAInput, PopBInput, Validator}
+  alias RepoBuilder.PromptStandard.{Builder, PopAInput, PopBInput, TokenRegistry, Validator}
 
   describe "build_population_a/1" do
     test "produces YAML frontmatter and all required sections" do
@@ -164,11 +164,16 @@ defmodule RepoBuilder.PromptStandard.BuilderTest do
   end
 
   describe "TOKEN_REGISTRY" do
-    test "contains exactly the two v1 tokens" do
+    test "contains the two v1 tokens plus the capability tokens (agentic-layer adaptor)" do
       registry = PromptStandard.token_registry()
       assert "{{SUBAGENT_MAP}}" in registry
       assert "{{HARNESS_CATALOG}}" in registry
-      assert length(registry) == 2
+      # Phase 3 extends the closed registry with capability tokens filled by the
+      # command resolver from the active project's capability map.
+      assert "{{TEST_COMMAND}}" in registry
+      assert "{{SPEC_DIR}}" in registry
+
+      assert length(registry) == 2 + length(TokenRegistry.capability_tokens())
     end
   end
 end

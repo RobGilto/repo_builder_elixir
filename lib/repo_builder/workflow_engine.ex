@@ -20,6 +20,9 @@ defmodule RepoBuilder.WorkflowEngine do
     case Workflows.create_run(%{
            workflow_id: workflow.id,
            orchestrator_id: opts[:orchestrator_id],
+           # Agentic-layer adaptor: scope the run to a target project when launched from
+           # the planning wizard. Nullable ⇒ unchanged for every existing caller.
+           project_id: opts[:project_id],
            status: :queued,
            current_step: first_step_name(workflow.steps)
          }) do

@@ -70,6 +70,56 @@ defmodule RepoBuilder.Prompts.SlashExpanderTest do
              "FIRST\nplain prose line\nSECOND\n\nwith args"
   end
 
+  describe "project-aware expansion (Commands.Resolver)" do
+    alias RepoBuilder.Projects.Capabilities
+    alias RepoBuilder.Projects.Project
+
+    defp project(attrs) do
+      base = %Project{
+        id: Ecto.UUID.generate(),
+        name: "p",
+        root_path: nil,
+        stack: %{"language" => "node"},
+        capabilities: %{"language" => "node"} |> Capabilities.detect() |> Capabilities.to_map(),
+        command_pack: "auto",
+        command_pack_version: "latest",
+        isolation_mode: :direct,
+        status: :active
+      }
+
+      struct(base, attrs)
+    end
+
+    test "nil project falls back to today's path-based expansion", %{tmp_dir: tmp} do
+      write_command(tmp, "greet", "Hello path-based.")
+      assert SlashExpander.expand("/greet", tmp, nil) == "Hello path-based."
+    end
+
+    test "resolves a generic pack command with capability tokens filled (no working dir)" do
+      proj = project(%{stack: %{"language" => "node"}})
+      # `plan` lives only in the generic pack; tokens fill from the node capability map.
+      expanded = SlashExpander.expand("/plan add a feature", nil, proj)
+      assert expanded =~ "npm test"
+      refute expanded =~ "{{TEST_COMMAND}}"
+    end
+
+    test "repo-local override wins and substitutes arguments", %{tmp_dir: tmp} do
+      write_command(tmp, "build", "LOCAL BUILD for $ARGUMENTS")
+      proj = project(%{root_path: tmp, stack: %{"language" => "elixir"}})
+      assert SlashExpander.expand("/build the thing", tmp, proj) == "LOCAL BUILD for the thing"
+    end
+
+    test "reserved built-ins stay protected in project mode" do
+      proj = project(%{stack: %{"language" => "node"}})
+      assert SlashExpander.expand("/compact", nil, proj) == "/compact"
+    end
+
+    test "an unknown command passes through verbatim in project mode" do
+      proj = project(%{stack: %{"language" => "node"}})
+      assert SlashExpander.expand("/nope do a thing", nil, proj) == "/nope do a thing"
+    end
+  end
+
   test "a mid-line slash is not expanded", %{tmp_dir: tmp} do
     write_command(tmp, "greet", "EXPANDED")
 

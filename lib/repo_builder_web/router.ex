@@ -23,6 +23,12 @@ defmodule RepoBuilderWeb.Router do
     live "/agents/:id", AgentLive
     live "/workflows/:id", WorkflowLive
     live "/system-logs", SystemLogsLive
+
+    # Agentic-layer adaptor: target-repo management + the planning-mode wizard.
+    live "/projects", ProjectsLive, :index
+    live "/projects/:id", ProjectsLive, :show
+    live "/plan", PlanningLive, :new
+    live "/plans/:id", PlanningLive, :show
   end
 
   scope "/webhooks", RepoBuilderWeb do

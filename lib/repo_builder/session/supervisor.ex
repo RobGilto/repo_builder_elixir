@@ -10,6 +10,8 @@ defmodule RepoBuilder.Session.Supervisor do
   """
   alias RepoBuilder.Budget
   alias RepoBuilder.Budget.Scope
+  alias RepoBuilder.Projects
+  alias RepoBuilder.Projects.Project
   alias RepoBuilder.Prompts.SlashExpander
   alias RepoBuilder.Session.{Admission, Server}
 
@@ -51,10 +53,16 @@ defmodule RepoBuilder.Session.Supervisor do
     new_prompt =
       if to_string(opts[:harness]) == "adw" or blank?(prompt),
         do: prompt,
-        else: SlashExpander.expand(prompt, opts[:cwd])
+        else: SlashExpander.expand(prompt, opts[:cwd], project_for(opts[:cwd]))
 
     Keyword.put(opts, :prompt, new_prompt)
   end
+
+  # Map a cwd to a registered Project so expansion is stack-aware (agentic-layer
+  # adaptor). nil cwd / no matching project ⇒ nil ⇒ today's path-based expansion.
+  @spec project_for(term()) :: Project.t() | nil
+  defp project_for(cwd) when is_binary(cwd) and cwd != "", do: Projects.get_by_root_path(cwd)
+  defp project_for(_cwd), do: nil
 
   @spec blank?(term()) :: boolean()
   defp blank?(nil), do: true

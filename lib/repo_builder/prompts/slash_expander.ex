@@ -30,8 +30,10 @@ defmodule RepoBuilder.Prompts.SlashExpander do
   Pure and fail-silent: it never mutates the filesystem and never raises — a read or
   parse error on a command file degrades to keeping the original line.
   """
+  alias RepoBuilder.Commands
   alias RepoBuilder.Definitions
   alias RepoBuilder.Orchestrator.Template
+  alias RepoBuilder.Projects.Project
 
   @typep index :: %{optional(String.t()) => String.t()}
 
@@ -61,6 +63,30 @@ defmodule RepoBuilder.Prompts.SlashExpander do
 
   def expand(prompt, _working_dir), do: prompt
 
+  @doc """
+  Project-aware expansion (agentic-layer adaptor, Phase 3): resolve each leading
+  `/command` through the stack-aware `Commands.Resolver` for `project` (repo-local →
+  pinned pack → stack pack → generic, capability tokens filled), then apply the same
+  `$ARGUMENTS`/`$N` substitution and reserved-command protection. A `nil` project
+  falls back to today's path-based merged (app ∪ working-dir) behaviour, unchanged.
+  """
+  @spec expand(String.t(), String.t() | nil, Project.t() | nil) :: String.t()
+  def expand(prompt, working_dir, nil), do: expand(prompt, working_dir)
+
+  def expand(prompt, working_dir, %Project{} = project) when is_binary(prompt) do
+    case body_index(project) do
+      empty when map_size(empty) == 0 ->
+        expand(prompt, working_dir)
+
+      index ->
+        prompt
+        |> String.split("\n")
+        |> Enum.map_join("\n", &expand_line_with_bodies(&1, index))
+    end
+  end
+
+  def expand(prompt, _working_dir, _project), do: prompt
+
   # Expand a single line when its leading token is a known, non-reserved command whose
   # file reads cleanly; otherwise return the line verbatim.
   @spec expand_line(String.t(), index()) :: String.t()
@@ -73,6 +99,26 @@ defmodule RepoBuilder.Prompts.SlashExpander do
     else
       _other -> line
     end
+  end
+
+  # Project-aware variant: the leading command's RESOLVED body is already in `index`.
+  @spec expand_line_with_bodies(String.t(), index()) :: String.t()
+  defp expand_line_with_bodies(line, index) do
+    with [_full, name, rest] <- Regex.run(@leading_re, line),
+         false <- name in @reserved,
+         body when is_binary(body) <- Map.get(index, name) do
+      substitute(body, String.trim(rest))
+    else
+      _other -> line
+    end
+  end
+
+  # The `name => resolved-body` index for a project across the full precedence chain.
+  @spec body_index(Project.t()) :: index()
+  defp body_index(%Project{} = project) do
+    project
+    |> Commands.resolve_all()
+    |> Map.new(fn resolved -> {resolved.name, resolved.body} end)
   end
 
   # Build the `name => path` index for the merged (app ∪ working-dir) command set,

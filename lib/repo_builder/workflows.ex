@@ -49,6 +49,28 @@ defmodule RepoBuilder.Workflows do
 
   # --- runs ---
 
+  @doc """
+  Scope a `workflow_runs` query to a target project (agentic-layer adaptor). A `nil`
+  project id is the unscoped, back-compatible default (every run, "the platform
+  itself" included).
+  """
+  @spec scope_by_project(Ecto.Queryable.t(), Ecto.UUID.t() | nil) :: Ecto.Query.t()
+  def scope_by_project(query, nil), do: from(r in query, [])
+
+  def scope_by_project(query, project_id),
+    do: from(r in query, where: r.project_id == ^project_id)
+
+  @doc "Most recent runs scoped to a project (`nil` ⇒ unscoped), newest first, excluding hidden."
+  @spec list_recent_for_project(Ecto.UUID.t() | nil, pos_integer()) :: [WorkflowRun.t()]
+  def list_recent_for_project(project_id, limit \\ 50) do
+    WorkflowRun
+    |> scope_by_project(project_id)
+    |> then(
+      &from(r in &1, where: r.hidden == false, order_by: [desc: r.updated_at], limit: ^limit)
+    )
+    |> Repo.all()
+  end
+
   @spec get_run(Ecto.UUID.t()) :: WorkflowRun.t() | nil
   def get_run(id), do: Repo.get(WorkflowRun, id)
 
@@ -65,6 +87,16 @@ defmodule RepoBuilder.Workflows do
     run
     |> WorkflowRun.changeset(params)
     |> Repo.update()
+  end
+
+  @doc """
+  Record the git worktree a run was isolated in (agentic-layer adaptor, Phase 4) —
+  the path and the reviewable branch — for the UI's PR/merge handoff.
+  """
+  @spec record_worktree(WorkflowRun.t(), %{path: String.t(), branch: String.t()}) ::
+          {:ok, WorkflowRun.t()} | {:error, Ecto.Changeset.t()}
+  def record_worktree(%WorkflowRun{} = run, %{path: path, branch: branch}) do
+    update_run(run, %{worktree_path: path, worktree_branch: branch})
   end
 
   @doc """
