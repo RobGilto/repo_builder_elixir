@@ -86,6 +86,17 @@ defmodule RepoBuilder.Agents do
   end
 
   @doc """
+  Shallow-merge `attrs` into a worker's JSONB `config` map (string keys), persisting via
+  `worker_changeset/2`. The flag carriers for the handover protocol — `winding_down` and
+  `original_ask` — ride here so no new DB column is needed (issue graceful-agent-handover).
+  """
+  @spec merge_config(Agent.t(), %{optional(String.t()) => term()}) ::
+          {:ok, Agent.t()} | {:error, Ecto.Changeset.t()}
+  def merge_config(%Agent{config: config} = agent, attrs) do
+    update_worker(agent, %{"config" => Map.merge(config || %{}, attrs)})
+  end
+
+  @doc """
   Create an orchestrator-owned worker. `orchestrator_id` scopes the worker; `params`
   carries at least `:name` and `:harness`. A missing `:provider` is defaulted from
   the harness so the non-null column is satisfied.

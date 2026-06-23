@@ -299,6 +299,14 @@ config :repo_builder, :orchestrator,
   # pending operator-message backlog.
   auto_resume_on_worker_return: true,
   max_queue_depth: 50,
+  # Worker context-window HANDOVER threshold (issue graceful-agent-handover). A worker
+  # whose latest-turn occupancy (`ContextWindow.usage_fraction/3`) reaches this fraction
+  # is wound down gracefully: the platform issues a one-shot `[WIND DOWN]` directive, the
+  # worker writes `ai_docs/<name>-handover.md` + emits a `:handover <path>` signal, and is
+  # then retired. `RepoBuilder.Agents.Handover.threshold/0` reads this value and the
+  # `report_cost` high-usage warning shares it (via `Handover.over_threshold?/1`) so the
+  # two cannot drift. Default 0.8 (80%).
+  handover_threshold: 0.8,
   # Idle watchdog for orchestrator turns. An orchestrator turn is interactive, so it
   # gets a SHORTER byte-idle window than the worker-grade `:session` `idle_ms` (5 min):
   # a worker doing a long build can legitimately be byte-silent for minutes, but an

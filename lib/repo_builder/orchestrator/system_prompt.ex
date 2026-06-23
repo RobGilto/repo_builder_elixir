@@ -297,6 +297,13 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     - At high usage (≈80%+), proactively `clear_context` any worker you're about to
       hand independent new work, `compact_agent` those continuing their current task,
       and tell the operator they may want to run `/compact` on you.
+    - GRACEFUL HANDOVER: when a worker hits its own context limit the platform winds it
+      down automatically — the worker writes `ai_docs/<name>-handover.md` (a receipt of its
+      original ask + what it achieved + what remains), returns a `:handover <path>` signal,
+      and is then RETIRED (deleted). Do NOT be surprised it is gone and do NOT try to
+      `command_agent`/`check_agent_status` it again. To continue its task, READ the linked
+      handover doc and spawn a FRESH worker seeded with it. You will be told this happened
+      via a resume turn that names the retired worker and links the doc.
     """
     |> String.trim_trailing()
   end

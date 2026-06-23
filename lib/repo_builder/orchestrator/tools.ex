@@ -12,6 +12,7 @@ defmodule RepoBuilder.Orchestrator.Tools do
   `Dashboard` console feed.
   """
   alias RepoBuilder.{Agents, Budget, Logs, Orchestrators, Session, WorkflowEngine, Workflows}
+  alias RepoBuilder.Agents.Handover
   alias RepoBuilder.Budget.Scope
   alias RepoBuilder.Dashboard
   alias RepoBuilder.Definitions
@@ -282,6 +283,10 @@ defmodule RepoBuilder.Orchestrator.Tools do
          {:ok, worker} <- Agents.get_by_name_for_orchestrator(orchestrator_id, name),
          :ok <- ensure_worker_model(worker),
          :ok <- check_budget(orchestrator_id) do
+      # First-dispatch only (no prior session): record the original ask as the worker's
+      # handover receipt, so a later wind-down directive / retirement notice can quote it
+      # verbatim (issue graceful-agent-handover). Subsequent turns leave it untouched.
+      _ = maybe_record_original_ask(worker, prompt)
       session_id = worker.session_id || generate_session_id()
       _ = Agents.set_session(worker.id, session_id)
 
@@ -977,9 +982,6 @@ defmodule RepoBuilder.Orchestrator.Tools do
 
   # --- cost / context-window tools ---
 
-  # Occupancy at/above this fraction triggers the high-usage warning.
-  @high_usage_threshold 0.8
-
   # Inference-only spec — the fully-concrete report map narrows below the hand-written
   # `result()` contract, which Dialyzer rejects as a supertype under :underspecs
   # (mirrors `get_config/1`).
@@ -1006,16 +1008,19 @@ defmodule RepoBuilder.Orchestrator.Tools do
   end
 
   # Inference-only spec (mirrors `report_cost/1`): the concrete report map narrows
-  # below a hand-written `map()` return under :underspecs.
-  defp maybe_warn(report, fraction) when fraction >= @high_usage_threshold do
-    Map.put(
-      report,
-      "warning",
-      "context usage at #{Float.round(fraction * 100, 1)}% — compact workers nearing their limit or suggest the operator run /compact"
-    )
+  # below a hand-written `map()` return under :underspecs. The high-usage threshold is
+  # the SHARED `Handover.threshold/0`, so the warning and the worker wind-down agree.
+  defp maybe_warn(report, fraction) do
+    if Handover.over_threshold?(fraction) do
+      Map.put(
+        report,
+        "warning",
+        "context usage at #{Float.round(fraction * 100, 1)}% — compact workers nearing their limit or suggest the operator run /compact"
+      )
+    else
+      report
+    end
   end
-
-  defp maybe_warn(report, _fraction), do: report
 
   # Thin sugar over `command_agent`: resolve the worker by name and dispatch the
   # `/compact` slash command (both Claude and pi honor it). Reuses the command path,
@@ -1211,6 +1216,23 @@ defmodule RepoBuilder.Orchestrator.Tools do
   @spec worker_provider(Agents.Agent.t()) :: String.t() | nil
   defp worker_provider(%{config: config}), do: blank_to_nil(config["provider"])
 
+  # Persist `config["original_ask"]` on a worker's FIRST dispatch (no prior session and
+  # none already recorded), so the handover protocol can restate the receipt. Quiet and
+  # best-effort — never affects the dispatch result.
+  @spec maybe_record_original_ask(Agents.Agent.t(), String.t()) :: :ok
+  defp maybe_record_original_ask(%{session_id: nil, config: config} = worker, prompt) do
+    case blank_to_nil(config["original_ask"]) do
+      nil ->
+        _ = Agents.merge_config(worker, %{"original_ask" => prompt})
+        :ok
+
+      _present ->
+        :ok
+    end
+  end
+
+  defp maybe_record_original_ask(_worker, _prompt), do: :ok
+
   @doc """
   The harness session config for an orchestrator-spawned worker: the worker's own
   persisted config plus the autonomous flag.
@@ -1289,6 +1311,8 @@ defmodule RepoBuilder.Orchestrator.Tools do
     file at `ai_docs/<descriptive-name>.md` inside the working directory and reference
     that relative path (e.g. `ai_docs/elixir-port-report.md`) in your final summary so the
     coordinator can open and read it in full.
+
+    #{Handover.protocol_clause()}
     """
   end
 

@@ -73,6 +73,11 @@ defmodule RepoBuilder.Session.Server do
       field :max_line_bytes, pos_integer()
       field :saw_output?, boolean(), default: false
       field :saw_terminal?, boolean(), default: false
+      # Latest-turn context-window occupancy (issue graceful-agent-handover): the prompt
+      # side of the most recent `%Event.Usage{}` (input + cache_read + cache_creation,
+      # mirroring `Logs.context_size/1`). Carried into the worker-terminal broadcast so the
+      # surviving Queue can decide the handover/wind-down without re-querying.
+      field :context_tokens, non_neg_integer(), default: 0
       # Bounded tail of child stderr (process diagnostics, not stdout output);
       # folded into a synthesized terminal Error so the real cause is never lost.
       field :stderr_tail, binary(), default: ""
@@ -480,8 +485,30 @@ defmodule RepoBuilder.Session.Server do
     end
 
     _ = maybe_emit_worker_terminal(event, state)
+
     %{state | saw_output?: true, saw_terminal?: state.saw_terminal? or terminal?(event)}
+    |> track_context(event)
   end
+
+  # Fold a usage event's prompt-side occupancy into State so the worker-terminal broadcast
+  # carries the latest occupancy (issue graceful-agent-handover). Non-usage events pass
+  # through unchanged; a terminal event (Done/Error) is never a usage event, so the value
+  # observed at the terminal is the most recent usage row's occupancy.
+  @spec track_context(State.t(), Event.t()) :: State.t()
+  defp track_context(state, %Event.Usage{} = usage),
+    do: %{state | context_tokens: usage_context_tokens(usage)}
+
+  defp track_context(state, _event), do: state
+
+  # Prompt occupancy = input + cache_read + cache_creation (nil-safe), excluding output —
+  # the single source-of-truth math shared with `Logs.context_size/1`.
+  @spec usage_context_tokens(Event.Usage.t()) :: non_neg_integer()
+  defp usage_context_tokens(%Event.Usage{} = u),
+    do: nz(u.input_tokens) + nz(u.cache_read) + nz(u.cache_creation)
+
+  @spec nz(integer() | nil) :: non_neg_integer()
+  defp nz(n) when is_integer(n) and n >= 0, do: n
+  defp nz(_n), do: 0
 
   # Build the deferred-persistence Record cast to the per-row Logs.Writer. The durable
   # target is an agent row (`agent_db_id`) OR an orchestrator row (`orchestrator_db_id`)
@@ -520,7 +547,7 @@ defmodule RepoBuilder.Session.Server do
   # `orchestrator:<id>:workers` so it can auto-resume if idle. Scoped to workers that
   # carry an `orchestrator_id`; quiet (a DB blip never breaks the dispatch path).
   @spec maybe_emit_worker_terminal(Event.t(), State.t()) :: :ok
-  defp maybe_emit_worker_terminal(event, %State{agent_db_id: agent_id})
+  defp maybe_emit_worker_terminal(event, %State{agent_db_id: agent_id} = state)
        when is_binary(agent_id) do
     if terminal?(event) do
       case Agents.get_agent(agent_id) do
@@ -530,7 +557,12 @@ defmodule RepoBuilder.Session.Server do
           RepoBuilder.Dashboard.broadcast_worker_terminal(orchestrator_id, %{
             worker_id: agent_id,
             name: name,
-            ok?: ok?
+            ok?: ok?,
+            # Enriched (issue graceful-agent-handover): the latest-turn occupancy and the
+            # terminal message text, so the Queue can detect a wind-down / parse a handover
+            # signal without the terminating session starting a new turn.
+            context_tokens: state.context_tokens,
+            final_text: terminal_text(event)
           })
 
         _ ->
@@ -576,6 +608,12 @@ defmodule RepoBuilder.Session.Server do
   defp terminal?(%Event.Done{}), do: true
   defp terminal?(%Event.Error{}), do: true
   defp terminal?(_event), do: false
+
+  # The worker's terminal message text (issue graceful-agent-handover): the `Done.final_text`
+  # the handover signal would ride in. An Error terminal carries no handover signal → nil.
+  @spec terminal_text(Event.t()) :: String.t() | nil
+  defp terminal_text(%Event.Done{final_text: text}) when is_binary(text), do: text
+  defp terminal_text(_event), do: nil
 
   @spec maybe_synthesize_terminal(term(), State.t()) :: State.t()
   defp maybe_synthesize_terminal(reason, %State{saw_terminal?: true} = state) do

@@ -30,9 +30,12 @@ defmodule RepoBuilder.Orchestrator.Queue do
   """
   use GenServer
 
+  alias RepoBuilder.Agents
+  alias RepoBuilder.Agents.Handover
   alias RepoBuilder.Dashboard
   alias RepoBuilder.Logs
   alias RepoBuilder.Orchestrator.Server
+  alias RepoBuilder.Orchestrator.Tools
   alias RepoBuilder.Orchestrators
 
   @registry RepoBuilder.OrchestratorQueueRegistry
@@ -78,6 +81,11 @@ defmodule RepoBuilder.Orchestrator.Queue do
       # the orchestrator to waste turns dismissing "already handled" wakeups. Cleared
       # only when an operator message arrives (which represents a new dispatch context).
       field :seen_worker_ids, MapSet.t()
+      # The pluggable tool entrypoint for handover side effects (wind-down `command_agent`
+      # + self-delete `delete_agent`). Defaults to `Tools.call/3` (the same logged path the
+      # brain uses, so budget/session/cwd handling + system-log rows come for free); tests
+      # inject a fake to assert which tool was issued without spawning real sessions.
+      field :tools, (String.t(), Ecto.UUID.t(), map() -> Tools.result())
     end
   end
 
@@ -178,7 +186,8 @@ defmodule RepoBuilder.Orchestrator.Queue do
       starter: opts[:starter] || (&Server.start_turn/2),
       pending_resume?: false,
       pending_info: nil,
-      seen_worker_ids: MapSet.new()
+      seen_worker_ids: MapSet.new(),
+      tools: opts[:tools] || (&Tools.call/3)
     }
 
     {:ok, state}
@@ -307,15 +316,59 @@ defmodule RepoBuilder.Orchestrator.Queue do
   #     than dropping it (anti-amnesia); a burst coalesces to one flag, keeping the most
   #     recent worker for the prompt. The owed resume is consumed when the queue next
   #     drains to idle (see `maybe_consume_pending_resume/1`).
+  #
+  # Layered ON TOP of the holding pattern (issue graceful-agent-handover), in precedence:
+  #   1. handover signal present (`:handover <path>` in `final_text`) → self-delete the
+  #      worker and resume the orchestrator naming it retired + linking the doc. ALWAYS
+  #      actionable: bypasses the dedup check (a wind-down already added the worker to
+  #      `seen_worker_ids`, but its follow-up handover terminal MUST be acted on).
+  #   2. over threshold + not already winding down → issue ONE wind-down `command_agent`
+  #      directive and flag the worker `winding_down`; the orchestrator is NOT resumed for
+  #      this terminal. Also bypasses dedup (occupancy-driven, not a spurious multi-fire).
+  #   3. already `winding_down` but returned without a signal → force-retire (delete +
+  #      resume), so a worker can never get stuck over budget. Bypasses dedup too.
+  #   4. otherwise → the existing duplicate-aware idle/pending holding-pattern behavior.
   @spec maybe_auto_resume(State.t(), map()) :: State.t()
   defp maybe_auto_resume(%State{} = state, info) do
+    enabled? = Orchestrators.auto_resume?()
+
+    case Handover.parse_signal(Map.get(info, :final_text)) do
+      {:ok, path} ->
+        # The worker asked to retire: delete it regardless of auto-resume; only enqueue the
+        # orchestrator notice when auto-resume is on (matching the existing opt-out).
+        handle_handover(state, info, path, enabled?)
+
+      :none ->
+        if enabled?, do: resume_or_wind_down(state, info), else: state
+    end
+  end
+
+  # The occupancy-aware fork (auto-resume enabled, no handover signal): wind down a worker
+  # over threshold, force-retire one that ignored a prior wind-down, else the normal
+  # duplicate-aware holding pattern.
+  @spec resume_or_wind_down(State.t(), map()) :: State.t()
+  defp resume_or_wind_down(%State{} = state, info) do
+    worker = resolve_worker(info)
+
+    cond do
+      over_threshold?(worker, info) and not winding_down?(worker) ->
+        wind_down(state, info, worker)
+
+      winding_down?(worker) ->
+        force_retire(state, info)
+
+      true ->
+        normal_resume(state, info)
+    end
+  end
+
+  # The pre-existing duplicate-aware holding pattern (branch 4) — unchanged behavior.
+  @spec normal_resume(State.t(), map()) :: State.t()
+  defp normal_resume(%State{} = state, info) do
     worker_id = Map.get(info, :worker_id)
     duplicate? = is_binary(worker_id) and MapSet.member?(state.seen_worker_ids, worker_id)
 
     cond do
-      not Orchestrators.auto_resume?() ->
-        state
-
       duplicate? ->
         state
 
@@ -328,6 +381,122 @@ defmodule RepoBuilder.Orchestrator.Queue do
         %{state | pending_resume?: true, pending_info: info, seen_worker_ids: seen}
     end
   end
+
+  # Branch 1: a worker handed over. Self-delete it (reaps the session + drops the agent row
+  # + the rail card via `broadcast_agent_deleted`), then resume the orchestrator naming it
+  # retired and linking the doc — unless auto-resume is off (then delete only). Fail-soft:
+  # a delete failure logs and falls through (never crashes the Queue).
+  @spec handle_handover(State.t(), map(), String.t(), boolean()) :: State.t()
+  defp handle_handover(%State{} = state, info, path, enabled?) do
+    name = worker_name(info)
+    _ = delete_worker(state, name)
+
+    if enabled? and is_binary(name) do
+      resume_with(state, info, Handover.retired_resume_prompt(name, path))
+    else
+      state
+    end
+  end
+
+  # Branch 2: issue exactly one wind-down directive and flag the worker `winding_down`. The
+  # orchestrator is NOT resumed for this terminal (it returns when the worker hands over).
+  @spec wind_down(State.t(), map(), Agents.Agent.t()) :: State.t()
+  defp wind_down(%State{} = state, info, worker) do
+    _ = Agents.merge_config(worker, %{"winding_down" => true})
+    prompt = Handover.wind_down_prompt(blank_to_nil(worker.config["original_ask"]))
+
+    case call_tool(state, "command_agent", %{"name" => worker.name, "prompt" => prompt}) do
+      {:ok, _result} ->
+        log(state, "wind_down", "issued wind-down directive to #{worker.name}")
+
+      {:error, reason} ->
+        log(state, "error", "wind-down failed for #{worker.name}: #{inspect(reason)}")
+    end
+
+    # No resume, no seen bookkeeping — the handover terminal that follows is the actionable
+    # one (and bypasses the dedup set). Suppress the normal resume for this terminal.
+    _ = info
+    state
+  end
+
+  # Branch 3: a `winding_down` worker returned without a handover doc — force-retire it.
+  @spec force_retire(State.t(), map()) :: State.t()
+  defp force_retire(%State{} = state, info) do
+    name = worker_name(info)
+    _ = delete_worker(state, name)
+
+    if is_binary(name) do
+      resume_with(state, info, Handover.forced_retire_resume_prompt(name))
+    else
+      state
+    end
+  end
+
+  # Resolve the worker row backing a terminal (nil when the terminal carries no worker_id —
+  # e.g. workflow/ADW resume signals — so occupancy is 0 and the wind-down never fires).
+  @spec resolve_worker(map()) :: Agents.Agent.t() | nil
+  defp resolve_worker(info) do
+    case Map.get(info, :worker_id) do
+      id when is_binary(id) -> Agents.get_agent(id)
+      _ -> nil
+    end
+  rescue
+    # A non-UUID worker_id (legacy/workflow/test signal) can't back a worker row — treat
+    # as "no worker", so occupancy is 0 and the normal holding pattern applies unchanged.
+    _error -> nil
+  end
+
+  @spec over_threshold?(Agents.Agent.t() | nil, map()) :: boolean()
+  defp over_threshold?(%Agents.Agent{} = worker, info) do
+    context_tokens = Map.get(info, :context_tokens, 0)
+    Handover.over_threshold?(Handover.occupancy(worker.harness, worker.model, context_tokens))
+  end
+
+  defp over_threshold?(_worker, _info), do: false
+
+  @spec winding_down?(Agents.Agent.t() | nil) :: boolean()
+  defp winding_down?(%Agents.Agent{config: config}), do: config["winding_down"] == true
+  defp winding_down?(_worker), do: false
+
+  @spec worker_name(map()) :: String.t() | nil
+  defp worker_name(info), do: info[:name]
+
+  # Self-delete a worker via the logged `delete_agent` tool entrypoint (reuses session
+  # reaping + the `broadcast_agent_deleted` rail update). Fail-soft.
+  @spec delete_worker(State.t(), String.t() | nil) :: :ok
+  defp delete_worker(_state, nil), do: :ok
+
+  defp delete_worker(%State{} = state, name) do
+    case call_tool(state, "delete_agent", %{"name" => name}) do
+      {:ok, _result} -> log(state, "handover", "retired worker #{name}")
+      {:error, reason} -> log(state, "error", "retire failed for #{name}: #{inspect(reason)}")
+    end
+
+    :ok
+  end
+
+  # Start a handover-aware orchestrator resume with a custom prompt (idle-now or owed),
+  # mirroring `maybe_auto_resume`'s idle/pending split but with the supplied text.
+  @spec resume_with(State.t(), map(), String.t()) :: State.t()
+  defp resume_with(%State{} = state, info, prompt) do
+    info = Map.put(info, :resume_prompt, prompt)
+
+    if idle?(state) do
+      state |> start_auto_resume(info) |> clear_pending()
+    else
+      %{state | pending_resume?: true, pending_info: info}
+    end
+  end
+
+  @spec call_tool(State.t(), String.t(), map()) :: Tools.result()
+  defp call_tool(%State{tools: tools, orchestrator_id: id}, tool, args),
+    do: tools.(tool, id, args)
+
+  @spec blank_to_nil(term()) :: String.t() | nil
+  defp blank_to_nil(value) when is_binary(value),
+    do: if(String.trim(value) == "", do: nil, else: value)
+
+  defp blank_to_nil(_value), do: nil
 
   @spec add_seen(MapSet.t(), term()) :: MapSet.t()
   defp add_seen(seen, worker_id) when is_binary(worker_id), do: MapSet.put(seen, worker_id)
@@ -386,6 +555,8 @@ defmodule RepoBuilder.Orchestrator.Queue do
   end
 
   @spec auto_resume_prompt(map()) :: String.t()
+  defp auto_resume_prompt(%{resume_prompt: prompt}) when is_binary(prompt), do: prompt
+
   defp auto_resume_prompt(info) do
     name = Map.get(info, :name) || "a worker"
     outcome = if Map.get(info, :ok?), do: "completed successfully", else: "finished with errors"

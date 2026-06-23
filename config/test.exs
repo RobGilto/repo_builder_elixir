@@ -114,6 +114,8 @@ config :repo_builder, :orchestrator,
   # auto_resume_on_worker_return to true via app-env for its own scope.
   auto_resume_on_worker_return: false,
   max_queue_depth: 50,
+  # Shared worker-handover threshold (issue graceful-agent-handover); default parity.
+  handover_threshold: 0.8,
   # Config parity with prod; idle-timeout tests override this per-scope to a tiny value.
   turn_idle_ms: 120_000,
   # Per-run tmp root so template tests are hermetic and never touch the real
