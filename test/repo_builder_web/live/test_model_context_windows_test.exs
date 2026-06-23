@@ -4,8 +4,8 @@ defmodule RepoBuilderWeb.ModelContextWindowsTest do
   maximum context window of the model assigned to that agent/orchestrator — resolved
   via `RepoBuilder.Orchestrator.ContextWindow` (config override → live/built-in catalog
   → default) — not a hardcoded 200k denominator. A `claude-sonnet-4-6` agent (1M window)
-  and a `claude-opus-4-8` agent (200k window) at the SAME token occupancy must render
-  different denominators AND different fill widths.
+  and a `claude-haiku-4-5-20251001` agent (200k window) at the SAME token occupancy must
+  render different denominators AND different fill widths.
 
   `async: false` so the shared Ecto sandbox reaches the connected LiveView process.
   """
@@ -37,23 +37,23 @@ defmodule RepoBuilderWeb.ModelContextWindowsTest do
     {:ok, orch} = Orchestrators.get_or_create_default()
 
     sonnet = seed_worker(orch.id, "claude-sonnet-4-6")
-    opus = seed_worker(orch.id, "claude-opus-4-8")
+    haiku = seed_worker(orch.id, "claude-haiku-4-5-20251001")
 
     {:ok, view, _html} = live(conn, ~p"/")
     send(view.pid, {:agent_created, sonnet})
-    send(view.pid, {:agent_created, opus})
+    send(view.pid, {:agent_created, haiku})
     _ = render(view)
 
     sonnet_card = render(element(view, "#agent-#{sonnet.id}"))
-    opus_card = render(element(view, "#agent-#{opus.id}"))
+    haiku_card = render(element(view, "#agent-#{haiku.id}"))
 
     # Sonnet: 200k of a 1M window → denominator /1000k, bar 20%.
     assert sonnet_card =~ "200k / 1000k"
     assert sonnet_card =~ "width: 20%"
 
-    # Opus: 200k of a 200k window → denominator /200k, bar 100%.
-    assert opus_card =~ "200k / 200k"
-    assert opus_card =~ "width: 100%"
+    # Haiku: 200k of a 200k window → denominator /200k, bar 100%.
+    assert haiku_card =~ "200k / 200k"
+    assert haiku_card =~ "width: 100%"
   end
 
   test "the orchestrator panel reflects its own model's window", %{conn: conn} do

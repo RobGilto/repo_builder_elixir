@@ -281,7 +281,7 @@ config :repo_builder, :budget, refresh_ms: 60_000, reconcile_on_boot?: true
 # the built-in catalog and the live source; harness-blind at the call site.
 config :repo_builder, :context_windows, %{
   :default => 200_000,
-  {"claude", "claude-opus-4-8"} => 200_000,
+  {"claude", "claude-opus-4-8"} => 1_000_000,
   {"claude", "claude-sonnet-4-6"} => 1_000_000
 }
 

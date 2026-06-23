@@ -29,7 +29,8 @@ defmodule RepoBuilder.Orchestrator.ContextWindowResolutionTest do
     test "built-in catalog resolves a known Claude model with no config override" do
       put_config(%{:default => 200_000})
       assert ContextWindow.size("claude", "claude-sonnet-4-6") == 1_000_000
-      assert ContextWindow.size("claude", "claude-opus-4-8") == 200_000
+      assert ContextWindow.size("claude", "claude-opus-4-8") == 1_000_000
+      assert ContextWindow.size("claude", "claude-haiku-4-5-20251001") == 200_000
     end
 
     test "unknown {harness, model} falls back to the configured :default" do
