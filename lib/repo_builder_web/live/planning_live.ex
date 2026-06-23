@@ -229,6 +229,9 @@ defmodule RepoBuilderWeb.PlanningLive do
     ~H"""
     <Layouts.app flash={@flash}>
       <div class="space-y-6 max-w-3xl">
+        <.link navigate={~p"/"} class="text-cyan-400 text-sm">
+          ← back to console
+        </.link>
         <h1 class="text-xl font-semibold">Planning-Mode Wizard · step {@step}/4</h1>
         <p :if={@error} class="text-sm text-red-400">{@error}</p>
 

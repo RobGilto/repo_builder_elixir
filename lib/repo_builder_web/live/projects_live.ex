@@ -99,6 +99,9 @@ defmodule RepoBuilderWeb.ProjectsLive do
     ~H"""
     <Layouts.app flash={@flash}>
       <div class="space-y-6">
+        <.link navigate={~p"/"} class="text-cyan-400 text-sm">
+          ← back to console
+        </.link>
         <h1 class="text-xl font-semibold">Projects</h1>
 
         <ul id="projects" class="space-y-2">
