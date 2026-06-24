@@ -1,40 +1,97 @@
 # repo_builder
 
-`repo_builder` is a harness-agnostic AI agent orchestration platform built on Elixir, Phoenix, and OTP (no Ash). It generalizes the "deterministic orchestration of non-deterministic AI agents" pattern: humans, cron, and webhooks compose **deterministic** workflows (for example `plan -> build -> review -> fix`) whose step order and branching are fixed and **durable** (they survive a node restart), while the intelligent work inside each step is delegated to a **swappable, supervised external AI harness CLI** running as a child process. The defining constraint is that the platform is **not locked to one harness**: Claude Code CLI and the `pi` CLI ship today, and adding a third is one adapter module plus one config entry — proven by an included no-op Cursor adapter, with zero edits to the core.
+**A fault-tolerant OTP platform that drives swappable AI agent CLIs through durable, crash-resumable workflows — built typed, tested, and gate-green.**
 
-## Features
+![Elixir](https://img.shields.io/badge/Elixir-1.20.1-4B275F)
+![Phoenix](https://img.shields.io/badge/Phoenix-1.8-FD4F00)
+![OTP](https://img.shields.io/badge/OTP-28-A90533)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791)
+![tests](https://img.shields.io/badge/tests-1%2C110%20passing-2ea44f)
+![green gate](https://img.shields.io/badge/green%20gate-enforced-2ea44f)
 
-- **Harness-agnostic execution** — a two-callback adapter contract (`command/1` + `normalize/2`) behind a single registry seam; Claude, `pi`, Cursor (no-op proof), and a Fake test adapter.
-- **Durable, composable workflows** — chained ADWs modeled as state machines whose transitions are persisted before they happen, so in-flight runs resume after a crash or node restart.
-- **Real-time LiveView dashboard** — a swimlane view streaming live logs, tool-calls, cost, and status with flat server memory (LiveView streams).
-- **Three trigger paths** — interactive (LiveView), scheduled (Oban cron), and signed HMAC webhooks.
-- **Supervised session runtime** — one `erlexec`-backed GenServer per live child, with partial-line and multibyte-safe NDJSON buffering, idle timeout, stdout-overflow backpressure, and an admission concurrency gate.
-- **Zero-orphan guarantee** — a durable OS-pid ledger plus a boot-time, marker-verified OrphanReaper.
-- **Secret-safe persistence** — events are redacted before they hit the database; the live broadcast keeps full detail.
-- **Typed-Elixir standard** — `@spec` on every public function, `typedstruct`/`@enforce_keys`, tagged tuples, `--warnings-as-errors`, Credo `--strict`, and Dialyzer, all enforced in CI.
+![A human architect directing a swarm of AI agent nodes assembling a clean modular system into a single solid keystone](assets/readme/hero.png)
+
+> `repo_builder` does the **deterministic orchestration of non-deterministic AI agents**: humans, cron, and signed webhooks compose fixed-shape workflows (e.g. `plan → build → review → fix`) whose step order and branching are durable and survive a node restart, while the intelligent work inside each step is delegated to a **swappable, supervised external AI harness CLI** running as a child process.
+
+**Contents:** [What it is](#what-it-is) · [Why it's hard](#why-its-hard--and-what-it-demonstrates) · [Architecture](#architecture) · [The green gate](#engineering-discipline--the-green-gate) · [How this was built](#how-this-was-built--candidly) · [Skills demonstrated](#skills-demonstrated) · [Quickstart](#prerequisites) · [Status & limitations](#status--honest-limitations)
+
+---
+
+## What it is
+
+It is an Elixir/Phoenix/OTP control plane for AI coding agents. You register a target repository, pick a workflow, and the platform runs each step by spawning a real agent CLI (Claude Code or `pi`) as a supervised OS process, normalizing its streaming output into one canonical event contract, and persisting every transition so a run can resume exactly where it left off after a crash. A live LiveView dashboard streams the logs, tool-calls, cost, and status as it happens.
+
+The defining constraint is that the platform is **not locked to one harness**. Claude Code and `pi` ship today; adding a third agent is one adapter module plus one config entry — proven by an included no-op Cursor adapter that required zero edits to the core.
+
+## Why it's hard — and what it demonstrates
+
+The interesting engineering is not CRUD; it is making non-deterministic, crash-prone external processes behave predictably under failure. Each problem below maps to a transferable skill:
+
+- **Driving a streaming CLI child process safely** → an `erlexec`-backed GenServer per agent with partial-line and multibyte-safe NDJSON buffering, an idle-timeout watchdog, stdout-overflow backpressure, and an admission concurrency gate. *(OTP design under real OS-process failure.)*
+- **Never leaking an OS process — even on a hard `SIGKILL` of the VM** → a durable `os_pid` ledger plus a boot-time reaper that verifies `/proc/<pid>/environ` against a per-session marker before it signals anything. *(Systems-level correctness, not hope.)*
+- **One contract across many untrusted agents** → `RepoBuilder.Harness.Event`, a closed 8-variant `typedstruct` sum type with an **open** `harness :: atom()` identity and a raw escape hatch, normalized at a `TypeCheck` wire boundary. *(Type-driven design; defects caught at the boundary, not in prod.)*
+- **Workflows that survive a node restart** → `workflow_runs` is the source of truth, persisted *before* each transition; live streaming stays in GenServers while durable steps run through Oban and a reconciler re-enqueues in-flight runs on boot. *(Durable state machines and the hot/durable split.)*
+- **Secrets never reach disk** → events are redacted before persistence while the live broadcast keeps full detail. *(Security as a default, not an afterthought.)*
+- **Extensibility without core edits** → an open-identity / closed-contract doctrine repeated across harnesses, the agentic-layer adaptor, and a full plugin system (add a harness *or* a plugin = one module). *(Designing seams that scale.)*
 
 ## Architecture
 
-A deterministic core drives non-deterministic agents. Workflows are durable state machines; the intelligence inside each step is an external CLI spoken to over a normalized event stream. There are two execution paths that share the same canonical contract: the **live path** (a `WorkflowEngine.Runner` state machine feeding the LiveView dashboard) and the **durable path** (Oban workers that persist each transition and reconcile in-flight runs after a restart).
+![An architecture diagram: a deterministic core fanning out to swappable harness adapters, a live dashboard, trigger inputs, and a database ledger](assets/readme/architecture.png)
 
-The canonical boundary is `RepoBuilder.Harness.Event`: a closed 8-variant `typedstruct` sum type carrying an **open** `harness :: atom()` identity plus a raw escape hatch. Because the identity is open, a new harness needs no change to the event types — only a new adapter and a config entry.
+A deterministic core drives non-deterministic agents over a normalized event stream. Two execution paths share the same canonical contract: the **live path** (a `WorkflowEngine.Runner` state machine feeding the dashboard) and the **durable path** (Oban workers that persist each transition and reconcile in-flight runs after a restart). The full specification lives in [`BUILD_PROMPT.md`](BUILD_PROMPT.md); the engineering rationale in [`docs/engineering-principles.md`](docs/engineering-principles.md).
 
 Module map:
 
-- **Harness contract** (`lib/repo_builder/harness*`)
-  - `RepoBuilder.Harness` — mandatory `@behaviour` (`command/1` + `normalize/2`)
-  - `RepoBuilder.Harness.CustomSpawn` — optional `@behaviour`
-  - `RepoBuilder.Harness.Event` — closed 8-variant sum type, open `harness` identity, raw escape hatch
-  - `Wire` — TypeCheck `@type!` boundary; `Redact` — secret scrubbing of the persisted raw
-  - `Registry` — single source of truth and single test seam
-  - Adapters: `Claude`, `Pi`, `Cursor` (no-op proof), `Fake` (test driver)
-  - `Pricing` — derives `pi` cost from a price table; `nil` when unpriced (never defaulted to `0.0`)
-- **Session runtime** (`lib/repo_builder/session/*`) — `erlexec`-backed GenServer per child, `Admission` concurrency gate, `Session.Supervisor` (`DynamicSupervisor`, `:temporary` children)
-- **Zero-orphan ledger** — `lib/repo_builder/os_pid_ledger*` (durable OS-pid ledger) + `lib/repo_builder/orphan_reaper.ex` (boot-time reaper that verifies `/proc/<pid>/environ` before signalling)
-- **Persistence** (`lib/repo_builder/*`) — `binary_id` PKs, JSONB, `Ecto.Enum`, an embedded `Usage` value object with a float→Decimal nil-vs-0 cost boundary; contexts (`Agents`, `Logs`, `Prompts`, `Chats`, `Workflows`, `OsPidLedger`) are the only `Repo` callers
-- **Workflow engine** (`lib/repo_builder/workflow_engine*`) — `RepoBuilder.WorkflowEngine.Runner` deterministic state machine; `workflow_runs` is the source of truth, persisted before each transition; the seeded `plan -> build -> review -> fix` example ADW
-- **Durable triggers** (`lib/repo_builder/workers/*`, `lib/repo_builder/webhooks.ex`) — Oban `StepWorker` (unique on `{workflow_run_id, step_name}`, chains the next step), `CronTrigger`, `WorkflowResume` reconciler, and the HMAC+timestamp-verified `Webhooks` module
-- **Web / observability** (`lib/repo_builder_web/*`) — `ConsoleLive` (the full-bleed orchestration console at `/`), `AgentLive`, `DashboardLive` (swimlanes), `WorkflowLive` (`assign_async` cost/status), `SystemLogsLive`, typed `DashboardComponents`/`ConsoleComponents`, `WebhookController` + a raw-body `CacheBodyReader` plug, `Telemetry` + cost/error `Alerting`
+- **Harness contract** (`lib/repo_builder/harness*`) — `RepoBuilder.Harness` mandatory `@behaviour` (`command/1` + `normalize/2`), optional `CustomSpawn`, the closed `Event` sum type, `Wire` (TypeCheck boundary), `Redact` (secret scrubbing), `Registry` (single source of truth + test seam), adapters (`Claude`, `Pi`, `Cursor`, `Fake`), and `Pricing`.
+- **Session runtime** (`lib/repo_builder/session/*`) — the `erlexec` GenServer per child, `Admission` gate, `Session.Supervisor` (`:temporary` children).
+- **Zero-orphan ledger** — `os_pid_ledger*` + `orphan_reaper.ex` (boot-time, marker-verified).
+- **Persistence** (`lib/repo_builder/*`) — `binary_id` PKs, JSONB, `Ecto.Enum`, an embedded `Usage` value object with a float→Decimal nil-vs-0 cost boundary; the `@spec`'d context modules are the **only** `Repo` callers.
+- **Workflow engine** (`lib/repo_builder/workflow_engine*`) — the deterministic state machine; `workflow_runs` is the source of truth.
+- **Durable triggers** (`lib/repo_builder/workers/*`, `webhooks.ex`) — Oban `StepWorker` (unique on `{workflow_run_id, step_name}`), `CronTrigger`, `WorkflowResume`, and HMAC+timestamp-verified webhooks.
+- **Web / observability** (`lib/repo_builder_web/*`) — `ConsoleLive` (the console at `/`), swimlane `DashboardLive`, `WorkflowLive` (`assign_async`), typed components, the webhook controller + raw-body plug, telemetry + alerting.
+
+Two larger subsystems extend the core without touching it: the **agentic-layer adaptor** (point the platform at any target repo as a first-class `Project`) and a full **plugin system** (versioned packages contributing to a closed set of extension points). Both are documented below.
+
+## Engineering discipline — the green gate
+
+Every change has to pass a five-command gate before it is allowed to land. This is the bar that makes the codebase stable:
+
+```bash
+mix compile --warnings-as-errors   # warnings are errors
+mix format --check-formatted       # one canonical style
+mix credo --strict                 # incl. @spec on every public function
+mix test --warnings-as-errors      # 1,110 tests, all green
+mix dialyzer                       # success-typing + contract checking
+```
+
+By the numbers, at this commit: **~31,000 lines of strictly-typed Elixir** across **155 modules** and **28 `@spec`'d contexts**; **1,110 tests** driven entirely through a `Fake`/Mock adapter (no external CLI needed for CI); Dialyzer with a small set of justified, documented skips. The full gate also runs in CI (`.github/workflows/ci.yml`).
+
+The typing is not cosmetic: `@spec` on every public function, `typedstruct`/`@enforce_keys` for domain data, precise types over `any()`/`map()`, and `{:ok, t()} | {:error, reason()}` over raising. The standard is written down in [`ai_docs/typed-elixir-standard.md`](ai_docs/typed-elixir-standard.md) and enforced by `.credo.exs` + Dialyzer.
+
+## How this was built — candidly
+
+I built this with **Claude Code**, directing the work rather than typing every line. The method was deliberate, and it is itself part of what the project demonstrates:
+
+- **I owned the architecture and the invariants** — the supervision tree, the canonical event contract, the zero-orphan ledger, the durable/live workflow split, the open-identity/closed-contract extensibility doctrine.
+- **I decomposed the work into specs.** The [`specs/`](specs/) directory holds 80+ plan documents that drove the build phase by phase, and a custom **ADW** (AI Developer Workflow) harness in [`adws/`](adws/) runs an AI agent through `plan → build → test → review` against a target repo.
+- **I enforced a quality bar the AI could not lower.** Nothing landed unless the [green gate](#engineering-discipline--the-green-gate) was green — warnings-as-errors, Credo `--strict`, Dialyzer, and the full test suite, on every change.
+- **I reviewed, steered, and debugged the hard parts myself** — OTP races, an idle-timeout heuristic for agents that exit without a clean terminal marker, a test-sandbox teardown race, and Dialyzer's view of macro-built TypeCheck types. AI was the accelerator; the diagnosis and the decisions were mine.
+
+The honest division of labor: I directed the design, the invariants, the review, and the debugging; AI accelerated the mechanical implementation, the test scaffolding, and the docs. The result is a strictly-typed, crash-isolated, gate-green codebase — and the meta-point is that **this platform industrializes the exact human-directs-AI loop I used to build it**: deterministic orchestration of non-deterministic agents, at two scales.
+
+## Skills demonstrated
+
+| Capability | Where in the repo | What it demonstrates |
+|---|---|---|
+| Concurrency & fault tolerance | supervision tree, `session/server.ex` | OTP design; crash isolation under real OS-process failure |
+| Type-driven design | `ai_docs/typed-elixir-standard.md`, Dialyzer, Credo | discipline; defects caught at the boundary, not in prod |
+| Systems / OS integration | `os_pid_ledger`, `orphan_reaper.ex`, `erlexec` | a zero-orphan guarantee that holds across hard crashes |
+| Durable workflows | `workflow_engine/`, Oban, `workflow_runs` | crash-resumable state machines that survive node restart |
+| Extensible architecture | harness registry, plugin system | open-identity/closed-contract seams (add a harness/plugin = one module) |
+| Real-time UI | LiveView dashboard, streams, `assign_async` | flat-memory streaming observability |
+| AI engineering | this whole repo + `adws/` + `specs/` | orchestrating AI agents to ship production-grade code |
+
+---
 
 ## Prerequisites
 
@@ -156,6 +213,7 @@ Routes:
 | LIVE | `/projects` | `ProjectsLive` | Target-repo registry + per-repo dashboard (agentic-layer adaptor) |
 | LIVE | `/plan` | `PlanningLive` | Planning-Mode Wizard → previewed, costed, launched ADW run |
 | LIVE | `/plans/:id` | `PlanningLive :show` | A durable, shareable Plan artifact |
+| LIVE | `/plugins` | `PluginsLive` | Plugin store / management (browse, install, activate per project) |
 | POST | `/webhooks/trigger` | `WebhookController :trigger` | Signed workflow trigger |
 | LIVE | `/dev/dashboard` | Phoenix LiveDashboard | **Dev only** (telemetry/metrics) |
 | FORWARD | `/dev/mailbox` | `Plug.Swoosh.MailboxPreview` | **Dev only** |
@@ -175,16 +233,39 @@ isolation mode. Everything else scopes to a project via a **nullable** `project_
   `go.mod`), discovered `.claude/commands`/`AGENTS.md`/ADWs, and a capability map, then
   primes an orchestrator context block.
 - **Stack-aware commands**: `RepoBuilder.Commands.Resolver` resolves each `/command` for a
-  project through a precedence chain — repo-local `.claude/commands` → pinned pack → stack
-  pack → the `generic` base — filling capability tokens (`{{TEST_COMMAND}}` …) so one
-  command body adapts to every stack. Versioned packs live in `priv/command_packs/`. See
-  `ai_docs/agentic-layer-adaptor.md` for the command-pack authoring guide.
+  project through a precedence chain — repo-local `.claude/commands` → active plugins →
+  pinned pack → stack pack → the `generic` base — filling capability tokens
+  (`{{TEST_COMMAND}}` …) so one command body adapts to every stack. Versioned packs live in
+  `priv/command_packs/`. See `ai_docs/agentic-layer-adaptor.md` for the authoring guide.
 - **Worktree isolation** (opt-in per project, `isolation_mode: :worktree`): each run works
   in `git worktree add <scratch>/<run_id> -b adw/<run_id>` so parallel agents never collide
   and changes land on a reviewable branch. `:direct` (default) preserves today's behaviour.
 - **Planning-Mode Wizard** at `/plan`: project → goal → workflow/harness/model/budget →
   stack-correct previewed steps + cost/context estimate → launch, persisting a durable
   Plan artifact (`/plans/:id`).
+
+## Plugins
+
+The platform is extensible by **plugins** — versioned packages that *contribute* to a
+**closed set of extension points** with an **open string identity**, generalizing the
+"add a harness = one module + one config entry" doctrine.
+
+- **What a plugin contributes** (closed kinds): slash `command_pack`s, data-defined
+  `workflow_type` ADWs, `agent_template`s, orchestrator `context_fragment`s,
+  `capability` stack data, and — via an optional **code layer** — a `harness_adapter`.
+- **Library → store → install → activate.** Author in the local folder library
+  (`plugin_library/`), distribute through a store (a `LocalLibrary` source and a
+  Req-backed `RemoteStore` ship today), install live into `agentic_plugins/`, and
+  **activate per project**. Switching the orchestrator's bound project recomputes the
+  effective set, so each repo gets exactly the behaviour its active plugins define.
+- **Manage at `/plugins`** (browse, install/uninstall, activate/deactivate). Manifests
+  are validated at a strict wire→domain boundary; installs are checksum/trust-gated.
+  Code plugins run arbitrary BEAM code in-node and are never auto-installed without
+  confirmation.
+
+Adding a plugin is **one package, zero core change**; the bundled samples in
+`plugin_library/` (a command pack, a workflow type, and a no-op code harness) prove it.
+See `ai_docs/plugin-authoring.md` for the full authoring reference.
 
 ## Configuration
 
@@ -215,7 +296,11 @@ isolation mode. Everything else scopes to a project via a **nullable** `project_
 
 ### Session limits (`config/config.exs`)
 
-`max_live_sessions: 100`, `max_children: 200`, `idle_ms: 300_000`, `max_line_bytes: 1_048_576`, `workspace_base: "priv/workspaces"`.
+`max_live_sessions: 100`, `max_children: 200`, `idle_ms: 300_000`, `max_line_bytes: 16_777_216`, `workspace_base: "priv/workspaces"`.
+
+### Plugins (`config/config.exs`)
+
+`install_dir: "agentic_plugins"`, `library_dir: "plugin_library"`, a `sources` map (`LocalLibrary` + `RemoteStore`), and a `trust` policy (`require_checksum`, `allow_code`, `require_signature`). The single reader is `RepoBuilder.Plugins.Registry`.
 
 ### Oban (`config/config.exs`)
 
@@ -272,7 +357,7 @@ mix test --warnings-as-errors
 mix dialyzer
 ```
 
-The suite has **146 tests** and is driven against the runtime through the `Fake`/Mock adapter via the registry seam, so it needs no external CLIs. Dialyzer runs with a small set of **justified TypeCheck skips** (`.dialyzer_ignore.exs`). The full gate also runs in CI (`.github/workflows/ci.yml`).
+The suite has **1,110 tests** and is driven against the runtime through the `Fake`/Mock adapter via the registry seam, so it needs no external CLIs. Dialyzer runs with a small set of **justified TypeCheck skips** (`.dialyzer_ignore.exs`). The full gate also runs in CI (`.github/workflows/ci.yml`).
 
 ## Adding a harness
 
@@ -281,7 +366,7 @@ Extensibility is by design: a new harness is **one module + one config entry**, 
 1. Implement `RepoBuilder.Harness` (mandatory `command/1` + `normalize/2`; optional `CustomSpawn`).
 2. Register it under `:harnesses` in `config/config.exs` with its adapter module, default model, and price table.
 
-The included `RepoBuilder.Harness.Cursor` is the proof — a real `command/1` and a stub `normalize/2` (every frame `:skip`) — demonstrating that the platform accepts a new harness with no core change.
+The included `RepoBuilder.Harness.Cursor` is the proof — a real `command/1` and a stub `normalize/2` (every frame `:skip`) — demonstrating that the platform accepts a new harness with no core change. A code plugin can register a harness the same way, entirely from `agentic_plugins/`.
 
 ## Project layout
 
@@ -289,13 +374,8 @@ The included `RepoBuilder.Harness.Cursor` is the proof — a real `command/1` an
 .
 ├── mise.toml                       # project-scoped toolchain pins (erlang/elixir/postgres)
 ├── mix.exs                         # :repo_builder app, deps, aliases
-├── config/
-│   ├── config.exs                  # harness registry, session limits, Oban, alerting
-│   ├── dev.exs / test.exs          # local DB (postgres/postgres @ localhost:5432)
-│   └── runtime.exs                 # env vars (PORT, WEBHOOK_SECRET, API keys, prod secrets)
-├── scripts/
-│   ├── pg.sh                       # user-space PostgreSQL cluster (init/start/stop/status/psql)
-│   └── patch_deps.sh               # type_check 0.13.7 fix for Elixir 1.20 (run before compile)
+├── config/                         # harness registry, session limits, plugins, Oban, alerting
+├── scripts/                        # pg.sh (user-space Postgres) + patch_deps.sh (type_check fix)
 ├── lib/
 │   ├── repo_builder/
 │   │   ├── harness.ex, harness/    # contract, Event, Wire, Redact, Registry, adapters, Pricing
@@ -303,20 +383,26 @@ The included `RepoBuilder.Harness.Cursor` is the proof — a real `command/1` an
 │   │   ├── os_pid_ledger*, orphan_reaper.ex   # zero-orphan ledger + reaper
 │   │   ├── workflow_engine*, workflows*       # deterministic state machine + context
 │   │   ├── workers/, webhooks.ex   # Oban StepWorker/CronTrigger/WorkflowResume, HMAC verify
+│   │   ├── projects*, plans*        # agentic-layer adaptor (target-repo Projects)
+│   │   ├── plugins.ex, plugins/     # plugin system (manifest, sources, installer, activation)
 │   │   ├── agents*, logs*, prompts*, chats*   # Ecto contexts (only Repo callers)
 │   │   └── telemetry/              # telemetry + cost/error alerting
-│   └── repo_builder_web/
-│       ├── router.ex, endpoint.ex
-│       ├── live/                   # ConsoleLive (/), DashboardLive, AgentLive, WorkflowLive, SystemLogsLive
-│       ├── controllers/            # PageController (unrouted), WebhookController
-│       ├── components/             # typed DashboardComponents, ConsoleComponents
-│       └── plugs/                  # CacheBodyReader (raw-body capture)
-├── priv/                           # migrations, seeds, workspaces
+│   └── repo_builder_web/           # router, endpoint, LiveViews, components, plugs
+├── adws/                           # the ADW (AI Developer Workflow) harness used to build this
+├── ai_docs/                        # the typed standard, the event contract, plugin authoring, …
+├── specs/                          # the 80+ plan documents that drove the build
+├── plugin_library/                 # bundled sample plugins
+├── priv/                           # migrations, seeds, command packs, workspaces
 └── test/
 ```
 
-## Status / notes
+## Status & honest limitations
 
-- The automated suite (146 tests) and the green gate run entirely against the `Fake`/Mock adapter through the registry seam — **no external CLI is required** for CI or local development.
-- The **only manual step** is live acceptance against the real `claude` and `pi` CLIs, since those tools are external and may not be installed in every environment.
-- Remember `scripts/pg.sh start` once per session, and `scripts/patch_deps.sh` (followed by `mix deps.compile type_check && mix compile`) after any `mix deps.get`/`mix deps.clean`.
+This is a substantial single-author project, and I'd rather state its edges than paper over them:
+
+- **CI/local development needs no external CLI.** The full suite and the green gate run entirely against the `Fake`/Mock adapter through the registry seam.
+- **Live acceptance against the real `claude` and `pi` CLIs is a manual step** — those tools are external and may not be installed in every environment.
+- **It is not deployed.** It runs locally (`mix phx.server`); there is no hosted instance or production release behind it.
+- **It was built human-directs-AI** (see [How this was built](#how-this-was-built--candidly)) under the green gate — which is the point, not a caveat.
+- Operational reminders: run `scripts/pg.sh start` once per session, and `scripts/patch_deps.sh` (followed by `mix deps.compile type_check && mix compile`) after any `mix deps.get`/`mix deps.clean`.
+</content>

@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan: Showcase README — Portfolio Front Door</title>
+<style>
+  :root{
+    --bg:#0b0d10; --panel:#13161c; --panel-2:#1a1f27; --ink:#eef1f6; --muted:#9aa4b2;
+    --line:#262c37; --primary:#5b9dff; --primary-2:#8ab6ff; --accent:#f5b454; --accent-2:#ffc978;
+    --ok:#46d39a; --warn:#ffb454; --danger:#ff6b6b;
+    --mono:"JetBrains Mono","SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
+    --sans:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --radius:14px; --maxw:1060px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:
+       radial-gradient(1100px 640px at 78% -12%,#172234 0%,var(--bg) 58%);
+       color:var(--ink);font-family:var(--sans);line-height:1.62;font-size:16px}
+  main{max-width:var(--maxw);margin:0 auto;padding:48px 24px 120px}
+  h1{font-size:2.25rem;letter-spacing:-.02em;margin:.2em 0 .15em;line-height:1.12}
+  h2{font-size:1.5rem;letter-spacing:-.01em;margin:1.9em 0 .5em;padding-bottom:.3em;border-bottom:1px solid var(--line)}
+  h3{font-size:1.18rem;margin:1.4em 0 .4em}
+  h4{font-size:.95rem;margin:1.1em 0 .3em;color:var(--primary-2);text-transform:uppercase;letter-spacing:.07em;font-weight:600}
+  a{color:var(--primary-2);text-decoration:none} a:hover{text-decoration:underline}
+  code{font-family:var(--mono);font-size:.85em;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:.07em .4em;color:var(--accent-2)}
+  pre{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;overflow:auto;font-family:var(--mono);font-size:.82rem;line-height:1.55;color:#d6dae4}
+  pre code{background:none;border:none;color:inherit;padding:0}
+  header{border-bottom:1px solid var(--line);padding-bottom:14px}
+  header .kicker{font-family:var(--mono);color:var(--accent);font-size:.78rem;letter-spacing:.2em;text-transform:uppercase}
+  .lead{font-size:1.06rem}
+  details.meta{margin-top:14px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:6px 16px}
+  details.meta summary{cursor:pointer;font-family:var(--mono);font-size:.8rem;color:var(--muted);letter-spacing:.08em}
+  dl{display:grid;grid-template-columns:130px 1fr;gap:4px 18px;margin:12px 0 6px}
+  dl dt{font-family:var(--mono);font-size:.72rem;color:var(--accent);text-transform:uppercase;letter-spacing:.07em}
+  dl dd{margin:0;font-family:var(--mono);font-size:.8rem;color:var(--muted);word-break:break-word}
+  figure{margin:22px 0;text-align:center}
+  figure img{max-width:100%;height:auto;border-radius:var(--radius);border:1px solid var(--line);box-shadow:0 14px 44px -18px rgba(91,157,255,.5)}
+  figcaption{color:var(--muted);font-size:.85rem;margin-top:10px;font-style:italic}
+  .files ul{list-style:none;padding:0;margin:0}
+  .files li{padding:8px 12px;border:1px solid var(--line);border-radius:10px;margin-bottom:7px;background:var(--panel);font-size:.92rem}
+  .tag{font-family:var(--mono);font-size:.64rem;text-transform:uppercase;letter-spacing:.08em;padding:.12em .55em;border-radius:999px;margin-right:8px;vertical-align:middle}
+  .tag.existing{background:rgba(70,211,154,.13);color:var(--ok);border:1px solid rgba(70,211,154,.4)}
+  .tag.new{background:rgba(91,157,255,.16);color:var(--primary-2);border:1px solid rgba(91,157,255,.45)}
+  .phase{background:linear-gradient(180deg,var(--panel) 0%,rgba(19,22,28,.6) 100%);border:1px solid var(--line);border-left:3px solid var(--primary);border-radius:var(--radius);padding:8px 24px 22px;margin:20px 0}
+  .phase h3{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .status{font-family:var(--mono);font-size:.78em;background:var(--panel-2);border:1px solid var(--line);color:var(--warn);padding:.05em .45em;border-radius:5px}
+  ul.checklist{list-style:none;padding:0;margin:.4em 0}
+  ul.checklist li{padding:5px 0 5px 4px;border-bottom:1px dashed rgba(38,44,55,.8);font-size:.93rem}
+  ul.checklist li .status{margin-right:8px}
+  .loop{margin-top:14px;background:rgba(245,180,84,.08);border:1px solid rgba(245,180,84,.32);border-radius:10px;padding:10px 14px;font-size:.88rem;color:var(--accent-2)}
+  #validation .loop{background:rgba(91,157,255,.1);border-color:rgba(91,157,255,.4);color:var(--primary-2)}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.88rem}
+  th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+  th{background:var(--panel-2);font-family:var(--mono);font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--accent)}
+  #questionables details,#amendments details{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:6px 16px;margin-bottom:9px}
+  #questionables summary,#amendments summary{cursor:pointer;font-weight:600;color:var(--primary-2)}
+  .qa-answer{color:var(--muted);font-size:.92rem;margin:.6em 0 .3em}
+  .callout{background:var(--panel-2);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;padding:12px 16px;margin:16px 0;font-size:.92rem}
+  .pillrow{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}
+  .pill{font-family:var(--mono);font-size:.74rem;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:.3em .8em;color:var(--muted)}
+  .pill b{color:var(--accent-2);font-weight:600}
+  .statgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:16px 0}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
+  .stat .n{font-size:1.5rem;font-weight:700;color:var(--primary-2);font-family:var(--mono)}
+  .stat .l{font-size:.78rem;color:var(--muted);margin-top:2px}
+  hr{border:none;border-top:1px solid var(--line);margin:32px 0}
+</style>
+</head>
+<body>
+<main>
+
+  <!-- ===== HEADER + UPDATABLE METADATA ===== -->
+  <header>
+    <div class="kicker">repo_builder_elixir · portfolio · README rewrite</div>
+    <h1>Plan: Showcase README — the Portfolio Front Door</h1>
+    <p class="lead">Rewrite <code>README.md</code> into a hiring-grade showcase that leads with engineering substance, proves stability with hard numbers, and is <strong>candid that this was built human-directs-AI with Claude Code</strong> — framing that mastery as a strength, because the project itself industrializes exactly that workflow.</p>
+    <details class="meta">
+      <summary>Metadata</summary>
+      <dl>
+        <dt>created</dt>      <dd>2026-06-24T10:54:31Z</dd>
+        <dt>modified</dt>     <dd>2026-06-24T10:54:31Z</dd>
+        <dt>commits</dt>      <dd>32df805</dd>
+        <dt>agent name</dt>   <dd>sdlc_planner</dd>
+        <dt>session id</dt>   <dd>3773caa0-7704-4c79-9fea-720b1dacfd33</dd>
+        <dt>back refs</dt>    <dd>README.md, BUILD_PROMPT.md, docs/engineering-principles.md, ai_docs/typed-elixir-standard.md, specs/agentic-plugin-system-foundation.html</dd>
+        <dt>forward refs</dt> <dd>README.md (the artifact this plan produces)</dd>
+      </dl>
+    </details>
+  </header>
+
+  <figure>
+    <img src="showcase-readme/hero.png" alt="A human architect directing a swarm of AI agent nodes assembling a clean modular system into a solid keystone.">
+    <figcaption>The story in one frame: a human directing AI agents to ship a production-grade system.</figcaption>
+  </figure>
+
+  <!-- ===== PURPOSE / PROBLEM / SOLUTION ===== -->
+  <section id="purpose">
+    <h2>Purpose</h2>
+    <p>Turn the repository's front page into a <strong>portfolio piece for hiring managers and senior engineers</strong>. The current <code>README.md</code> is an excellent <em>operator's manual</em> — but it answers "how do I run this," not "what does this say about the person who built it." This plan rewrites it to answer the second question first, while keeping the operational depth a scroll away. The defining choice: be <strong>openly candid about the AI-assisted build process</strong> and present it as evidence of a modern, high-leverage engineering practice — not a disclaimer to bury.</p>
+    <div class="statgrid">
+      <div class="stat"><div class="n">31,178</div><div class="l">lines of typed Elixir (lib/)</div></div>
+      <div class="stat"><div class="n">1,109</div><div class="l">tests · green gate enforced</div></div>
+      <div class="stat"><div class="n">155</div><div class="l">modules across 28 contexts</div></div>
+      <div class="stat"><div class="n">87</div><div class="l">spec artifacts (the AI workflow)</div></div>
+    </div>
+    <p class="qa-answer">Numbers are pulled live from the repo at commit <code>32df805</code> and must be re-verified at write time (Phase 4) — never ship a stat the codebase can't back.</p>
+  </section>
+
+  <section id="problem">
+    <h2>Problem</h2>
+    <p>Three gaps make today's README a weak portfolio artifact:</p>
+    <ul>
+      <li><strong>It buries the lede.</strong> It opens with what the system <em>is</em> (correct, but dense) and never frames <em>why building it is hard</em> or <em>what skill it demonstrates</em> — OTP supervision design, a typed boundary discipline, a zero-orphan OS-process ledger, durable workflow resumption. A hiring manager skims 20 seconds and leaves without the signal.</li>
+      <li><strong>It's silent on process.</strong> The work was done human-directs-AI (Claude Code + a custom ADW harness, 87 spec documents driving the build). That is the single most current, differentiating thing about the engineer — and the README doesn't mention it. Silence reads either as hiding it or not noticing it; both are worse than owning it.</li>
+      <li><strong>No visual anchor.</strong> A wall of prose. Employers respond to one clean architecture diagram and a confident hero far more than to paragraph six.</li>
+    </ul>
+    <figure>
+      <img src="showcase-readme/problem.png" alt="A dense wall of grey text with a 20-second timer and an exit arrow — a reader bouncing before the signal lands.">
+      <figcaption>An operator's manual is not a portfolio. The signal has to land in the first screen.</figcaption>
+    </figure>
+  </section>
+
+  <section id="solution">
+    <h2>Solution</h2>
+    <p>Rewrite <code>README.md</code> as a <strong>two-audience document</strong>: a showcase top half that lands the signal in one screen, flowing into the existing operational depth for engineers who read on. Keep it a single file (it is what GitHub renders first) and preserve every accurate operational section. The new structure, top to bottom:</p>
+    <pre><code>┌─ Hero ─────────────────────────────────────────────┐
+│  Name · one-line value prop · status badges        │
+│  Hero image (architecture-at-a-glance)             │
+├─ What it is (3 sentences, plain) ──────────────────┤
+├─ Why it's hard / what it demonstrates ─────────────┤   ← the skill signal
+│   OTP supervision · typed boundaries · zero-orphan │
+│   ledger · durable resume · harness-agnostic core  │
+├─ Architecture (one diagram + 6-line module map) ───┤   ← visual anchor
+├─ Engineering discipline (the green gate, by #) ────┤   ← "stable codebase" proof
+├─ How this was built — human + AI, candidly ────────┤   ← the differentiator
+├─ Skills demonstrated (scannable matrix) ───────────┤
+├─ Quickstart / run it ──────────────────────────────┤   ← existing content, trimmed
+└─ Status, honest limitations, what's next ──────────┘</code></pre>
+    <p>The <strong>"How this was built"</strong> section is the centerpiece. Framing: <em>"I directed AI coding agents to build a 31k-line, fully-typed, green-gated OTP platform — under a self-imposed quality bar the AI could not lower. The platform itself industrializes that exact human-directs-AI loop."</em> That is honest, current, and rare. The stability proof (warnings-as-errors, Credo&nbsp;<code>--strict</code>, Dialyzer, 1,109 tests, all green) is what turns "used AI" from a risk into a credential.</p>
+    <figure>
+      <img src="showcase-readme/solution.png" alt="A vertical README wireframe — hero, signal, diagram, an amber-highlighted built-with-AI band, quickstart — beside a confident reader.">
+      <figcaption>A two-audience README: signal-first for hiring managers, depth-below for engineers.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== RELEVANT FILES ===== -->
+  <section id="files" class="files">
+    <h2>Relevant Files</h2>
+    <h3>Existing Files (read &amp; mine for truth)</h3>
+    <ul>
+      <li><span class="tag existing">existing</span> <code>README.md</code> — the rewrite target; salvage and trim its accurate operational sections (Installation, Running, Routes, Triggering, Testing gate).</li>
+      <li><span class="tag existing">existing</span> <code>BUILD_PROMPT.md</code> — the authoritative architecture spec; source of truth for every technical claim (supervision tree, event contract, §10 extensibility, milestones M0–M7).</li>
+      <li><span class="tag existing">existing</span> <code>docs/engineering-principles.md</code> — the reflection on <em>why</em> typed + functional + gate-enforced development works; mine it for the "what this demonstrates" voice (transferable principles, not just rules).</li>
+      <li><span class="tag existing">existing</span> <code>ai_docs/typed-elixir-standard.md</code> + <code>.credo.exs</code> + <code>mix.exs</code> (dialyzer/warnings-as-errors) — the enforced discipline; the concrete green-gate evidence.</li>
+      <li><span class="tag existing">existing</span> <code>adws/README.md</code> + <code>specs/*</code> (87 plan artifacts) — the AI-assisted process made tangible: the ADW harness and the spec-driven build trail that back the candid section.</li>
+      <li><span class="tag existing">existing</span> <code>ai_docs/agentic-layer-adaptor.md</code>, <code>ai_docs/plugin-authoring.md</code> — recent, sophisticated subsystems worth a sentence each (Projects adaptor, the plugin system).</li>
+    </ul>
+    <h3>New Files</h3>
+    <ul>
+      <li><span class="tag new">new</span> <code>specs/showcase-readme/*.png</code> — the generated hero + architecture + process images (synced visual identity).</li>
+      <li><span class="tag new">new</span> <code>assets/readme/*</code> (optional) — real screenshots of the running console/dashboard at <code>/</code> (the strongest possible proof it works); a follow-on the author captures.</li>
+      <li><span class="tag new">new</span> <code>README.operational.md</code> (optional) — only if the team prefers to split the operator's manual out; default is to keep one file.</li>
+    </ul>
+  </section>
+
+  <!-- ===== IMPLEMENTATION PHASES ===== -->
+  <section id="phases">
+    <h2>Implementation Phases</h2>
+    <p><strong>IMPORTANT:</strong> Execute every phase and task step by step, in order, top to bottom.</p>
+    <p>Status markers: <code>[]</code> idle · <code>[wip]</code> in progress · <code>[x]</code> complete · <code>[f]</code> failed. All start as <code>[]</code>.</p>
+
+    <!-- PHASE 1 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 1: Audience &amp; narrative architecture</h3>
+      <p>Decide who the README sells to and the exact order signal lands. Lock the messaging spine before writing a word of prose so every section earns its place in the first screen.</p>
+      <h4>1. Define the spine</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Pick the primary audience: <strong>senior/staff backend &amp; platform engineers and the hiring managers who screen for them</strong> (Elixir/OTP, distributed systems, AI-engineering). Write to them.</li>
+        <li><code class="status">[]</code> Draft the one-line value prop (≤ 20 words) and 3 sub-claims it must prove: (a) hard systems design, (b) enforced stability, (c) modern AI-leveraged delivery.</li>
+        <li><code class="status">[]</code> Order sections so the skill signal appears <em>above the fold</em> (hero → what → why-it's-hard), pushing run instructions below.</li>
+        <li><code class="status">[]</code> List the exact claims to make and, for each, the file/command that proves it (the fact-check ledger used in Phase 4).</li>
+      </ul>
+      <h4>2. Testing Strategy</h4>
+      <p>Validate the spine against a cold-read heuristic before investing in prose.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> The "20-second test": a reader who reads only the hero + first section can state what it is, why it's hard, and that it's AI-built-but-stable. Self-review (or a peer) confirms.</li>
+        <li><code class="status">[]</code> Every planned claim has a backing file/command in the ledger — no unbacked superlatives.</li>
+      </ul>
+      <div class="loop">🔁 Do not exit until the spine lands the signal in one screen and every claim is backed.</div>
+    </div>
+
+    <!-- PHASE 2 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 2: Write the showcase top half</h3>
+      <p>Author the new front matter: hero, what-it-is, why-it's-hard / what-it-demonstrates, and a tight architecture section with a module map. Confident, specific, no fluff.</p>
+      <h4>1. Hero + signal sections</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Hero: project name, the one-liner, status badges (Elixir 1.20 · Phoenix 1.8 · OTP 28 · "green gate: passing" · license), and the hero image.</li>
+        <li><code class="status">[]</code> "What it is" — 3 plain sentences a non-Elixir manager understands.</li>
+        <li><code class="status">[]</code> "Why it's hard / what it demonstrates" — a scannable list tying each hard problem to the skill it proves: OTP supervision &amp; crash isolation; a closed typed event contract across untrusted boundaries; a durable zero-orphan OS-process ledger; crash-resumable workflows; a harness-agnostic core (add a harness = one module).</li>
+        <li><code class="status">[]</code> "Architecture" — one diagram (Phase 4 image) + a 6–8 line module map; link to <code>BUILD_PROMPT.md</code> for depth.</li>
+      </ul>
+      <h4>2. Skills matrix</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> A compact table: <em>Capability → where it lives in the repo → what it demonstrates</em> (e.g. "Concurrency &amp; fault tolerance → <code>session/server.ex</code>, supervision tree → OTP design under real OS-process failure").</li>
+      </ul>
+      <h4>3. Testing Strategy</h4>
+      <p>Accuracy and tone, before polish.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Every technical sentence checked against <code>BUILD_PROMPT.md</code> / source — no overclaim, no inflated scope.</li>
+        <li><code class="status">[]</code> Tone read-through: confident, specific, not boastful; no marketing adjectives without a number or file behind them.</li>
+      </ul>
+      <div class="loop">🔁 Do not exit until the top half is accurate, specific, and lands without a single unbacked claim.</div>
+    </div>
+
+    <!-- PHASE 3 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 3: The candid "How this was built" section (the centerpiece)</h3>
+      <p>Write the differentiator: an honest, confident account of the human-directs-AI process and the stability bar that made it trustworthy. This is what most portfolios won't have the maturity to write.</p>
+      <h4>1. The narrative</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> State it plainly: built with <strong>Claude Code</strong>, directed by the author, using a spec-driven loop (87 plan artifacts in <code>specs/</code>) and a custom <strong>ADW</strong> (AI Developer Workflow) harness in <code>adws/</code>.</li>
+        <li><code class="status">[]</code> Frame the leverage as the skill: defining architecture &amp; invariants, decomposing work into specs, reviewing/steering AI output, and enforcing a quality bar the AI <em>cannot</em> lower.</li>
+        <li><code class="status">[]</code> Name the bar concretely — the <strong>green gate</strong>: <code>mix compile --warnings-as-errors</code>, <code>mix format --check-formatted</code>, <code>mix credo --strict</code>, <code>mix test --warnings-as-errors</code> (1,109 tests), <code>mix dialyzer</code> — all green, every change.</li>
+        <li><code class="status">[]</code> Close the loop: note the meta — the platform itself <em>industrializes</em> this human-directs-AI orchestration, so the build process and the product are the same idea at two scales.</li>
+        <li><code class="status">[]</code> Be candid about boundaries: what the author owned (design, invariants, review, debugging the hard OTP/race issues) vs. what AI accelerated (mechanical implementation, test scaffolding, docs). No false modesty, no overclaiming sole authorship.</li>
+      </ul>
+      <h4>2. Testing Strategy</h4>
+      <p>The credibility test — would this read as honest <em>and</em> strong to a skeptical staff engineer?</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Every process claim is verifiable from the repo (<code>specs/</code>, <code>adws/</code>, the gate config) — a reader can check it.</li>
+        <li><code class="status">[]</code> The section reads as a strength, not an apology: no hedging language ("just", "only", "with AI's help I managed to").</li>
+      </ul>
+      <div class="loop">🔁 Do not exit until the section is honest, specific, and reads as a credential.</div>
+    </div>
+
+    <!-- PHASE 4 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 4: Visuals + live fact-check</h3>
+      <p>Generate the synced-identity images, drop in the architecture diagram, and re-verify every number/claim against the live repo. Images are the anchor; accuracy is the credibility.</p>
+      <figure>
+        <img src="showcase-readme/phase.png" alt="An architecture diagram: a deterministic core fanning to swappable harness adapters, a dashboard, triggers, and a database ledger.">
+        <figcaption>The architecture diagram that anchors the README — the deterministic-core / non-deterministic-agents idea at a glance.</figcaption>
+      </figure>
+      <h4>1. Imagery</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Generate the hero + architecture + process images (this plan's synced identity) and place them: hero at top, architecture in the Architecture section.</li>
+        <li><code class="status">[]</code> (Optional, strongest) Capture 1–2 real screenshots of the running console at <code>/</code> and the swimlane dashboard; store under <code>assets/readme/</code> and embed.</li>
+        <li><code class="status">[]</code> Confirm GitHub renders every image path (relative paths, committed assets) — no broken images on the rendered page.</li>
+      </ul>
+      <h4>2. Fact-check ledger (re-run live)</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Re-derive each stat at write time: test count, LOC, module/context counts, version pins, spec count. Update any that drifted from <code>32df805</code>.</li>
+        <li><code class="status">[]</code> Run the full green gate and confirm it passes, so "all green" is true the moment it's claimed.</li>
+      </ul>
+      <h4>3. Testing Strategy</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix compile --warnings-as-errors &amp;&amp; mix format --check-formatted &amp;&amp; mix credo --strict &amp;&amp; mix test --warnings-as-errors</code> — proves the green-gate claim.</li>
+        <li><code class="status">[]</code> Every README stat traced to a command/file in the ledger — zero unverifiable numbers.</li>
+      </ul>
+      <div class="loop">🔁 Do not exit until every image renders and every number is live-verified true.</div>
+    </div>
+
+    <!-- PHASE 5 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 5: Polish, render-check &amp; ship</h3>
+      <p>Final markdown hygiene, link integrity, mobile/GitHub render check, and a last cold read. Preserve the operational content so the file still works as the operator's manual.</p>
+      <h4>1. Hygiene</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Keep/trim the existing operational sections (Installation, Running, Routes, Triggering, Testing gate, Layout); link long references rather than inlining.</li>
+        <li><code class="status">[]</code> Add a short "Status &amp; honest limitations" section (e.g. live-CLI acceptance is manual; nothing deployed; single-author) — candor reads as confidence.</li>
+        <li><code class="status">[]</code> Table of contents for the long file; consistent heading levels; working anchor + external links.</li>
+      </ul>
+      <h4>2. Testing Strategy</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Render-check on GitHub (or a markdown previewer): images load, tables format, TOC anchors work, no raw HTML artifacts.</li>
+        <li><code class="status">[]</code> Link check: every internal path and external URL resolves.</li>
+        <li><code class="status">[]</code> Final 20-second cold read by a fresh reader (or the author after a break): signal lands, AI-candor reads as strength, no typos.</li>
+      </ul>
+      <div class="loop">🔁 Do not exit until it renders cleanly everywhere and the cold read passes.</div>
+    </div>
+  </section>
+
+  <!-- ===== GLOBAL VALIDATION ===== -->
+  <section id="validation">
+    <h2>Validation Commands</h2>
+    <p>Execute these to validate the README is showcase-ready and every claim holds:</p>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>mix compile --warnings-as-errors &amp;&amp; mix format --check-formatted &amp;&amp; mix credo --strict &amp;&amp; mix test --warnings-as-errors</code> — the green-gate claim is literally true.</li>
+      <li><code class="status">[]</code> <code>grep -nE '[0-9][0-9,]+' README.md</code> — every number reviewed against a live source (tests, LOC, modules, versions).</li>
+      <li><code class="status">[]</code> <code>find . -path ./deps -prune -o -name '*.png' -print</code> + a render preview — all referenced images exist and load on GitHub.</li>
+      <li><code class="status">[]</code> Markdown render check (GitHub preview or <code>grip</code>/VS Code preview) — headings, tables, TOC, images all render.</li>
+      <li><code class="status">[]</code> Cold-read sign-off: signal in 20s · AI-process candid &amp; strong · no unbacked claim · no typo.</li>
+    </ul>
+    <div class="loop">🔁 <strong>The plan is not complete until every box is checked. If a step is genuinely impossible, mark it <code>[f]</code> and move on.</strong></div>
+  </section>
+
+  <!-- ===== QUESTIONABLES ===== -->
+  <section id="questionables">
+    <h2>Questionables</h2>
+    <figure>
+      <img src="showcase-readme/questionables.png" alt="A forked road sign weighing one README versus split files, and how candid to be about AI.">
+      <figcaption>The portfolio judgment calls worth deciding deliberately.</figcaption>
+    </figure>
+    <details>
+      <summary>One README, or split the operator's manual out?</summary>
+      <p class="qa-answer"><strong>Default: one file.</strong> <code>README.md</code> is what GitHub renders and what a hiring manager opens — splitting risks the showcase and the manual both feeling thin. Lead with showcase, flow into operations, link the heavy references (<code>BUILD_PROMPT.md</code>, <code>ai_docs/*</code>). Revisit only if the single file exceeds comfortable length, in which case move deep ops to <code>README.operational.md</code> and keep the showcase + quickstart up top.</p>
+    </details>
+    <details>
+      <summary>How candid about the AI-assisted build — full transparency or a light touch?</summary>
+      <p class="qa-answer"><strong>Recommendation: full, confident transparency.</strong> The project <em>is</em> an AI-orchestration platform; hiding the build method would be both incongruous and a missed differentiator. The honest, mature framing ("I directed AI under a quality bar it couldn't lower; here is the green gate that proves it") is rarer and more impressive than either silence or a buried footnote. The risk — a reviewer who discounts AI-assisted work — is better met head-on with evidence than avoided.</p>
+    </details>
+    <details>
+      <summary>Whose voice — first person ("I built") or project-neutral?</summary>
+      <p class="qa-answer"><strong>Assumption: first person in the "How this was built" and skills sections, neutral elsewhere.</strong> A portfolio piece benefits from a named human owning the decisions; the technical/operational sections stay neutral so the file still serves as project docs. If the repo will be shared without attribution, fall back to neutral throughout.</p>
+    </details>
+    <details>
+      <summary>AI-generated images vs. real app screenshots?</summary>
+      <p class="qa-answer"><strong>Both, in order of strength.</strong> Generate the synced-identity hero + architecture now (always available, on-brand). But a real screenshot of the live console/dashboard is the single most persuasive asset — "it actually runs" — so it's flagged as the recommended follow-on the author captures and commits under <code>assets/readme/</code>.</p>
+    </details>
+    <details>
+      <summary>How much to claim as sole authorship?</summary>
+      <p class="qa-answer"><strong>Claim direction and ownership of decisions, not every keystroke.</strong> The defensible, honest position: the author owns the architecture, invariants, review, and the hard debugging; AI accelerated implementation under that direction. Overclaiming "I hand-wrote 31k lines" is both false and unnecessary — the demonstrated skill is the <em>orchestration and the bar</em>, which is the more valuable signal anyway.</p>
+    </details>
+  </section>
+
+  <!-- ===== NOTES ===== -->
+  <section id="notes">
+    <h2>Notes</h2>
+
+    <h3>Draft copy — the two sections that matter most</h3>
+    <p>Lift-ready starting points (refine in Phase 2/3; verify numbers in Phase 4):</p>
+
+    <h4>Hero one-liner (pick one)</h4>
+    <pre><code>repo_builder — a harness-agnostic platform for the deterministic
+orchestration of non-deterministic AI coding agents. Elixir · Phoenix · OTP.
+
+# alt, skill-forward:
+A fault-tolerant OTP platform that drives swappable AI agent CLIs through
+durable, crash-resumable workflows — built typed, tested, and gate-green.</code></pre>
+
+    <h4>"How this was built — human + AI" (draft)</h4>
+    <pre><code>## How this was built — candidly
+
+I built this with **Claude Code**, directing the work rather than typing every
+line. The method was deliberate and is itself part of what the project
+demonstrates:
+
+- **I owned the architecture and the invariants** — the supervision tree, the
+  canonical event contract, the zero-orphan ledger, the durable workflow split.
+- **I decomposed the work into specs.** The `specs/` directory holds 87 plan
+  documents that drove the build, phase by phase.
+- **I enforced a quality bar the AI could not lower.** Every change had to pass
+  the green gate before it landed:
+
+      mix compile --warnings-as-errors
+      mix format --check-formatted
+      mix credo --strict          # @spec on every public function
+      mix test --warnings-as-errors   # 1,109 tests
+      mix dialyzer
+
+- **I reviewed, steered, and debugged.** The hard parts — OTP races, an
+  idle-timeout heuristic, a sandbox teardown race, Dialyzer's view of macro-built
+  types — were diagnosed and resolved by me, with AI as an accelerator.
+
+The result is ~31k lines of strictly-typed Elixir with crash isolation, durable
+state, and a green CI gate. The meta-point: **this platform industrializes the
+exact human-directs-AI loop I used to build it** — deterministic orchestration of
+non-deterministic agents, at two scales.</code></pre>
+
+    <h3>Skills the README should surface (matrix seed)</h3>
+    <table>
+      <thead><tr><th>Capability</th><th>Where in the repo</th><th>What it demonstrates</th></tr></thead>
+      <tbody>
+        <tr><td>Concurrency &amp; fault tolerance</td><td>supervision tree, <code>session/server.ex</code></td><td>OTP design; crash isolation under real OS-process failure</td></tr>
+        <tr><td>Type-driven design</td><td><code>ai_docs/typed-elixir-standard.md</code>, Dialyzer, Credo</td><td>discipline; defects caught at the boundary, not in prod</td></tr>
+        <tr><td>Systems / OS integration</td><td><code>os_pid_ledger</code>, <code>orphan_reaper.ex</code>, erlexec</td><td>zero-orphan guarantee across hard crashes</td></tr>
+        <tr><td>Durable workflows</td><td><code>workflow_engine/</code>, Oban, <code>workflow_runs</code></td><td>crash-resumable state machines; survives node restart</td></tr>
+        <tr><td>Extensible architecture</td><td>harness registry, plugin system</td><td>open-identity/closed-contract design (add a harness/plugin = one module)</td></tr>
+        <tr><td>Real-time UI</td><td>LiveView dashboard, streams, <code>assign_async</code></td><td>flat-memory streaming observability</td></tr>
+        <tr><td>AI engineering</td><td>this whole repo + <code>adws/</code> + <code>specs/</code></td><td>orchestrating AI agents to ship production-grade code</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Tone guardrails</h3>
+    <ul>
+      <li>Every adjective earns a number or a file. "Robust" → "1,109 tests, zero-orphan ledger verified across hard-kill."</li>
+      <li>No hedging in the AI section. Own it.</li>
+      <li>Honest limitations stated plainly — single author, live-CLI acceptance is manual, not deployed. Candor &gt; polish.</li>
+    </ul>
+
+    <h3>Rejected approaches</h3>
+    <ul>
+      <li><strong>Hide the AI involvement</strong> — rejected: incongruous for an AI-orchestration project and a missed differentiator.</li>
+      <li><strong>A separate marketing site / landing page</strong> — deferred: the GitHub README is where employers actually look first; nail that before anything fancier.</li>
+      <li><strong>Lead with installation</strong> — rejected: it's the operator's manual instinct; signal must come first.</li>
+    </ul>
+
+    <figure>
+      <img src="showcase-readme/notes.png" alt="A quality gate shaped like a checkmark shield between a stream of AI-generated code and the main branch — only green-passing code crosses.">
+      <figcaption>The throughline: AI accelerates the work; the gate guarantees the quality.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== AMENDMENTS ===== -->
+  <section id="amendments">
+    <h2>Amendments</h2>
+    <p class="qa-answer">None yet — appended by the Update Plan / Update References workflows after first execution.</p>
+  </section>
+
+</main>
+</body>
+</html>
