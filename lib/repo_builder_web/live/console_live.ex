@@ -462,7 +462,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
   # (spend/state), keyed by cap id. DB caps anchor the editable rows; snapshot-only caps
   # (a not-yet-reconciled memory cap) still surface so no cap is unreachable. A DB cap with
   # no live row yet renders at zero spend / :ok.
-  @spec budget_rows(map(), [Cap.t()]) :: [map()]
+  @spec budget_rows(%{caps: [map()], kill_switch?: boolean()}, [Cap.t()]) :: [map()]
   defp budget_rows(%{caps: live_rows}, db_caps) do
     by_id = Map.new(live_rows, &{&1.cap.id, &1})
 
@@ -475,10 +475,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
     ghosts = Enum.reject(live_rows, &MapSet.member?(db_ids, &1.cap.id))
 
     from_db ++ ghosts
-  end
-
-  defp budget_rows(_snapshot, db_caps) do
-    Enum.map(db_caps, &%{cap: &1, spent: Decimal.new(0), ratio: 0.0, state: :ok})
   end
 
   # Live id pickers for scoped caps: the console's own orchestrator and the recent
@@ -679,9 +675,26 @@ defmodule RepoBuilderWeb.ConsoleLive do
   # `"ADW <short>"`. A bare UUID is never the title.
   @spec workflow_title(Workflows.WorkflowRun.t(), Workflows.Workflow.t() | nil) :: String.t()
   defp workflow_title(run, workflow) do
-    meta_title(workflow) || human_name(workflow) || human_type(workflow) ||
-      step_title(run) || "ADW " <> short_id(run.id)
+    # First non-blank candidate wins; the `fallback_title/1` tail is always a binary, so
+    # the title is never nil. Expressed as `Enum.find/2` over the candidates rather than a
+    # 5-deep `||` chain — Dialyzer loses the `nil`-narrowing across the long chain and would
+    # otherwise infer a spurious `nil` in the return range (missing_range false positive).
+    candidates = [
+      meta_title(workflow),
+      human_name(workflow),
+      human_type(workflow),
+      step_title(run)
+    ]
+
+    case Enum.find(candidates, &is_binary/1) do
+      title when is_binary(title) -> title
+      nil -> fallback_title(run)
+    end
   end
+
+  # The guaranteed non-nil tail of the title resolution: a short, never-raw `"ADW <short>"`.
+  @spec fallback_title(Workflows.WorkflowRun.t()) :: String.t()
+  defp fallback_title(run), do: "ADW " <> short_id(run.id)
 
   @spec meta_title(Workflows.Workflow.t() | nil) :: String.t() | nil
   defp meta_title(%{metadata: %{"title" => title}}) when is_binary(title), do: presence(title)

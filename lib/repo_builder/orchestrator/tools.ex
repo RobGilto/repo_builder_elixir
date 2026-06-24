@@ -770,7 +770,9 @@ defmodule RepoBuilder.Orchestrator.Tools do
   # type, harness identity, a capped text excerpt (content-bearing events only),
   # token/cost usage (when present), and timestamp. Reuses the `check_agent_status`
   # excerpt + truncation helpers so the stdout-overflow bound is shared.
-  @spec log_detail(Logs.AgentLog.t()) :: map()
+  #
+  # Inference-only spec — the concrete string-keyed map narrows below a hand-written
+  # `map()` (mirrors `maybe_put_log_text/2` / `maybe_put_log_usage/2`).
   defp log_detail(log) do
     %{
       "log" => Logs.log_label(log.log_no),

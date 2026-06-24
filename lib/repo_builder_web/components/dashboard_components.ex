@@ -221,7 +221,7 @@ defmodule RepoBuilderWeb.DashboardComponents do
   end
 
   @doc "Icon glyph for a canonical event category (drives the event-square face)."
-  @spec category_icon(atom()) :: String.t()
+  @spec category_icon(:response | :tool | :thinking | :hook | :system) :: String.t()
   def category_icon(:response), do: "💬"
   def category_icon(:tool), do: "🛠️"
   def category_icon(:thinking), do: "🧠"
