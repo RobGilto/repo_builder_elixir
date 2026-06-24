@@ -1,6 +1,6 @@
 # repo_builder
 
-**A fault-tolerant OTP platform that drives swappable AI agent CLIs through durable, crash-resumable workflows — built typed, tested, and gate-green.**
+**A fault-tolerant OTP platform that drives swappable AI agent CLIs through durable, crash-resumable workflows. Built typed, tested, and gate-green.**
 
 ![Elixir](https://img.shields.io/badge/Elixir-1.20.1-4B275F)
 ![Phoenix](https://img.shields.io/badge/Phoenix-1.8-FD4F00)
@@ -13,7 +13,7 @@
 
 > `repo_builder` does the **deterministic orchestration of non-deterministic AI agents**: humans, cron, and signed webhooks compose fixed-shape workflows (e.g. `plan → build → review → fix`) whose step order and branching are durable and survive a node restart, while the intelligent work inside each step is delegated to a **swappable, supervised external AI harness CLI** running as a child process.
 
-**Contents:** [What it is](#what-it-is) · [Why it's hard](#why-its-hard--and-what-it-demonstrates) · [Architecture](#architecture) · [The green gate](#engineering-discipline--the-green-gate) · [How this was built](#how-this-was-built--candidly) · [Skills demonstrated](#skills-demonstrated) · [Quickstart](#prerequisites) · [Status & limitations](#status--honest-limitations)
+**Contents:** [What it is](#what-it-is) · [Why it's hard](#why-its-hard-and-what-it-demonstrates) · [Architecture](#architecture) · [The green gate](#the-green-gate) · [How I built this](#how-i-built-this) · [Skills](#skills-demonstrated) · [Quickstart](#prerequisites) · [Status](#status-and-honest-limitations)
 
 ---
 
@@ -21,14 +21,14 @@
 
 It is an Elixir/Phoenix/OTP control plane for AI coding agents. You register a target repository, pick a workflow, and the platform runs each step by spawning a real agent CLI (Claude Code or `pi`) as a supervised OS process, normalizing its streaming output into one canonical event contract, and persisting every transition so a run can resume exactly where it left off after a crash. A live LiveView dashboard streams the logs, tool-calls, cost, and status as it happens.
 
-The defining constraint is that the platform is **not locked to one harness**. Claude Code and `pi` ship today; adding a third agent is one adapter module plus one config entry — proven by an included no-op Cursor adapter that required zero edits to the core.
+The defining constraint is that the platform is **not locked to one harness**. Claude Code and `pi` ship today. Adding a third agent is one adapter module plus one config entry, proven by an included no-op Cursor adapter that needed zero edits to the core.
 
-## Why it's hard — and what it demonstrates
+## Why it's hard, and what it demonstrates
 
-The interesting engineering is not CRUD; it is making non-deterministic, crash-prone external processes behave predictably under failure. Each problem below maps to a transferable skill:
+The interesting engineering here is not CRUD. It is making non-deterministic, crash-prone external processes behave predictably under failure. Each problem below maps to a skill that travels:
 
 - **Driving a streaming CLI child process safely** → an `erlexec`-backed GenServer per agent with partial-line and multibyte-safe NDJSON buffering, an idle-timeout watchdog, stdout-overflow backpressure, and an admission concurrency gate. *(OTP design under real OS-process failure.)*
-- **Never leaking an OS process — even on a hard `SIGKILL` of the VM** → a durable `os_pid` ledger plus a boot-time reaper that verifies `/proc/<pid>/environ` against a per-session marker before it signals anything. *(Systems-level correctness, not hope.)*
+- **Never leaking an OS process, even on a hard `SIGKILL` of the VM** → a durable `os_pid` ledger plus a boot-time reaper that verifies `/proc/<pid>/environ` against a per-session marker before it signals anything. *(Systems-level correctness, not hope.)*
 - **One contract across many untrusted agents** → `RepoBuilder.Harness.Event`, a closed 8-variant `typedstruct` sum type with an **open** `harness :: atom()` identity and a raw escape hatch, normalized at a `TypeCheck` wire boundary. *(Type-driven design; defects caught at the boundary, not in prod.)*
 - **Workflows that survive a node restart** → `workflow_runs` is the source of truth, persisted *before* each transition; live streaming stays in GenServers while durable steps run through Oban and a reconciler re-enqueues in-flight runs on boot. *(Durable state machines and the hot/durable split.)*
 - **Secrets never reach disk** → events are redacted before persistence while the live broadcast keeps full detail. *(Security as a default, not an afterthought.)*
@@ -52,9 +52,9 @@ Module map:
 
 Two larger subsystems extend the core without touching it: the **agentic-layer adaptor** (point the platform at any target repo as a first-class `Project`) and a full **plugin system** (versioned packages contributing to a closed set of extension points). Both are documented below.
 
-## Engineering discipline — the green gate
+## The green gate
 
-Every change has to pass a five-command gate before it is allowed to land. This is the bar that makes the codebase stable:
+Every change has to pass a five-command gate before it lands. This is the bar that keeps the codebase stable:
 
 ```bash
 mix compile --warnings-as-errors   # warnings are errors
@@ -64,20 +64,23 @@ mix test --warnings-as-errors      # 1,110 tests, all green
 mix dialyzer                       # success-typing + contract checking
 ```
 
-By the numbers, at this commit: **~31,000 lines of strictly-typed Elixir** across **155 modules** and **28 `@spec`'d contexts**; **1,110 tests** driven entirely through a `Fake`/Mock adapter (no external CLI needed for CI); Dialyzer with a small set of justified, documented skips. The full gate also runs in CI (`.github/workflows/ci.yml`).
+At this commit, the numbers behind that bar: **~31,000 lines of strictly-typed Elixir** across **155 modules** and **28 `@spec`'d contexts**. **1,110 tests**, driven entirely through a `Fake`/Mock adapter, so CI needs no external CLI. Dialyzer runs with a small set of justified, documented skips. The full gate also runs in CI (`.github/workflows/ci.yml`).
 
-The typing is not cosmetic: `@spec` on every public function, `typedstruct`/`@enforce_keys` for domain data, precise types over `any()`/`map()`, and `{:ok, t()} | {:error, reason()}` over raising. The standard is written down in [`ai_docs/typed-elixir-standard.md`](ai_docs/typed-elixir-standard.md) and enforced by `.credo.exs` + Dialyzer.
+The typing is not cosmetic. There is a `@spec` on every public function, `typedstruct`/`@enforce_keys` for domain data, precise types over `any()`/`map()`, and `{:ok, t()} | {:error, reason()}` instead of raising. The standard is written down in [`ai_docs/typed-elixir-standard.md`](ai_docs/typed-elixir-standard.md) and enforced by `.credo.exs` and Dialyzer.
 
-## How this was built — candidly
+## How I built this
 
-I built this with **Claude Code**, directing the work rather than typing every line. The method was deliberate, and it is itself part of what the project demonstrates:
+I built this with **Claude Code**, directing the work rather than typing every line. The method was deliberate, and it is part of what the project demonstrates.
 
-- **I owned the architecture and the invariants** — the supervision tree, the canonical event contract, the zero-orphan ledger, the durable/live workflow split, the open-identity/closed-contract extensibility doctrine.
-- **I decomposed the work into specs.** The [`specs/`](specs/) directory holds 80+ plan documents that drove the build phase by phase, and a custom **ADW** (AI Developer Workflow) harness in [`adws/`](adws/) runs an AI agent through `plan → build → test → review` against a target repo.
-- **I enforced a quality bar the AI could not lower.** Nothing landed unless the [green gate](#engineering-discipline--the-green-gate) was green — warnings-as-errors, Credo `--strict`, Dialyzer, and the full test suite, on every change.
-- **I reviewed, steered, and debugged the hard parts myself** — OTP races, an idle-timeout heuristic for agents that exit without a clean terminal marker, a test-sandbox teardown race, and Dialyzer's view of macro-built TypeCheck types. AI was the accelerator; the diagnosis and the decisions were mine.
+The architecture and the invariants were mine: the supervision tree, the canonical event contract, the zero-orphan ledger, the durable-versus-live workflow split, the open-identity/closed-contract extensibility doctrine.
 
-The honest division of labor: I directed the design, the invariants, the review, and the debugging; AI accelerated the mechanical implementation, the test scaffolding, and the docs. The result is a strictly-typed, crash-isolated, gate-green codebase — and the meta-point is that **this platform industrializes the exact human-directs-AI loop I used to build it**: deterministic orchestration of non-deterministic agents, at two scales.
+I broke the work into specs. The [`specs/`](specs/) directory holds 80+ plan documents that drove the build phase by phase, and a custom **ADW** (AI Developer Workflow) harness in [`adws/`](adws/) runs an agent through plan, build, test, and review against a target repo.
+
+Nothing landed unless it was green. Every change had to pass the [green gate](#the-green-gate) first: warnings-as-errors, Credo `--strict`, Dialyzer, and the full test suite.
+
+The hard parts I debugged myself. OTP races. An idle-timeout heuristic for agents that exit without a clean terminal marker. A test-sandbox teardown race. Dialyzer's view of macro-built TypeCheck types. AI moved fast, and the diagnosis and the calls were mine.
+
+So the honest split is plain. I directed the design, the invariants, the review, and the debugging. AI accelerated the mechanical implementation, the test scaffolding, and the docs. The result is a strictly-typed, crash-isolated, gate-green codebase. The part worth noticing: this platform industrializes the same human-directs-AI loop I used to build it. Deterministic orchestration of non-deterministic agents, at two scales.
 
 ## Skills demonstrated
 
@@ -396,13 +399,13 @@ The included `RepoBuilder.Harness.Cursor` is the proof — a real `command/1` an
 └── test/
 ```
 
-## Status & honest limitations
+## Status and honest limitations
 
-This is a substantial single-author project, and I'd rather state its edges than paper over them:
+This is a substantial single-author project. I would rather state its edges than paper over them.
 
-- **CI/local development needs no external CLI.** The full suite and the green gate run entirely against the `Fake`/Mock adapter through the registry seam.
-- **Live acceptance against the real `claude` and `pi` CLIs is a manual step** — those tools are external and may not be installed in every environment.
-- **It is not deployed.** It runs locally (`mix phx.server`); there is no hosted instance or production release behind it.
-- **It was built human-directs-AI** (see [How this was built](#how-this-was-built--candidly)) under the green gate — which is the point, not a caveat.
-- Operational reminders: run `scripts/pg.sh start` once per session, and `scripts/patch_deps.sh` (followed by `mix deps.compile type_check && mix compile`) after any `mix deps.get`/`mix deps.clean`.
+- **CI and local development need no external CLI.** The full suite and the green gate run entirely against the `Fake`/Mock adapter through the registry seam.
+- **Live acceptance against the real `claude` and `pi` CLIs is a manual step**, because those tools are external and may not be installed everywhere.
+- **It is not deployed.** It runs locally (`mix phx.server`). There is no hosted instance or production release behind it.
+- **I built it human-directs-AI** (see [How I built this](#how-i-built-this)) under the green gate. That is the point, not a caveat.
+- Operational reminders: run `scripts/pg.sh start` once per session, and `scripts/patch_deps.sh` (followed by `mix deps.compile type_check && mix compile`) after any `mix deps.get` or `mix deps.clean`.
 </content>
