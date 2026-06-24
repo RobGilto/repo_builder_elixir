@@ -7,11 +7,18 @@ defmodule RepoBuilder.Orchestrators do
   Owns the per-orchestrator bearer token used to scope the MCP tool surface: the
   PLAINTEXT token is returned exactly once by `mint_token/1` and never persisted;
   only its SHA-256 hash is stored, and `verify_token/2` compares in constant time.
+
+  Per-orchestrator context isolation is a property of the ROW: each orchestrator carries
+  its own resumable `session_id` and its own `context_tokens` occupancy. Switching the
+  active project (`get_or_create_for_project/1`) therefore selects a DIFFERENT orchestrator
+  row — a separate context window and cost ledger, NOT a shared one. The `project_id: nil`
+  singleton remains the platform/"all" orchestrator (back-compat).
   """
   import Ecto.Query, only: [from: 2]
 
   alias RepoBuilder.Harness.Registry
   alias RepoBuilder.Orchestrator.{Orchestrator, SystemPrompt}
+  alias RepoBuilder.Projects
   alias RepoBuilder.Repo
 
   @default_name "default"
@@ -123,6 +130,104 @@ defmodule RepoBuilder.Orchestrators do
     case Repo.get_by(Orchestrator, name: @default_name) do
       %Orchestrator{} = orchestrator -> {:ok, orchestrator}
       nil -> error
+    end
+  end
+
+  @doc """
+  Idempotently fetch-or-create the orchestrator bound to `project_id` (orchestrator↔
+  project binding). The first call creates a row with the project's (or the configured
+  global) harness defaults, a deterministic unique name, `project_id`, and
+  `working_dir = project.root_path`; subsequent calls return that row unchanged. A `nil`
+  id — or a project that no longer exists — falls back to the platform default
+  orchestrator (back-compat). Each per-project row carries its own `session_id`/
+  `context_tokens`, so two project orchestrators hold two independent context windows.
+  """
+  @spec get_or_create_for_project(Ecto.UUID.t() | nil) ::
+          {:ok, Orchestrator.t()} | {:error, Ecto.Changeset.t()}
+  def get_or_create_for_project(nil), do: get_or_create_default()
+
+  def get_or_create_for_project(project_id) do
+    case Repo.get_by(Orchestrator, project_id: project_id) do
+      %Orchestrator{} = orchestrator ->
+        {:ok, orchestrator}
+
+      nil ->
+        case Projects.get_project(project_id) do
+          %Projects.Project{} = project -> create_for_project(project)
+          nil -> get_or_create_default()
+        end
+    end
+  end
+
+  @spec create_for_project(Projects.Project.t()) ::
+          {:ok, Orchestrator.t()} | {:error, Ecto.Changeset.t()}
+  defp create_for_project(%Projects.Project{} = project) do
+    harness = project_harness(project)
+
+    attrs =
+      %{name: project_orchestrator_name(project), harness: harness}
+      |> apply_harness_defaults(harness)
+      |> Map.merge(%{project_id: project.id, working_dir: project.root_path})
+
+    %Orchestrator{}
+    |> Orchestrator.changeset(attrs)
+    |> Repo.insert()
+    |> handle_project_race(project.id)
+  end
+
+  # The harness a per-project orchestrator is created with: the project's own
+  # `default_harness` when it is a registered harness, else the configured global default.
+  @spec project_harness(Projects.Project.t()) :: String.t()
+  defp project_harness(%Projects.Project{default_harness: harness}) when is_binary(harness) do
+    if harness in Registry.known(), do: harness, else: default_harness()
+  end
+
+  defp project_harness(%Projects.Project{}), do: default_harness()
+
+  # Deterministic, collision-free orchestrator name for a project. Project names are
+  # globally unique (a unique index), so `"orch:" <> name` never collides with another
+  # per-project orchestrator and satisfies the `unique_constraint(:name)`.
+  @spec project_orchestrator_name(Projects.Project.t()) :: String.t()
+  defp project_orchestrator_name(%Projects.Project{name: name}), do: "orch:" <> name
+
+  # Two concurrent first-calls for the same project race on the partial-unique
+  # `project_id` index; the loser reads the winner's row instead of surfacing the error.
+  @spec handle_project_race(
+          {:ok, Orchestrator.t()} | {:error, Ecto.Changeset.t()},
+          Ecto.UUID.t()
+        ) :: {:ok, Orchestrator.t()} | {:error, Ecto.Changeset.t()}
+  defp handle_project_race({:ok, _} = ok, _project_id), do: ok
+
+  defp handle_project_race({:error, _changeset} = error, project_id) do
+    case Repo.get_by(Orchestrator, project_id: project_id) do
+      %Orchestrator{} = orchestrator -> {:ok, orchestrator}
+      nil -> error
+    end
+  end
+
+  @doc """
+  Bind (or unbind) an orchestrator to a project: set `project_id`, derive `working_dir`
+  from the project's `root_path`, and CLEAR `session_id` — mirrors `set_working_dir/2`
+  (a new project ⇒ a fresh CLI session + context window). A `nil` project id unbinds the
+  orchestrator back to a platform orchestrator (no project, no working dir). An unknown
+  project id is `{:error, :not_found}`.
+  """
+  @spec set_project(Ecto.UUID.t(), Ecto.UUID.t() | nil) ::
+          {:ok, Orchestrator.t()} | {:error, :not_found}
+  def set_project(id, nil),
+    do: update_fields(id, %{project_id: nil, working_dir: nil, session_id: nil})
+
+  def set_project(id, project_id) do
+    case Projects.get_project(project_id) do
+      %Projects.Project{} = project ->
+        update_fields(id, %{
+          project_id: project.id,
+          working_dir: project.root_path,
+          session_id: nil
+        })
+
+      nil ->
+        {:error, :not_found}
     end
   end
 

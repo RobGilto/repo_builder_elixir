@@ -52,7 +52,7 @@ defmodule RepoBuilder.Plans.Planner do
           optional(:model) => String.t() | nil
         }) :: {:ok, preview()} | {:error, :unknown_type}
   def resolve(%{project: %Project{} = project, goal: goal, workflow_type: type} = input) do
-    harness = input[:harness] || project.default_harness || "fake"
+    harness = resolve_harness(input[:harness], project)
     model = input[:model]
 
     case Catalog.steps(type, harness) do
@@ -76,6 +76,25 @@ defmodule RepoBuilder.Plans.Planner do
       true -> "feat"
     end
   end
+
+  # The preview harness reflects the SAME real harness the wizard will launch on (fix
+  # planning-wizard target-repo launch): an explicitly-passed real harness wins, then the
+  # project's real `default_harness`, so the preview never silently advertises the no-op
+  # `fake` adapter when a real default exists. `fake` survives only when it is the
+  # explicit choice AND no real project default exists (tests/demos).
+  @spec resolve_harness(String.t() | nil, Project.t()) :: String.t()
+  defp resolve_harness(explicit, %Project{default_harness: default}) do
+    cond do
+      real_harness?(explicit) -> explicit
+      real_harness?(default) -> default
+      is_binary(explicit) and explicit != "" -> explicit
+      true -> "fake"
+    end
+  end
+
+  @spec real_harness?(term()) :: boolean()
+  defp real_harness?(harness),
+    do: is_binary(harness) and String.trim(harness) != "" and harness != "fake"
 
   # --- internals ---
 

@@ -29,6 +29,16 @@
 | Tests, Mox, the FakeHarness, normalizer property tests, or crash-isolation tests | `BUILD_PROMPT.md` §13; `ai_docs/typed-elixir-standard.md` (Enforcement) |
 | Anything touching the existing Python ADW scripts | `adws/README.md` (scripts are Astral `uv` single-file Python) |
 
+## Human-facing docs (`docs/`)
+
+`docs/` holds **prose written for people**, not machine-routed reference material —
+read these when you want the *why* and the *reasoning* behind the practices above,
+or when onboarding/reflecting rather than implementing.
+
+| Read when… | Doc |
+|---|---|
+| You want the rationale behind the typed standard, the green gate, and the functional style — the abstracted principles, not the rules themselves | `docs/engineering-principles.md` — reflection on why typed + functional + gate-enforced development works; transferable principles. The enforceable *rules* still live in `ai_docs/typed-elixir-standard.md`. |
+
 ## Notes
 
 - When in doubt, the **(always)** row plus `BUILD_PROMPT.md` is the safe minimum.

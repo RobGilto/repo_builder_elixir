@@ -74,6 +74,46 @@ defmodule RepoBuilder.ProjectsTest do
     end
   end
 
+  describe "create_and_profile/1 folder creation" do
+    @tag :tmp_dir
+    test "creates the root_path folder when create_dir is opted in", %{tmp_dir: tmp} do
+      root = Path.join(tmp, "fresh-repo")
+      refute File.dir?(root)
+
+      assert {:ok, project} =
+               Projects.create_and_profile(%{
+                 "name" => "fresh-repo",
+                 "root_path" => root,
+                 "create_dir" => "true"
+               })
+
+      assert File.dir?(root)
+      assert project.root_path == Path.expand(root)
+    end
+
+    @tag :tmp_dir
+    test "does not create the folder when create_dir is absent/falsey", %{tmp_dir: tmp} do
+      root = Path.join(tmp, "absent-repo")
+
+      assert {:ok, _project} =
+               Projects.create_and_profile(%{"name" => "absent-repo", "root_path" => root})
+
+      refute File.dir?(root)
+    end
+
+    @tag :tmp_dir
+    test "leaves an existing folder untouched when opted in", %{tmp_dir: tmp} do
+      assert {:ok, _project} =
+               Projects.create_and_profile(%{
+                 "name" => "existing-repo",
+                 "root_path" => tmp,
+                 "create_dir" => "true"
+               })
+
+      assert File.dir?(tmp)
+    end
+  end
+
   describe "active_or_default/1" do
     test "returns the named project when found" do
       {:ok, project} = Projects.create_project(@valid)

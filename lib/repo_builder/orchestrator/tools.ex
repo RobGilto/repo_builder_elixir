@@ -21,6 +21,8 @@ defmodule RepoBuilder.Orchestrator.Tools do
   alias RepoBuilder.Harness.Pi.Models, as: PiModels
   alias RepoBuilder.Harness.Registry
   alias RepoBuilder.Orchestrator.{ContextWindow, Orchestrator, Template, Templates}
+  alias RepoBuilder.Projects
+  alias RepoBuilder.Projects.Project
   alias RepoBuilder.WorkflowEngine.Catalog
   alias RepoBuilder.Workflows.TitleHumanizer
 
@@ -118,6 +120,10 @@ defmodule RepoBuilder.Orchestrator.Tools do
         "name" => name,
         "harness" => spec.harness,
         "model" => spec.model,
+        # Pin the worker to the commanding orchestrator's project (orchestrator↔project
+        # binding): a worker spawned for repo A is permanently scoped to repo A and stays
+        # on its roster. A platform orchestrator (project_id: nil) still spawns nil workers.
+        "project_id" => orchestrator_project_id(orchestrator_id),
         "system_prompt" => with_reporting_clause(blank_to_nil(args["system_prompt"])),
         # The worker's `provider` column is a closed enum that can't hold pi's open
         # provider set, so the real provider rides in `config` and is threaded into
@@ -290,6 +296,12 @@ defmodule RepoBuilder.Orchestrator.Tools do
       session_id = worker.session_id || generate_session_id()
       _ = Agents.set_session(worker.id, session_id)
 
+      # Derive the dispatch location from the WORKER'S OWN project (drift-proof): a worker
+      # pinned to repo A always runs in repo A's root_path with repo A's isolation_mode,
+      # regardless of where the orchestrator's working_dir now points. An unscoped worker
+      # (project_id: nil) falls back to the orchestrator's working dir (back-compat).
+      {cwd, isolation_mode} = worker_dispatch_location(worker, orchestrator_id)
+
       opts = [
         agent_id: worker.id,
         agent_db_id: worker.id,
@@ -300,9 +312,10 @@ defmodule RepoBuilder.Orchestrator.Tools do
         orchestrator_id: orchestrator_id,
         provider: worker_provider(worker),
         config: worker_session_config(worker),
-        # Run the worker in the orchestrator's working directory so it operates on the
-        # same project (nil ⇒ the worker's own isolated scratch workspace).
-        cwd: orchestrator_working_dir(orchestrator_id)
+        cwd: cwd,
+        # Honour the project's worktree isolation where the session runtime applies it
+        # (nil ⇒ direct, unchanged for unscoped/back-compat workers).
+        isolation_mode: isolation_mode
       ]
 
       case Session.Supervisor.start_session(opts) do
@@ -468,11 +481,12 @@ defmodule RepoBuilder.Orchestrator.Tools do
     end
   end
 
-  # Resolve the directory the ADW worker runs in (its `opts.cwd`, and thus the
-  # adapter's `--working-dir` and the SDK's `.claude/commands/` root). An explicit
-  # `working_dir` MUST be an existing directory — a cross-repo ADW names the target
-  # repo here so its slash commands resolve from that repo, not the orchestrator's.
-  # Absent, fall back to the orchestrator's own working dir (same-repo back-compat).
+  # Resolve the directory the ADW worker runs in (its `opts.cwd`, and thus the adapter's
+  # `--working-dir` and the SDK's `.claude/commands/` root). This is the only LLM-chosen
+  # path, so it is GUARDED (orchestrator↔project binding): an explicit `working_dir` MUST
+  # map to a REGISTERED project (`Projects.get_by_root_path/1`) — closing the wrong-repo
+  # hole — and resolves to that project's canonical `root_path`. Absent, default to the
+  # orchestrator's bound project working dir (same-repo back-compat).
   @spec adw_working_dir(Ecto.UUID.t(), map()) :: {:ok, String.t() | nil} | {:error, reason()}
   defp adw_working_dir(orchestrator_id, args) do
     case blank_to_nil(args["working_dir"]) do
@@ -480,10 +494,17 @@ defmodule RepoBuilder.Orchestrator.Tools do
         {:ok, orchestrator_working_dir(orchestrator_id)}
 
       dir ->
-        if File.dir?(dir),
-          do: {:ok, dir},
-          else: {:error, "working_dir #{dir} is not an existing directory"}
+        case Projects.get_by_root_path(dir) do
+          %Project{root_path: root} -> {:ok, root}
+          nil -> {:error, adw_working_dir_error(dir)}
+        end
     end
+  end
+
+  @spec adw_working_dir_error(String.t()) :: String.t()
+  defp adw_working_dir_error(dir) do
+    "working_dir #{dir} is not the bound project / a registered project; register it on " <>
+      "the Projects page first, or omit working_dir to run the ADW against your own project"
   end
 
   @spec spawn_adw_session(Agents.Agent.t(), String.t(), Definitions.Adw.t(), String.t() | nil) ::
@@ -1254,6 +1275,33 @@ defmodule RepoBuilder.Orchestrator.Tools do
       {:ok, orchestrator} -> blank_to_nil(orchestrator.working_dir)
       {:error, :not_found} -> nil
     end
+  end
+
+  # The commanding orchestrator's bound project id (orchestrator↔project binding), or nil
+  # for a platform orchestrator / unknown id. Stamped onto every worker it spawns.
+  @spec orchestrator_project_id(Ecto.UUID.t()) :: Ecto.UUID.t() | nil
+  defp orchestrator_project_id(orchestrator_id) do
+    case Orchestrators.fetch(orchestrator_id) do
+      {:ok, orchestrator} -> orchestrator.project_id
+      {:error, :not_found} -> nil
+    end
+  end
+
+  # Resolve `{cwd, isolation_mode}` for a worker dispatch from the worker's OWN project
+  # (stable, drift-proof). An unscoped worker — or one whose project no longer exists —
+  # falls back to the orchestrator's working dir with no isolation (back-compat).
+  @spec worker_dispatch_location(Agents.Agent.t(), Ecto.UUID.t()) ::
+          {String.t() | nil, Project.isolation_mode() | nil}
+  defp worker_dispatch_location(%{project_id: project_id}, orchestrator_id)
+       when is_binary(project_id) do
+    case Projects.get_project(project_id) do
+      %Project{root_path: root, isolation_mode: mode} -> {root, mode}
+      nil -> {orchestrator_working_dir(orchestrator_id), nil}
+    end
+  end
+
+  defp worker_dispatch_location(_worker, orchestrator_id) do
+    {orchestrator_working_dir(orchestrator_id), nil}
   end
 
   @spec resolve_harness(Ecto.UUID.t(), map()) :: {:ok, String.t()} | {:error, reason()}

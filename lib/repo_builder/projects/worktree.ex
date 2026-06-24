@@ -49,6 +49,18 @@ defmodule RepoBuilder.Projects.Worktree do
 
   def cleanup(_other), do: :ok
 
+  @doc """
+  The deterministic worktree `info` for a run WITHOUT provisioning — the same `path`
+  (`<scratch_base>/<run_id>`) and `branch` (`adw/<run_id>`) `checkout/2` would resolve.
+  Pure: used by the workflow `Runner` to record the reviewable branch onto the run for
+  the UI handoff after the session has provisioned it.
+  """
+  @spec expected_info(String.t(), term(), keyword()) :: info()
+  def expected_info(repo_root, run_id, opts \\ []) when is_binary(repo_root) do
+    rid = to_string(run_id)
+    %{path: Path.join(scratch_base(opts), rid), branch: @branch_prefix <> rid, repo: repo_root}
+  end
+
   @doc "Whether `path` is (inside) a git working tree."
   @spec git_repo?(String.t()) :: boolean()
   def git_repo?(path) when is_binary(path) do

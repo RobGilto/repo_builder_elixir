@@ -93,6 +93,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
         # authoritative `agent_costs` value when the harness reports the billed amount.
         agent_est_costs: %{},
         orchestrator_id: nil,
+        orchestrator_name: nil,
         # FIFO turn-queue snapshot (issue message-queue): busy?/current/queued/depth.
         # Safe idle default for the disconnected render; reseeded on the connected mount.
         orchestrator_queue: %{busy?: false, current: nil, queued: [], depth: 0},
@@ -268,14 +269,59 @@ defmodule RepoBuilderWeb.ConsoleLive do
     {:ok, socket}
   end
 
-  # Resolve the default orchestrator so a prompt with no agent selected has a brain
-  # to route to. A failure leaves orchestrator_id nil (the manual path still works).
+  # Resolve the orchestrator for the active project so a prompt with no agent selected has
+  # a brain to route to (orchestrator↔project binding): the project's own orchestrator when
+  # one is selected, else the platform default. Runs AFTER `active_project_id` is assigned
+  # so a deep-linked project starts on the right brain. A failure leaves orchestrator_id nil
+  # (the manual path still works).
   @spec assign_orchestrator(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp assign_orchestrator(socket) do
-    case Orchestrators.get_or_create_default() do
+    case Orchestrators.get_or_create_for_project(socket.assigns[:active_project_id]) do
       {:ok, orchestrator} -> assign_orchestrator_selection(socket, orchestrator)
       {:error, _reason} -> socket
     end
+  end
+
+  # Re-resolve the active orchestrator for the (already-assigned) active project and rebuild
+  # all orchestrator-scoped state: header selection + context gauge, the queue subscription
+  # (unsubscribe the old brain, subscribe the new), and the cost badges + chat/log history.
+  # A resolve failure leaves the current brain in place. Called by `select_project`.
+  @spec switch_orchestrator(Phoenix.LiveView.Socket.t(), Ecto.UUID.t() | nil) ::
+          Phoenix.LiveView.Socket.t()
+  defp switch_orchestrator(socket, previous_id) do
+    case Orchestrators.get_or_create_for_project(socket.assigns.active_project_id) do
+      {:ok, orchestrator} ->
+        socket
+        |> assign_orchestrator_selection(orchestrator)
+        |> resubscribe_orchestrator_queue(previous_id, orchestrator.id)
+        |> seed_cost()
+        |> seed_orchestrator_cost()
+        |> backfill_events()
+
+      {:error, _reason} ->
+        socket
+    end
+  end
+
+  # Move the per-orchestrator queue subscription from the previous brain to the new one when
+  # the id actually changes (guards against a redundant double-subscribe). No-op when the
+  # project switch resolved to the same orchestrator. Only meaningful on the connected socket.
+  @spec resubscribe_orchestrator_queue(
+          Phoenix.LiveView.Socket.t(),
+          Ecto.UUID.t() | nil,
+          Ecto.UUID.t() | nil
+        ) :: Phoenix.LiveView.Socket.t()
+  defp resubscribe_orchestrator_queue(socket, same, same), do: socket
+
+  defp resubscribe_orchestrator_queue(socket, previous_id, new_id) do
+    if connected?(socket) do
+      if is_binary(previous_id), do: Dashboard.unsubscribe_orchestrator_queue(previous_id)
+      # `new_id` is always a resolved orchestrator id (the equal-args clause above handles
+      # the no-change case), so it is subscribed unconditionally.
+      Dashboard.subscribe_orchestrator_queue(new_id)
+    end
+
+    socket
   end
 
   # Reflect an orchestrator's full selection (harness + provider + model) and the
@@ -289,6 +335,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
     assign(socket,
       orchestrator_id: orchestrator.id,
+      orchestrator_name: orchestrator.name,
       orchestrator_queue: OrchestratorQueue.snapshot(orchestrator.id),
       orchestrator_harness: orchestrator.harness,
       orchestrator_provider: orchestrator.provider,
@@ -778,14 +825,17 @@ defmodule RepoBuilderWeb.ConsoleLive do
     |> stream(:events, rows, reset: true)
   end
 
-  # Build the chat pane's `@messages` from the orchestrator-scoped backfill query
-  # (issue-chat-history-backfill) so the conversation survives a restart even when
-  # worker rows dominate the global stream. Reuses the live path's
-  # `log_to_row/4` → `chat_for_row/1` → `append_chat/3` helpers (single source of
-  # truth) with its OWN `seq` so chat entry ids never collide with the center stream.
+  # Build the chat pane's `@messages` from the ACTIVE orchestrator's scoped backfill
+  # query (issue-conversation-history-scope) so the conversation follows the project
+  # switcher and survives a restart even when worker rows dominate the global stream.
+  # Reuses the live path's `log_to_row/4` → `chat_for_row/1` → `append_chat/3` helpers
+  # (single source of truth) with its OWN `seq` so chat entry ids never collide with the
+  # center stream. A nil active orchestrator (deep-link/disconnected edge) yields an
+  # empty pane — the correct "no brain selected" state, never a global mix.
   @spec backfill_messages(Phoenix.LiveView.Socket.t(), String.t()) :: [map()]
   defp backfill_messages(socket, timezone) do
-    Logs.list_recent_orchestrator_messages(@messages_limit, socket.assigns.show_hidden?)
+    socket.assigns.orchestrator_id
+    |> scoped_orchestrator_messages(socket.assigns.show_hidden?)
     |> Enum.reduce({[], 0}, fn log, {msgs, seq} ->
       seq = seq + 1
       row = log_to_row(log, seq, socket.assigns.agent_names, timezone)
@@ -794,6 +844,17 @@ defmodule RepoBuilderWeb.ConsoleLive do
     |> elem(0)
     |> Enum.take(-@messages_limit)
   end
+
+  # Scoped chat backfill: the active orchestrator's own conversation rows, or `[]`
+  # when no brain is selected (nil active id). Keeps the `Repo` access behind the
+  # `Logs` context (§8) and the nil-edge handling out of the reduce above.
+  @spec scoped_orchestrator_messages(Ecto.UUID.t() | nil, boolean()) :: [Logs.AgentLog.t()]
+  defp scoped_orchestrator_messages(orchestrator_id, show_hidden?)
+       when is_binary(orchestrator_id) do
+    Logs.list_orchestrator_messages(orchestrator_id, @messages_limit, show_hidden?)
+  end
+
+  defp scoped_orchestrator_messages(_orchestrator_id, _show_hidden?), do: []
 
   @spec agent_lanes([Agent.t()]) :: [Dashboard.lane()]
   defp agent_lanes(agents) do
@@ -813,14 +874,19 @@ defmodule RepoBuilderWeb.ConsoleLive do
   @impl true
   def handle_event("toggle_view", _params, socket), do: {:noreply, toggle_view(socket)}
 
-  # Project switcher (agentic-layer adaptor, Phase 5): set the active project and re-scope
-  # the rail roster. A blank id is the unscoped "all / platform" view.
+  # Project switcher: switching the project is a FULL context switch (orchestrator↔project
+  # binding) — set the active project, re-resolve the active orchestrator (its own context
+  # window/cost/queue), re-point the queue subscription, reload the orchestrator-scoped
+  # views, and re-scope the rail roster. A blank id is the unscoped "all / platform" view
+  # and restores the platform default orchestrator.
   def handle_event("select_project", %{"project_id" => id}, socket) do
     active = if id == "", do: nil, else: id
+    previous_id = socket.assigns.orchestrator_id
 
     {:noreply,
      socket
      |> assign(:active_project_id, active)
+     |> switch_orchestrator(previous_id)
      |> load_agents()}
   end
 
@@ -2068,9 +2134,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
         {:agent_event, agent_id, %Event.TextDelta{partial?: true} = event, _log_no},
         socket
       ) do
-    # Only the orchestrator's in-flight text feeds the chat streaming buffer; worker
-    # partials are dropped here (their finalized text still lands in the center stream).
-    if orchestrator_event?(agent_id) do
+    # Only the ACTIVE orchestrator's in-flight text feeds the chat streaming buffer;
+    # worker partials AND background orchestrators are dropped here (their finalized text
+    # still lands in the center stream / is recoverable via backfill on switch).
+    if active_orchestrator_event?(socket, agent_id) do
       {:noreply, accumulate_partial(socket, agent_id, channel(event.thinking?), event.text)}
     else
       {:noreply, socket}
@@ -2107,7 +2174,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
     socket = finalize_stream_channel(socket, agent_id, :text)
 
     chat =
-      if orchestrator_event?(agent_id) do
+      if active_orchestrator_event?(socket, agent_id) do
         %{
           role: :orchestrator,
           label: "ORCHESTRATOR",
@@ -2501,6 +2568,24 @@ defmodule RepoBuilderWeb.ConsoleLive do
   @spec orchestrator_event?(String.t()) :: boolean()
   defp orchestrator_event?(agent_id), do: String.starts_with?(to_string(agent_id), "orch-")
 
+  # The chat pane is scoped to the ACTIVE orchestrator (issue-conversation-history-scope):
+  # `orchestrator_event?/1` only tells us a turn came from *some* orchestrator, so a
+  # background brain (a second project mid-run) would otherwise stream its text into the
+  # chat pane of whatever project is being viewed. This narrows to the active brain by
+  # matching the full active id between the `"orch-"` prefix and the `-<n>` suffix
+  # (orchestrator/server.ex) — robust against the UUID's own dashes, no UUID parsing.
+  # A nil active id matches nothing, so a "no brain selected" pane stays empty.
+  @spec active_orchestrator_event?(Phoenix.LiveView.Socket.t(), String.t()) :: boolean()
+  defp active_orchestrator_event?(socket, agent_id) do
+    case socket.assigns.orchestrator_id do
+      active when is_binary(active) ->
+        String.starts_with?(to_string(agent_id), "orch-" <> active <> "-")
+
+      _ ->
+        false
+    end
+  end
+
   @spec channel(boolean()) :: :text | :thinking
   defp channel(true), do: :thinking
   defp channel(false), do: :text
@@ -2858,7 +2943,13 @@ defmodule RepoBuilderWeb.ConsoleLive do
       />
 
       <div class="flex items-center gap-3 border-b border-zinc-800 px-3 py-1">
-        <.switcher projects={@projects} active_project_id={@active_project_id} />
+        <.switcher
+          projects={@projects}
+          active_project_id={@active_project_id}
+          orchestrator_name={@orchestrator_name}
+          orchestrator_working_dir={@orchestrator_working_dir}
+          orchestrator_context={@orchestrator_context}
+        />
         <.link navigate={~p"/projects"} class="text-xs text-cyan-400">manage</.link>
         <.link navigate={~p"/plan"} class="text-xs text-cyan-400">plan a run</.link>
       </div>

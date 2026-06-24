@@ -43,6 +43,7 @@ defmodule RepoBuilder.Orchestrator.Orchestrator do
   @type t :: %__MODULE__{
           id: Ecto.UUID.t() | nil,
           name: String.t() | nil,
+          project_id: Ecto.UUID.t() | nil,
           harness: String.t() | nil,
           provider: String.t() | nil,
           model: String.t() | nil,
@@ -65,6 +66,10 @@ defmodule RepoBuilder.Orchestrator.Orchestrator do
 
   schema "orchestrators" do
     field :name, :string
+    # Nullable target-repo binding (orchestrator↔project binding). nil = "the platform
+    # itself" — the back-compatible default singleton; a set id ⇒ this orchestrator owns
+    # that project (working_dir = project.root_path) and pins the workers it spawns to it.
+    field :project_id, :binary_id
     field :harness, :string
     # Open provider identity (§10/§3-rule-5) — pi supports 30+ providers, so this is
     # a loosely-validated :string, NOT a closed Ecto.Enum.
@@ -96,6 +101,7 @@ defmodule RepoBuilder.Orchestrator.Orchestrator do
     orchestrator
     |> cast(params, [
       :name,
+      :project_id,
       :harness,
       :provider,
       :model,
@@ -129,5 +135,8 @@ defmodule RepoBuilder.Orchestrator.Orchestrator do
     # constrained (pi providers are open) — mirrors the harness looseness (§3 rule 5).
     |> validate_length(:provider, min: 1)
     |> unique_constraint(:name)
+    # One orchestrator per project (partial-unique index; NULLs unconstrained). A
+    # concurrent first-call for the same project hits this; the context reads the winner.
+    |> unique_constraint(:project_id, name: :orchestrators_project_id_unique)
   end
 end

@@ -33,7 +33,10 @@ defmodule RepoBuilderWeb.TestOrchestratorChatWorkerIsolationTest do
        %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/")
 
-    orch_id = "orch-#{Ecto.UUID.generate()}-1"
+    # The chat pane is scoped to the ACTIVE orchestrator (the platform default on a
+    # no-project mount), so the orchestrator turn must broadcast under its id.
+    {:ok, default} = Orchestrators.get_or_create_default()
+    orch_id = "orch-#{default.id}-1"
     worker_id = Ecto.UUID.generate()
 
     Dashboard.broadcast_event(orch_id, %Event.TextDelta{
@@ -61,7 +64,8 @@ defmodule RepoBuilderWeb.TestOrchestratorChatWorkerIsolationTest do
        %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/")
 
-    orch_id = "orch-#{Ecto.UUID.generate()}-1"
+    {:ok, default} = Orchestrators.get_or_create_default()
+    orch_id = "orch-#{default.id}-1"
     worker_id = Ecto.UUID.generate()
 
     Dashboard.broadcast_event(worker_id, %Event.TextDelta{
@@ -86,12 +90,10 @@ defmodule RepoBuilderWeb.TestOrchestratorChatWorkerIsolationTest do
 
   test "reconnect backfill reconstructs only orchestrator text into the chat",
        %{conn: conn} do
-    {:ok, orch} =
-      Orchestrators.create(%{
-        name: "orch-#{System.unique_integer([:positive])}",
-        harness: "fake",
-        provider: "anthropic"
-      })
+    # Backfill is scoped to the ACTIVE orchestrator (the platform default on a
+    # no-project mount), so the orchestrator turn must be persisted under it to be
+    # reconstructed into the chat on reconnect.
+    {:ok, orch} = Orchestrators.get_or_create_default()
 
     {:ok, worker} =
       Agents.create_agent(%{

@@ -120,6 +120,14 @@ defmodule RepoBuilderWeb.PlanningLive do
       {:error, :over_cap} ->
         {:noreply, assign(socket, error: "Estimate exceeds the budget cap — blocked")}
 
+      {:error, :no_real_harness} ->
+        {:noreply,
+         assign(socket,
+           error:
+             "This project has no real harness configured — set a default harness on " <>
+               "the project before launching (the demo `fake` harness performs no work)."
+         )}
+
       {:error, _other} ->
         {:noreply, assign(socket, error: "Launch failed")}
     end
@@ -135,12 +143,33 @@ defmodule RepoBuilderWeb.PlanningLive do
     if over_cap?(cap, preview.estimate.estimated_cost_usd) do
       {:error, :over_cap}
     else
-      with {:ok, plan} <- persist_plan(project, goal, preview),
-           {:ok, run_id} <- start_run(project, preview, goal) do
+      # Resolve a REAL launch harness BEFORE persisting anything: refusing on a no-op
+      # `fake` (or blank) harness so a "launched" run can never be a silent no-op that
+      # never touches the target repo (fix planning-wizard target-repo launch).
+      with {:ok, harness} <- launch_harness(preview, project),
+           {:ok, plan} <- persist_plan(project, goal, preview),
+           {:ok, run_id} <- start_run(project, preview, goal, harness) do
         Plans.mark_launched(plan, run_id)
       end
     end
   end
+
+  # The harness the run actually executes on. Prefer the previewed selection, then the
+  # project's configured `default_harness`; the no-op `fake` adapter (and a blank) are
+  # NOT real launch harnesses — refuse rather than launch a run that does nothing.
+  @spec launch_harness(Planner.preview(), Projects.Project.t()) ::
+          {:ok, String.t()} | {:error, :no_real_harness}
+  defp launch_harness(%{harness: harness}, %Projects.Project{default_harness: default}) do
+    cond do
+      real_harness?(harness) -> {:ok, harness}
+      real_harness?(default) -> {:ok, default}
+      true -> {:error, :no_real_harness}
+    end
+  end
+
+  @spec real_harness?(term()) :: boolean()
+  defp real_harness?(harness),
+    do: is_binary(harness) and String.trim(harness) != "" and harness != "fake"
 
   @spec persist_plan(Projects.Project.t(), String.t(), Planner.preview()) ::
           {:ok, Plans.Plan.t()} | {:error, Ecto.Changeset.t()}
@@ -155,16 +184,21 @@ defmodule RepoBuilderWeb.PlanningLive do
     })
   end
 
-  @spec start_run(Projects.Project.t(), Planner.preview(), String.t()) ::
+  @spec start_run(Projects.Project.t(), Planner.preview(), String.t(), String.t()) ::
           {:ok, Ecto.UUID.t()} | {:error, term()}
-  defp start_run(project, preview, goal) do
+  defp start_run(project, preview, goal, harness) do
     name = "plan-#{preview.workflow_type}-#{System.unique_integer([:positive])}"
 
     with {:ok, workflow} <-
-           WorkflowEngine.create_workflow_of_type(name, preview.workflow_type, preview.harness),
+           WorkflowEngine.create_workflow_of_type(name, preview.workflow_type, harness),
          {:ok, run_id, _pid} <-
            WorkflowEngine.start_workflow(workflow,
              project_id: project.id,
+             # Run each step IN the target repo (fix planning-wizard target-repo launch):
+             # thread the project's working directory + isolation mode so work actually
+             # materialises there instead of an ephemeral managed scratch workspace.
+             cwd: project.root_path,
+             isolation_mode: project.isolation_mode,
              inputs: %{"input" => goal}
            ) do
       {:ok, run_id}

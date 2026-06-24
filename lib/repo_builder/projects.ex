@@ -59,21 +59,67 @@ defmodule RepoBuilder.Projects do
   Profiler against `root_path`, fills git metadata / detected stack / capability map /
   primed context, then merges the operator's explicit `params` on top (so operator
   overrides win). Falls back to a bare `create_project/1` when no `root_path` is given.
+
+  When the operator opts in via a truthy `"create_dir"` param and `root_path` does not
+  exist yet, the folder is created (`mkdir -p`) before profiling — a `{:error, changeset}`
+  with a `:root_path` error is returned if creation fails (e.g. permissions).
   """
   @spec create_and_profile(map()) :: {:ok, Project.t()} | {:error, Ecto.Changeset.t()}
   def create_and_profile(params) do
     case params["root_path"] || params[:root_path] do
       root when is_binary(root) and root != "" ->
-        profile = Profiler.profile(root)
+        attrs = Map.drop(params, ["create_dir", :create_dir])
+        create_dir? = truthy?(params["create_dir"] || params[:create_dir])
 
-        params
-        |> Map.merge(profile_attrs(profile), fn _k, operator, _profiled -> operator end)
-        |> create_project()
+        with :ok <- maybe_create_dir(root, attrs, create_dir?) do
+          profile_and_create(root, attrs)
+        end
 
       _ ->
         create_project(params)
     end
   end
+
+  @spec profile_and_create(String.t(), map()) :: {:ok, Project.t()} | {:error, Ecto.Changeset.t()}
+  defp profile_and_create(root, attrs) do
+    profile = Profiler.profile(root)
+
+    attrs
+    |> Map.merge(profile_attrs(profile), fn _k, operator, _profiled -> operator end)
+    |> create_project()
+  end
+
+  # Create the target folder (mkdir -p) when the operator opted in and it doesn't exist.
+  # On failure, surface an Ecto changeset error on :root_path so the UI can render it.
+  @spec maybe_create_dir(String.t(), map(), boolean()) :: :ok | {:error, Ecto.Changeset.t()}
+  defp maybe_create_dir(_root, _attrs, false), do: :ok
+
+  defp maybe_create_dir(root, attrs, true) do
+    expanded = Path.expand(root)
+
+    if File.dir?(expanded) do
+      :ok
+    else
+      case File.mkdir_p(expanded) do
+        :ok -> :ok
+        {:error, reason} -> {:error, mkdir_error(attrs, reason)}
+      end
+    end
+  end
+
+  @spec mkdir_error(map(), File.posix()) :: Ecto.Changeset.t()
+  defp mkdir_error(attrs, reason) do
+    %Project{}
+    |> Project.changeset(attrs)
+    |> Ecto.Changeset.add_error(
+      :root_path,
+      "could not create folder: #{:file.format_error(reason)}"
+    )
+    |> Map.put(:action, :insert)
+  end
+
+  @spec truthy?(term()) :: boolean()
+  defp truthy?(value), do: value in [true, "true", "on", "1"]
 
   @doc """
   Re-run the Profiler for an existing project and persist the refreshed git metadata,

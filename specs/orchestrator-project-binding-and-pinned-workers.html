@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan: Orchestrator↔Project Binding &amp; Pinned Workers</title>
+<style>
+  :root {
+    /* Synced visual identity — professional, focused, minimal.
+       Deep-slate canvas, cyan accent (mirrors the app's cyan-700 console),
+       monospace for code. Any generated image must match this palette. */
+    --bg:        #0d1117;
+    --bg-soft:   #161b22;
+    --bg-raise:  #1c2430;
+    --border:    #2b3440;
+    --fg:        #e6edf3;
+    --fg-dim:    #9aa7b4;
+    --accent:    #2dd4bf;   /* teal-cyan */
+    --accent-2:  #38bdf8;   /* sky */
+    --warn:      #f59e0b;
+    --bad:       #f87171;
+    --good:      #34d399;
+    --tag-new:   #1f6f63;
+    --tag-exist: #334155;
+    --radius:    10px;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font-family: var(--sans); line-height: 1.6; font-size: 16px;
+  }
+  main { max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem; }
+  h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 .5rem; letter-spacing: -.02em; }
+  h2 {
+    font-size: 1.4rem; margin: 2.6rem 0 .8rem; padding-bottom: .35rem;
+    border-bottom: 1px solid var(--border); letter-spacing: -.01em;
+  }
+  h3 { font-size: 1.12rem; margin: 1.6rem 0 .5rem; }
+  h4 { font-size: 1rem; margin: 1.1rem 0 .35rem; color: var(--accent-2); }
+  p { margin: .6rem 0; }
+  a { color: var(--accent); }
+  code {
+    font-family: var(--mono); font-size: .86em;
+    background: var(--bg-raise); padding: .1em .4em; border-radius: 5px;
+    border: 1px solid var(--border);
+  }
+  pre {
+    background: var(--bg-soft); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 1rem; overflow-x: auto;
+  }
+  pre code { background: none; border: none; padding: 0; font-size: .82rem; line-height: 1.5; }
+  header { margin-bottom: 1.5rem; }
+  header h1 { background: linear-gradient(92deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .meta { margin-top: .6rem; font-size: .85rem; color: var(--fg-dim); }
+  .meta summary { cursor: pointer; color: var(--accent); }
+  .meta dl { display: grid; grid-template-columns: max-content 1fr; gap: .15rem 1rem; margin: .6rem 0 0; }
+  .meta dt { color: var(--fg-dim); font-family: var(--mono); font-size: .8rem; }
+  .meta dd { margin: 0; }
+  figure { margin: 1.2rem 0; text-align: center; }
+  figure img { max-width: 100%; height: auto; border-radius: var(--radius); border: 1px solid var(--border); }
+  figcaption { color: var(--fg-dim); font-size: .82rem; margin-top: .5rem; font-style: italic; }
+  .placeholder {
+    border: 1px dashed var(--border); border-radius: var(--radius);
+    padding: 1.4rem; color: var(--fg-dim); background: var(--bg-soft);
+    font-family: var(--mono); font-size: .8rem;
+  }
+  section { scroll-margin-top: 1rem; }
+  .files ul { list-style: none; padding: 0; }
+  .files li { padding: .35rem 0; border-bottom: 1px dotted var(--border); }
+  .tag {
+    display: inline-block; font-size: .68rem; text-transform: uppercase; letter-spacing: .05em;
+    padding: .12em .5em; border-radius: 4px; margin-right: .5rem; font-weight: 600; vertical-align: middle;
+  }
+  .tag.new { background: var(--tag-new); color: #d6fff6; }
+  .tag.existing { background: var(--tag-exist); color: #cbd5e1; }
+  .phase {
+    background: var(--bg-soft); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 1.2rem 1.4rem; margin: 1.2rem 0;
+  }
+  .phase h3 { margin-top: 0; }
+  .checklist { list-style: none; padding-left: 0; }
+  .checklist li { padding: .22rem 0; }
+  .status { color: var(--fg-dim); }
+  .loop {
+    margin-top: .9rem; padding: .7rem .9rem; border-left: 3px solid var(--accent);
+    background: var(--bg-raise); border-radius: 0 var(--radius) var(--radius) 0; font-size: .9rem;
+  }
+  details { background: var(--bg-soft); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: .6rem .9rem; margin: .6rem 0; }
+  details summary { cursor: pointer; font-weight: 600; }
+  .qa-answer { color: var(--fg-dim); }
+  .callout {
+    border: 1px solid var(--border); border-left: 3px solid var(--warn);
+    background: var(--bg-soft); border-radius: 0 var(--radius) var(--radius) 0;
+    padding: .8rem 1rem; margin: 1rem 0;
+  }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .9rem; }
+  th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--accent-2); font-weight: 600; }
+  .pill { font-family: var(--mono); font-size: .78rem; padding: .1em .45em;
+    border-radius: 4px; background: var(--bg-raise); border: 1px solid var(--border); }
+</style>
+</head>
+<body>
+<main>
+
+  <!-- ===== HEADER + UPDATABLE METADATA ===== -->
+  <header>
+    <h1>Orchestrator↔Project Binding &amp; Pinned Workers</h1>
+    <p style="color:var(--fg-dim);max-width:62ch;">
+      Make a target repo the unit of work: bind each orchestrator to a project, switch the
+      active orchestrator when the operator switches projects in the console, give every
+      orchestrator its own context window + project-aware system prompt, and pin the workers
+      it spawns to that project so work can never silently land in the wrong repo.
+    </p>
+    <details class="meta">
+      <summary>Metadata</summary>
+      <dl>
+        <dt>created</dt>      <dd>2026-06-24T00:00:00Z</dd>
+        <dt>modified</dt>     <dd>2026-06-24T00:00:00Z</dd>
+        <dt>commits</dt>      <dd>—</dd>
+        <dt>agent name</dt>   <dd>claude-opus-4.8</dd>
+        <dt>session id</dt>   <dd>planf3-2026-06-24</dd>
+        <dt>back refs</dt>    <dd>BUILD_PROMPT.md §3/§8/§10, ai_docs/agentic-layer-adaptor.md, specs/issue-just-adw-did-sdlc_planner-fix-planning-wizard-target-repo-launch.md, specs/issue-c-adw-orchbrain-sdlc_planner-orchestrator-agent-multi-harness.md</dd>
+        <dt>forward refs</dt> <dd>—</dd>
+      </dl>
+    </details>
+  </header>
+
+  <!-- Hero image — synced to the :root visual identity. -->
+  <figure>
+    <img src="orchestrator-project-binding-and-pinned-workers/hero.png" alt="Two terminals (repo 1, repo 2), each with its own orchestrator brain and context-window gauge, a toggle switch between them.">
+
+    <figcaption>One orchestrator per repo — switching the project switches the brain, its context, and its workers.</figcaption>
+  </figure>
+
+  <!-- ===== PURPOSE / PROBLEM / SOLUTION ===== -->
+  <section id="purpose">
+    <h2>Purpose</h2>
+    <p>
+      Today the platform has a <strong>single, global "default" orchestrator</strong> whose target
+      repo is a free-text <code>working_dir</code> string, and the workers it spawns carry
+      <strong>no repo binding at all</strong>. The operator wants the opposite: a target repo is a
+      first-class context. Specifically —
+    </p>
+    <ul>
+      <li><strong>Pin workers to a project</strong> so an agent created for repo&nbsp;A always runs in repo&nbsp;A and stays visible on repo&nbsp;A's roster.</li>
+      <li><strong>Allocate an orchestrator to a project</strong>, so switching projects in the console UI switches the <em>active orchestrator</em> as part of the same gesture.</li>
+      <li>Each orchestrator <strong>maintains its own context window</strong> (independent resumable CLI session + token occupancy) and <strong>knows which project it is working on</strong> via its system prompt.</li>
+    </ul>
+  </section>
+
+  <section id="problem">
+    <h2>Problem</h2>
+    <p>
+      The binding model is <em>"one orchestrator → one <code>working_dir</code> string,"</em> resolved
+      late and shared across everything. Three concrete defects make cross-repo work unsafe:
+    </p>
+    <ul>
+      <li><strong>Workers aren't pinned.</strong> <code>agents.project_id</code> exists
+        (<code>lib/repo_builder/agents/agent.ex:44</code>) and <code>worker_changeset/2</code> casts it,
+        but <code>Agents.create_worker/2</code> (<code>lib/repo_builder/agents.ex:124</code>) never sets it.
+        Orchestrator-spawned workers land with <code>project_id: nil</code> and vanish from the rail the
+        moment a project is selected.</li>
+      <li><strong>Dispatch cwd is late-bound to the orchestrator, not the worker.</strong>
+        <code>command_agent</code> resolves <code>cwd: orchestrator_working_dir(orchestrator_id)</code>
+        on every call (<code>lib/repo_builder/orchestrator/tools.ex:305</code>, <code>:1251</code>). A worker
+        "for repo A" has no memory of repo A; if <code>working_dir</code> changes, the same worker drifts to repo B.</li>
+      <li><strong>One shared orchestrator = one shared context.</strong> <code>ConsoleLive</code> always
+        loads the singleton via <code>Orchestrators.get_or_create_default()</code>
+        (<code>console_live.ex:274</code>); <code>handle_event("select_project", …)</code>
+        (<code>console_live.ex:818</code>) only re-scopes the roster — the orchestrator, its working_dir,
+        its session, and its context window are untouched. All projects share one brain.</li>
+    </ul>
+    <p>
+      Net effect: the orchestrator can send work to the wrong repo, and there is no per-project memory or
+      context isolation. The schema primitives (<code>agents.project_id</code>, per-orchestrator
+      <code>session_id</code>/<code>context_tokens</code>) exist but are unused on these paths.
+    </p>
+    <figure>
+      <img src="orchestrator-project-binding-and-pinned-workers/problem.png" alt="A single brain wired by a dashed working_dir string forking to two repos with a red question-mark; unattached workers float.">
+
+      <figcaption>One brain, one ambiguous <code>working_dir</code> — workers float unattached and can drift to the wrong repo.</figcaption>
+    </figure>
+  </section>
+
+  <section id="solution">
+    <h2>Solution</h2>
+    <p>
+      Make <strong>the project the anchor</strong>. Add an explicit <code>orchestrator.project_id</code>
+      and an <code>Orchestrators.get_or_create_for_project/1</code> resolver, so each project gets (and
+      reuses) <em>its own</em> orchestrator row — which already carries an independent
+      <code>session_id</code> (resumable CLI session) and <code>context_tokens</code> (window occupancy),
+      so per-project context isolation comes <em>for free</em> once more than one row exists. Binding sets
+      <code>working_dir = project.root_path</code> and resolves the system prompt's project from
+      <code>project_id</code> (not a cwd guess), so the orchestrator literally knows its repo.
+    </p>
+    <p>
+      Then wire the <strong>console project switch</strong> to re-select the active orchestrator (and its
+      topics/views), <strong>pin spawned workers</strong> to the commanding orchestrator's project, and
+      derive each worker's <code>cwd</code> from <em>its own</em> project — making "agent A → repo 1,
+      agent B → repo 2" correct by construction. A guard on <code>start_adw</code>'s free-text
+      <code>working_dir</code> (the one LLM-chosen path) closes the last wrong-repo hole. The platform's
+      existing singleton remains the <code>project_id: nil</code> "All / platform" orchestrator — fully
+      back-compatible.
+    </p>
+    <figure>
+      <img src="orchestrator-project-binding-and-pinned-workers/solution.png" alt="Two lanes; each: a project card down to an orchestrator brain with its own context gauge down to pinned worker chips; a selector highlights one lane.">
+
+      <figcaption>Per-project lanes: a project owns one orchestrator with its own context window and pinned workers.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== RELEVANT FILES ===== -->
+  <section id="files" class="files">
+    <h2>Relevant Files</h2>
+
+    <h3>Existing Files</h3>
+    <ul>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/orchestrator.ex</code> — orchestrator schema; add the <code>project_id</code> field + type + cast (currently has <code>working_dir</code>, no project, lines 54/78/107).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator.ex</code> — <code>RepoBuilder.Orchestrators</code> context (only Repo caller). Add <code>get_or_create_for_project/1</code> + <code>set_project/2</code>; reuse <code>apply_harness_defaults/2</code> (94), <code>set_working_dir/2</code> (170), <code>get_or_create_default/1</code> (70).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/live/console_live.ex</code> — wire the switch: <code>assign_orchestrator/1</code> (274), <code>assign_orchestrator_selection/2</code> (287), <code>subscribe_orchestrator_queue</code> (389), <code>handle_event("select_project", …)</code> (818), <code>load_agents/1</code> (496), mount (79–269).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/system_prompt.ex</code> — resolve project from <code>orchestrator.project_id</code> first: <code>working_dir_block/1</code> (161), <code>project_primer_block/1</code> (190), <code>slash_commands_block/1</code> (285).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/tools.ex</code> — pin + safe dispatch: <code>create_agent</code> (110), <code>command_agent</code> (279, cwd at 305), <code>orchestrator_working_dir/1</code> (1251), <code>start_adw</code> / <code>adw_working_dir/2</code> (476), <code>spill_report/4</code> (1369).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/agents.ex</code> — <code>create_worker/2</code> (124) sets <code>project_id</code>; <code>list_for_project/1</code> (47), <code>scope_by_project/2</code> (39).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/agents/agent.ex</code> — already has <code>project_id</code> (44); confirm it's cast on the worker path.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/server.ex</code> — uses <code>orchestrator.working_dir</code> as session cwd (205) and <code>orchestrator.session_id</code> for resume (195); injects the system prompt (332). No change expected — verify per-orchestrator session/context isolation.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/projects.ex</code> — <code>get_project/1</code> (22), <code>get_by_root_path/1</code> (26), <code>active_or_default/1</code> (167), <code>default_project/0</code> (152).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/components/project_components.ex</code> — <code>switcher/1</code> (19); optionally surface the bound orchestrator (name/working_dir/context).</li>
+      <li><span class="tag existing">existing</span> <code>priv/repo/migrations/20260623000001_create_projects_and_scope.exs</code> — the precedent for the <code>project_id</code> FK block (agents/workflow_runs, lines 59–68) to mirror for orchestrators.</li>
+      <li><span class="tag existing">existing</span> <code>test/repo_builder_web/live/test_project_switcher_test.exs</code> — current switch behavior (roster filter only); extend for the orchestrator swap.</li>
+    </ul>
+
+    <h3>New Files</h3>
+    <ul>
+      <li><span class="tag new">new</span> <code>priv/repo/migrations/&lt;ts&gt;_add_project_id_to_orchestrators.exs</code> — adds nullable <code>project_id</code> FK (<code>on_delete: :nilify_all</code>) + index + partial-unique index (one orchestrator per project).</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/orchestrators_project_binding_test.exs</code> — <code>get_or_create_for_project/1</code> idempotency, working_dir = root_path, distinct-from-default, <code>set_project/2</code> resets session.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/orchestrator/system_prompt_project_test.exs</code> — prompt names the bound project + root and includes its primer when <code>project_id</code> is set; back-compat cwd path when nil.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder_web/live/test_orchestrator_project_switch_test.exs</code> — selecting a project switches the active orchestrator (id + working_dir change, topic re-subscribe); blank → platform default.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/orchestrator/tools_worker_project_pin_test.exs</code> — spawned workers inherit the orchestrator's <code>project_id</code>; <code>command_agent</code> cwd derives from the worker's project; <code>start_adw</code> refuses an off-project <code>working_dir</code>.</li>
+    </ul>
+  </section>
+
+  <!-- ===== IMPLEMENTATION PHASES ===== -->
+  <section id="phases">
+    <h2>Implementation Phases</h2>
+    <p><strong>IMPORTANT:</strong> Execute every phase and task step by step, in order, top to bottom.</p>
+    <p>Status markers: <code>[]</code> idle · <code>[wip]</code> in progress · <code>[x]</code> complete · <code>[f]</code> failed. All start as <code>[]</code>; the Build Plan workflow updates them as it works.</p>
+
+    <!-- PHASE 1 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 1: Orchestrator gains a project binding (schema + context)</h3>
+      <p>
+        Give the orchestrator an explicit, durable link to a project, and a resolver that returns
+        (and reuses) one orchestrator per project. This is the foundation every other phase builds on.
+        The existing singleton stays as the <code>project_id: nil</code> platform orchestrator.
+      </p>
+      <figure>
+        <img src="orchestrator-project-binding-and-pinned-workers/phase1-schema.png" alt="ERD: orchestrators table gaining a project_id foreign key arrow to the projects table, with a 'one per project' badge.">
+
+        <figcaption>Schema: a nullable <code>project_id</code> FK on orchestrators; one orchestrator per project.</figcaption>
+      </figure>
+
+      <h4>1. Migration — add <code>project_id</code> to <code>orchestrators</code></h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix ecto.gen.migration add_project_id_to_orchestrators</code></li>
+        <li><code class="status">[]</code> Mirror the agents block from <code>20260623000001</code>: <code>add :project_id, references(:projects, type: :binary_id, on_delete: :nilify_all)</code>.</li>
+        <li><code class="status">[]</code> <code>create index(:orchestrators, [:project_id])</code>.</li>
+        <li><code class="status">[]</code> <code>create unique_index(:orchestrators, [:project_id], where: "project_id IS NOT NULL", name: :orchestrators_project_id_unique)</code> — enforce at most one orchestrator per project (NULLs unconstrained → many platform rows still allowed, but only one is named "default").</li>
+        <li><code class="status">[]</code> <code>mix ecto.migrate</code>; confirm down-migration drops cleanly.</li>
+      </ul>
+
+      <h4>2. Schema — <code>orchestrator.ex</code></h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add <code>field :project_id, :binary_id</code> (nullable; <code>nil</code> = the platform itself), mirroring the agent comment.</li>
+        <li><code class="status">[]</code> Add <code>project_id: Ecto.UUID.t() | nil</code> to <code>@type t</code>.</li>
+        <li><code class="status">[]</code> Add <code>:project_id</code> to the <code>cast/2</code> list in <code>changeset/2</code>. (No <code>validate_required</code> — it is optional.)</li>
+      </ul>
+
+      <h4>3. Context — <code>RepoBuilder.Orchestrators</code></h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add <code>@spec get_or_create_for_project(Ecto.UUID.t()) :: Orchestrator.t()</code>: fetch the row where <code>project_id == id</code>; if absent, create one with <code>apply_harness_defaults/2</code>, a deterministic unique <code>name</code> (e.g. <code>"orch:" &lt;&gt; project.name</code> or <code>"orch:" &lt;&gt; short_id</code> — must satisfy the <code>unique_constraint(:name)</code>), <code>project_id: id</code>, and <code>working_dir: project.root_path</code>.</li>
+        <li><code class="status">[]</code> Add <code>@spec set_project(Ecto.UUID.t(), Ecto.UUID.t() | nil) :: {:ok, t()} | {:error, Ecto.Changeset.t()}</code>: set <code>project_id</code>, derive <code>working_dir</code> from the project's <code>root_path</code>, and <strong>clear <code>session_id</code></strong> (mirrors <code>set_working_dir/2</code> at line 170 — a new project ⇒ a fresh CLI session + context window).</li>
+        <li><code class="status">[]</code> Keep <code>get_or_create_default/1</code> unchanged (the <code>project_id: nil</code> "platform" orchestrator). Resolve the <code>Project</code> for binding via <code>Projects.get_project/1</code>.</li>
+        <li><code class="status">[]</code> Be defensive: a deleted project (<code>nilify_all</code>) leaves <code>project_id: nil</code> → the row behaves as a platform orchestrator. No crash.</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>ExUnit against the <code>Orchestrators</code> context with a fixture <code>Project</code> (DataCase, real Repo). Cover: first call creates + binds; second call for the same project returns the same row (idempotent); <code>working_dir</code> equals <code>root_path</code>; the per-project row is distinct from the default; <code>set_project/2</code> nulls <code>session_id</code>; deleting the project nilifies the FK.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrators_project_binding_test.exs</code> — binding + idempotency + session reset.</li>
+        <li><code class="status">[]</code> <code>mix ecto.migrate &amp;&amp; mix ecto.rollback &amp;&amp; mix ecto.migrate</code> — migration up/down is clean.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- PHASE 2 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 2: The orchestrator knows its project (system prompt + context isolation)</h3>
+      <p>
+        Resolve the system-prompt project from the explicit <code>orchestrator.project_id</code> (falling
+        back to today's cwd lookup for the platform/unbound case), so the orchestrator is told its project
+        by name + root and gets the right primer and stack-correct slash commands. Per-orchestrator context
+        isolation already exists per row — verify it, no new code.
+      </p>
+
+      <h4>1. Resolve the project explicitly in <code>system_prompt.ex</code></h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add a private <code>resolve_project(orchestrator)</code>: when <code>project_id</code> is set, <code>Projects.get_project(project_id)</code>; else the existing <code>Projects.get_by_root_path(working_dir)</code> (back-compat).</li>
+        <li><code class="status">[]</code> Point <code>project_primer_block/1</code> (190) and <code>slash_commands_block/1</code> (285) at <code>resolve_project/1</code> instead of the cwd-only lookup.</li>
+        <li><code class="status">[]</code> Have <code>working_dir_block/1</code> (161) name the bound project (<code>"You are working on project &lt;name&gt; at &lt;root_path&gt;; you and every worker you command run there."</code>) when a project is resolved; keep the existing "no working directory" copy otherwise.</li>
+      </ul>
+
+      <h4>2. Keep working_dir consistent with the binding</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Confirm binding (Phase 1) sets <code>working_dir = project.root_path</code>, so <code>server.ex:205</code> (<code>cwd: orchestrator.working_dir</code>) and the prompt agree — no change to <code>server.ex</code>.</li>
+        <li><code class="status">[]</code> Verify <code>SystemPrompt.build/1</code> reads <code>orchestrator.project_id</code> (now present on the struct) without needing extra args.</li>
+      </ul>
+
+      <h4>3. Verify per-orchestrator context isolation (no code, observability)</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Confirm each orchestrator row independently carries <code>session_id</code> (resumable CLI session, <code>server.ex:195/227</code>) and <code>context_tokens</code> (overwritten per turn, <code>orchestrator.ex:486</code>) — so two project orchestrators have two separate context windows.</li>
+        <li><code class="status">[]</code> Note in the moduledoc that switching project ⇒ a different orchestrator row ⇒ a separate window/cost, not a shared one.</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>Pure-ish unit test of <code>SystemPrompt.build/1</code> with a project-bound orchestrator struct + a fixture project carrying a <code>context_primer</code>; assert the project name/root and primer appear, and that an unbound orchestrator falls back to the cwd path unchanged.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/system_prompt_project_test.exs</code> — prompt names the bound project + includes its primer; nil-project back-compat holds.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/system_prompt_test.exs test/repo_builder/orchestrator/system_prompt_primer_test.exs</code> — no regression in existing prompt tests.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- PHASE 3 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 3: Switching the project switches the active orchestrator (Console UI)</h3>
+      <p>
+        Make the project switcher a first-class context switch: re-resolve the active orchestrator for the
+        selected project, re-point the orchestrator-scoped subscriptions/assigns, and reload the
+        project-scoped views (roster, chat history, cost/context badges). Selecting "All / platform"
+        returns to the <code>project_id: nil</code> default.
+      </p>
+      <figure>
+        <img src="orchestrator-project-binding-and-pinned-workers/phase3-switch.png" alt="A console header with a project dropdown; an arrow shows the selection swapping the orchestrator panel and the worker rail beneath it.">
+
+        <figcaption>The project dropdown swaps the orchestrator panel, its context gauge, and the worker rail in one gesture.</figcaption>
+      </figure>
+
+      <h4>1. Orchestrator selection follows the active project</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Refactor <code>assign_orchestrator/1</code> (274) to pick by <code>active_project_id</code>: <code>Orchestrators.get_or_create_for_project(id)</code> when set, else <code>get_or_create_default()</code>.</li>
+        <li><code class="status">[]</code> On mount (79–269), resolve the orchestrator <em>after</em> <code>active_project_id</code> is known so a deep-linked project starts on the right brain.</li>
+      </ul>
+
+      <h4>2. <code>select_project</code> performs the full context switch</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> In <code>handle_event("select_project", …)</code> (818): after setting <code>active_project_id</code>, re-resolve the orchestrator and re-run <code>assign_orchestrator_selection/2</code> (287).</li>
+        <li><code class="status">[]</code> Unsubscribe the previous orchestrator's topics and re-subscribe the new one (queue topic via <code>subscribe_orchestrator_queue</code> at 389, plus its events/cost topics) — guard against double-subscribe.</li>
+        <li><code class="status">[]</code> Reload orchestrator-scoped views for the new id: chat/log history, cost badge, context-window gauge, and the existing <code>load_agents/1</code> roster scope (496).</li>
+        <li><code class="status">[]</code> Selecting blank (<code>""</code>) restores the platform default orchestrator + unscoped roster (today's behavior preserved).</li>
+      </ul>
+
+      <h4>3. Surface the bound orchestrator in the switcher (UX)</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> In <code>project_components.ex</code> <code>switcher/1</code> (19) or the orchestrator panel, show the active project's orchestrator name + <code>working_dir</code> + context occupancy so the operator can see <em>which brain</em> is live.</li>
+        <li><code class="status">[]</code> Micro-interaction: a subtle transition when the panel swaps (consistent with the console's existing styling) — no layout shift.</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p><code>Phoenix.LiveViewTest</code> (<code>async: false</code>, shared sandbox) extending the project-switcher test: assert that selecting a fixture project changes the active orchestrator (different id / <code>working_dir</code> reflected in a stable DOM id), that the roster re-scopes, and that blank returns to the default. Reference key element IDs, not raw HTML.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder_web/live/test_orchestrator_project_switch_test.exs</code> — switch changes the active orchestrator; blank → default.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder_web/live/test_project_switcher_test.exs</code> — existing roster-scope behavior still passes.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder_web/live/test_orchestration_console_test.exs test/repo_builder_web/live/test_orchestrator_queue_test.exs</code> — no console/queue regression from the re-subscribe.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- PHASE 4 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 4: Pin workers to the project + safe dispatch (kills the wrong-repo risk)</h3>
+      <p>
+        With the orchestrator bound to a project, every worker it spawns inherits that project, and each
+        worker's <code>cwd</code> derives from <em>its own</em> project — a worker can no longer drift. A
+        guard on <code>start_adw</code>'s free-text <code>working_dir</code> (the only LLM-chosen path)
+        closes the last hole.
+      </p>
+      <figure>
+        <img src="orchestrator-project-binding-and-pinned-workers/phase4-pin.png" alt="A project-stamped worker routed down one locked teal lane to repo 1; the branch toward repo 2 is crossed out in red.">
+
+        <figcaption>A project-stamped worker is locked to its repo lane; the off-repo path is refused.</figcaption>
+      </figure>
+
+      <h4>1. Pin spawned workers to the orchestrator's project</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Thread the commanding orchestrator's <code>project_id</code> into <code>Tools.create_agent</code> (110) → <code>Agents.create_worker/2</code> (124) so the worker row is created with that <code>project_id</code> (currently always nil).</li>
+        <li><code class="status">[]</code> Back-compat: a platform orchestrator (<code>project_id: nil</code>) still creates <code>project_id: nil</code> workers — unchanged.</li>
+      </ul>
+
+      <h4>2. Derive dispatch cwd from the worker's own project</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> In <code>command_agent</code> (279), resolve <code>cwd</code> from the worker's <code>project_id</code> → <code>Projects.get_project/1.root_path</code>, falling back to <code>orchestrator_working_dir/1</code> (1251) only when the worker is unscoped (back-compat). This makes the binding stable per-worker, not late-bound to the orchestrator.</li>
+        <li><code class="status">[]</code> Keep worktree isolation intact: pass the project's <code>isolation_mode</code> through where the session honors it (consistent with the wizard fix).</li>
+      </ul>
+
+      <h4>3. Guard <code>start_adw</code>'s free-text path</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> In <code>adw_working_dir/2</code> (476): default the working_dir to the orchestrator's bound project <code>root_path</code> when the LLM omits it.</li>
+        <li><code class="status">[]</code> When the LLM <em>does</em> pass <code>working_dir</code>, require it to match a registered <code>Project.root_path</code> (via <code>Projects.get_by_root_path/1</code>) — ideally the orchestrator's own project; otherwise return an actionable <code>{:error, …}</code> ("working_dir &lt;path&gt; is not the bound project / a registered project") instead of running. (Strictness is a <a href="#questionables">questionable</a>.)</li>
+        <li><code class="status">[]</code> Tighten the system-prompt guidance (<code>system_prompt.ex</code> cross-repo section ~64–70) to say "command workers and ADWs against <em>your</em> project; pass another repo's path only if it is a registered project."</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>Unit/boundary tests at the <code>Tools</code> seam with a fixture project-bound orchestrator: a spawned worker carries the orchestrator's <code>project_id</code>; <code>command_agent</code> resolves cwd from the worker's project; <code>start_adw</code> with an off-project/unknown <code>working_dir</code> is refused and starts no session; the bound default path still works.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/tools_worker_project_pin_test.exs</code> — pin + cwd-from-project + start_adw guard.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/tools_test.exs test/repo_builder/orchestrator/start_adw_working_dir_test.exs test/repo_builder/orchestrator/adw_tools_test.exs</code> — no regression in the existing tool/ADW suites.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- PHASE 5 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 5: Green gate + cross-cutting regression</h3>
+      <p>Run the full typed-Elixir green gate and the surrounding suites that touch orchestrators, the console, agents, and projects. Fix every failure and new warning; do not weaken existing Dialyzer ignore filters.</p>
+
+      <h4>1. Targeted regression</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/ test/repo_builder/orchestrators_agent_models_test.exs test/repo_builder/agents_test.exs test/repo_builder/projects_test.exs</code> — orchestrator/agent/project suites green.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder_web/live/</code> — all LiveView/console tests green.</li>
+      </ul>
+
+      <h4>2. Testing Strategy — the five-command green gate</h4>
+      <p>The project enforces a verbatim green gate; all five must pass with zero new warnings.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix compile --warnings-as-errors</code> — clean under the set-theoretic checker.</li>
+        <li><code class="status">[]</code> <code>mix format --check-formatted</code> — formatting clean.</li>
+        <li><code class="status">[]</code> <code>mix credo --strict</code> — lint + <code>@spec</code> gate clean (every new public fn specced).</li>
+        <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — full suite green.</li>
+        <li><code class="status">[]</code> <code>mix dialyzer</code> — no new contract warnings; existing ignore filters untouched.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+  </section>
+
+  <!-- ===== GLOBAL VALIDATION ===== -->
+  <section id="validation">
+    <h2>Validation Commands</h2>
+    <p>Execute these commands to validate the entire plan is complete:</p>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrators_project_binding_test.exs</code> — orchestrator↔project binding + idempotency + session reset.</li>
+      <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/system_prompt_project_test.exs</code> — the prompt names the bound project + primer; nil-project back-compat.</li>
+      <li><code class="status">[]</code> <code>mix test test/repo_builder_web/live/test_orchestrator_project_switch_test.exs</code> — UI project switch swaps the active orchestrator; blank → default.</li>
+      <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/tools_worker_project_pin_test.exs</code> — workers pinned to project; cwd from worker project; off-project <code>start_adw</code> refused.</li>
+      <li><code class="status">[]</code> <code>mix compile --warnings-as-errors</code> — clean.</li>
+      <li><code class="status">[]</code> <code>mix format --check-formatted</code> — clean.</li>
+      <li><code class="status">[]</code> <code>mix credo --strict</code> — clean.</li>
+      <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — full suite green.</li>
+      <li><code class="status">[]</code> <code>mix dialyzer</code> — no new warnings.</li>
+    </ul>
+    <div class="loop">🔁 <strong>The plan is not complete until every box is checked and every command passes. If for some reason a step is not possible to complete, mark it with [f] and move on if possible.</strong></div>
+  </section>
+
+  <!-- ===== QUESTIONABLES ===== -->
+  <section id="questionables">
+    <h2>Questionables</h2>
+    <figure>
+      <img src="orchestrator-project-binding-and-pinned-workers/questionables.png" alt="A balanced decision scale with forking paths: one-per-project vs pool, and refuse (shield) vs warn (triangle), amber accent.">
+
+      <figcaption>The open decisions that shape the build.</figcaption>
+    </figure>
+
+    <details>
+      <summary>One orchestrator per project, created lazily — is that the right cardinality?</summary>
+      <p class="qa-answer"><strong>Assumption:</strong> yes. <code>get_or_create_for_project/1</code> lazily creates exactly one orchestrator per project (enforced by a partial-unique index), and the platform keeps its single <code>project_id: nil</code> default. This gives each project its own context window/cost "for free" via the existing per-row <code>session_id</code>/<code>context_tokens</code>. Alternative (a reusable pool re-pointed on switch) was rejected: it would force a session reset on every switch and lose per-project context continuity — the opposite of the ask.</p>
+    </details>
+    <details>
+      <summary>How are per-project orchestrators named (the <code>name</code> unique constraint)?</summary>
+      <p class="qa-answer"><strong>Assumption:</strong> a deterministic, collision-free name like <code>"orch:" &lt;&gt; project.name</code>, falling back to <code>"orch:" &lt;&gt; short_project_id</code> if names can collide. The orchestrator <code>name</code> has a <code>unique_constraint</code>, so the resolver must guarantee uniqueness. Open: do we surface/allow renaming this in the UI, or keep it internal? Default: internal, display the <em>project</em> name in the UI.</p>
+    </details>
+    <details>
+      <summary>How strict should the <code>start_adw</code> working_dir guard be?</summary>
+      <p class="qa-answer"><strong>Assumption (recommended):</strong> hard-refuse a <code>working_dir</code> that isn't a registered <code>Project.root_path</code>, defaulting to the orchestrator's own project when omitted. This is what directly kills the wrong-repo risk that motivated the feature. A softer option (warn-and-proceed) is available but leaves the hole open. Tightest option (only the orchestrator's <em>own</em> project) may be too restrictive for legitimate cross-repo ADWs — so the default is "any registered project, prefer own."</p>
+    </details>
+    <details>
+      <summary>What happens to an in-flight run when the operator switches projects?</summary>
+      <p class="qa-answer"><strong>Assumption:</strong> nothing is killed. Each orchestrator is an independent session; switching only changes which orchestrator the console <em>focuses</em>. The previous project's orchestrator and its workers keep running and stream to their own topics; switching back reattaches. We do not interrupt sessions on switch.</p>
+    </details>
+    <details>
+      <summary>Should existing unscoped workers / the current default be back-filled to a project?</summary>
+      <p class="qa-answer"><strong>Assumption:</strong> no migration of existing data. <code>project_id: nil</code> remains valid and means "platform" for both orchestrators and workers, preserving today's behavior. New work picks up the binding; old rows are untouched.</p>
+    </details>
+    <details>
+      <summary>Worker cwd from the worker's project vs the commanding orchestrator's project?</summary>
+      <p class="qa-answer"><strong>Assumption:</strong> from the <em>worker's own</em> <code>project_id</code> (stable, drift-proof), falling back to the orchestrator's <code>working_dir</code> only when the worker is unscoped. Since spawned workers inherit the orchestrator's project (Phase 4.1), the two normally agree — but pinning to the worker is what guarantees a worker can never be re-routed.</p>
+    </details>
+  </section>
+
+  <!-- ===== NOTES ===== -->
+  <section id="notes">
+    <h2>Notes</h2>
+
+    <h3>Why this is mostly wiring, not new machinery</h3>
+    <p>
+      The hard parts already exist. Per-orchestrator <strong>context isolation is a property of the row</strong>:
+      each orchestrator carries its own resumable <code>session_id</code> and its own <code>context_tokens</code>
+      occupancy (<code>orchestrator.ex:486</code>, consumed at <code>server.ex:195/205/332</code>). The reason all
+      projects share one context today is simply that <em>only one orchestrator row exists</em>. Creating one per
+      project — the core of Phase 1 — yields independent context windows with no new runtime.
+    </p>
+
+    <h3>Back-compatibility contract</h3>
+    <ul>
+      <li><code>project_id: nil</code> stays valid everywhere and means "the platform itself" — the existing default orchestrator and all current workers are unchanged.</li>
+      <li>The system prompt's cwd-based project resolution remains the fallback when <code>project_id</code> is nil, so unbound orchestrators behave exactly as today.</li>
+      <li><code>command_agent</code> falls back to <code>orchestrator_working_dir/1</code> for unscoped workers, so nothing regresses for platform work.</li>
+    </ul>
+
+    <h3>How this composes with shipped work</h3>
+    <p>
+      This builds directly on the agentic-layer adaptor (<code>ai_docs/agentic-layer-adaptor.md</code>) and the
+      recent <em>planning-wizard target-repo launch</em> fix (which threaded <code>cwd</code>/<code>isolation_mode</code>
+      through <code>start_workflow</code> → <code>Runner</code> → session). The same project-as-anchor principle now
+      reaches the orchestrator and its workers. Per-project budget caps already exist on
+      <code>Project.budget_cap_usd</code> and can later be wired to the per-project orchestrator's budget scope.
+    </p>
+
+    <h3>Risks &amp; edges</h3>
+    <ul>
+      <li><strong>Topic leakage on switch:</strong> the console must unsubscribe the old orchestrator's PubSub topics before subscribing the new one's, or events from two brains interleave. Covered in Phase 3.2.</li>
+      <li><strong>Name collisions:</strong> the per-project orchestrator name must satisfy the unique constraint — use a deterministic, id-derived fallback.</li>
+      <li><strong>Deleted project:</strong> <code>on_delete: :nilify_all</code> downgrades the orchestrator to a platform orchestrator rather than orphaning it.</li>
+      <li><strong>Session churn:</strong> <code>set_project/2</code> clears <code>session_id</code> intentionally (fresh context per project); make sure the UI doesn't treat that as an error.</li>
+    </ul>
+
+    <h3>Out of scope (future work)</h3>
+    <ul>
+      <li>A first-class multi-project launch in the Planning-Mode Wizard (fan N orchestrators across N repos from one gesture).</li>
+      <li>Extending the registered-project allowlist guard to <em>every</em> cwd path (worker + report spill at <code>tools.ex:1369</code>), not just <code>start_adw</code>.</li>
+      <li>Per-project orchestrator budget-cap enforcement from <code>Project.budget_cap_usd</code>.</li>
+    </ul>
+
+    <figure>
+      <img src="orchestrator-project-binding-and-pinned-workers/notes.png" alt="A four-layer stack: project anchor down to an orchestrator brain with context gauge, down to pinned workers, down to isolated git-worktree run boxes.">
+
+      <figcaption>The project is the anchor; orchestrator, workers, and runs all derive their repo from it.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== AMENDMENTS ===== -->
+  <section id="amendments">
+    <h2>Amendments</h2>
+    <p style="color:var(--fg-dim);">No amendments yet — appended by the Update Plan / Update References workflows after first execution.</p>
+  </section>
+
+</main>
+</body>
+</html>

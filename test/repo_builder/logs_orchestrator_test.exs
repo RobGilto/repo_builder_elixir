@@ -149,6 +149,67 @@ defmodule RepoBuilder.LogsOrchestratorTest do
     end
   end
 
+  describe "list_orchestrator_messages/3 (per-orchestrator chat backfill)" do
+    test "returns only the queried orchestrator's :text_delta rows, in insertion order" do
+      a = orchestrator_fixture()
+      b = orchestrator_fixture()
+
+      {:ok, _} = Logs.persist_operator_message("hello A", %{orchestrator_id: a.id})
+
+      {:ok, _} =
+        Logs.persist_orchestrator_event(
+          %Event.TextDelta{harness: :claude, text: "reply A", raw: %{"text" => "reply A"}},
+          %{orchestrator_id: a.id, session_id: "sa"}
+        )
+
+      {:ok, _} = Logs.persist_operator_message("hello B", %{orchestrator_id: b.id})
+
+      {:ok, _} =
+        Logs.persist_orchestrator_event(
+          %Event.TextDelta{harness: :claude, text: "reply B", raw: %{"text" => "reply B"}},
+          %{orchestrator_id: b.id, session_id: "sb"}
+        )
+
+      a_texts = Logs.list_orchestrator_messages(a.id) |> Enum.map(& &1.payload["text"])
+      assert a_texts == ["hello A", "reply A"]
+      refute "hello B" in a_texts
+      refute "reply B" in a_texts
+
+      assert Logs.list_orchestrator_messages(b.id) |> Enum.map(& &1.payload["text"]) ==
+               ["hello B", "reply B"]
+    end
+
+    test "returns [] for an orchestrator with no messages" do
+      orch = orchestrator_fixture()
+      assert Logs.list_orchestrator_messages(orch.id) == []
+    end
+
+    test "honours include_hidden? — a hidden row is excluded by default, included when true" do
+      orch = orchestrator_fixture()
+
+      {:ok, visible} =
+        Logs.persist_orchestrator_event(
+          %Event.TextDelta{harness: :claude, text: "shown", raw: %{"text" => "shown"}},
+          %{orchestrator_id: orch.id, session_id: "s"}
+        )
+
+      {:ok, hidden} =
+        Logs.persist_orchestrator_event(
+          %Event.TextDelta{harness: :claude, text: "cleared", raw: %{"text" => "cleared"}},
+          %{orchestrator_id: orch.id, session_id: "s"}
+        )
+
+      assert 1 == Logs.hide_logs([hidden.id])
+
+      default_ids = Logs.list_orchestrator_messages(orch.id) |> Enum.map(& &1.id)
+      assert default_ids == [visible.id]
+
+      with_hidden_ids = Logs.list_orchestrator_messages(orch.id, 100, true) |> Enum.map(& &1.id)
+      assert visible.id in with_hidden_ids
+      assert hidden.id in with_hidden_ids
+    end
+  end
+
   describe "durable log_no (log-<n>)" do
     test "persist_event/2 returns a log with a positive integer log_no" do
       {:ok, agent} =

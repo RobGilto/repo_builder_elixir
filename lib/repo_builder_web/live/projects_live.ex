@@ -46,12 +46,12 @@ defmodule RepoBuilderWeb.ProjectsLive do
   end
 
   @impl true
-  def handle_event("validate_register", %{"name" => name, "root_path" => root}, socket) do
-    {:noreply, assign(socket, register_form: %{"name" => name, "root_path" => root})}
+  def handle_event("validate_register", params, socket) do
+    {:noreply, assign(socket, register_form: register_fields(params))}
   end
 
-  def handle_event("register", %{"name" => name, "root_path" => root}, socket) do
-    case Projects.create_and_profile(%{"name" => name, "root_path" => root}) do
+  def handle_event("register", params, socket) do
+    case Projects.create_and_profile(register_fields(params)) do
       {:ok, project} ->
         {:noreply,
          socket
@@ -59,7 +59,8 @@ defmodule RepoBuilderWeb.ProjectsLive do
          |> push_navigate(to: ~p"/projects/#{project.id}")}
 
       {:error, changeset} ->
-        {:noreply, assign(socket, error: error_message(changeset))}
+        {:noreply,
+         assign(socket, error: error_message(changeset), register_form: register_fields(params))}
     end
   end
 
@@ -137,6 +138,14 @@ defmodule RepoBuilderWeb.ProjectsLive do
             class="w-full rounded border border-zinc-600 bg-zinc-800 px-2 py-1 text-sm font-mono"
           />
           <p class="text-xs text-zinc-500">{path_hint(@register_form["root_path"])}</p>
+          <label class="flex items-center gap-2 text-xs text-zinc-400">
+            <input
+              type="checkbox"
+              name="create_dir"
+              value="true"
+              checked={@register_form["create_dir"] == "true"}
+            /> Create the folder if it doesn't exist yet
+          </label>
           <button class="rounded bg-cyan-700 px-3 py-1 text-sm" type="submit">
             Profile &amp; register
           </button>
@@ -234,6 +243,11 @@ defmodule RepoBuilderWeb.ProjectsLive do
 
   @spec stack_of(Projects.Project.t()) :: String.t()
   defp stack_of(project), do: to_string(project.stack["language"] || "unknown")
+
+  # Keep only the registration form fields (string keys). The `create_dir` checkbox is
+  # only present in params when ticked, so an absent key naturally reads as unchecked.
+  @spec register_fields(map()) :: %{optional(String.t()) => String.t()}
+  defp register_fields(params), do: Map.take(params, ["name", "root_path", "create_dir"])
 
   @spec path_hint(String.t()) :: String.t()
   defp path_hint(""), do: "Paste an absolute path; the profiler detects the stack on register."

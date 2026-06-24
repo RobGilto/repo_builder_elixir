@@ -50,12 +50,9 @@ defmodule RepoBuilderWeb.TestOperatorMessagePersistTest do
 
   test "operator turn survives reconnect/restart in a distinct bubble, interleaved with the reply",
        %{conn: conn} do
-    {:ok, orch} =
-      Orchestrators.create(%{
-        name: "orch-#{System.unique_integer([:positive])}",
-        harness: "fake",
-        provider: "anthropic"
-      })
+    # Persist to the ACTIVE orchestrator (the platform default on a no-project mount):
+    # the chat backfill is now scoped to the active brain (issue-conversation-history-scope).
+    {:ok, orch} = Orchestrators.get_or_create_default()
 
     {:ok, worker} =
       Agents.create_agent(%{

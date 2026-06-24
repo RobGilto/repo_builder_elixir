@@ -14,6 +14,12 @@ defmodule RepoBuilderWeb.ProjectComponents do
   """
   attr :projects, :list, required: true
   attr :active_project_id, :string, default: nil
+  # The live orchestrator bound to the active project (orchestrator↔project binding): its
+  # name, working dir, and latest context-window occupancy, so the operator can see WHICH
+  # brain is live. Optional (nil ⇒ the chip is hidden) for back-compat with bare callers.
+  attr :orchestrator_name, :string, default: nil
+  attr :orchestrator_working_dir, :string, default: nil
+  attr :orchestrator_context, :integer, default: 0
   attr :rest, :global
 
   @spec switcher(map()) :: Phoenix.LiveView.Rendered.t()
@@ -39,6 +45,18 @@ defmodule RepoBuilderWeb.ProjectComponents do
           {project.name}
         </option>
       </select>
+      <span
+        :if={@orchestrator_name}
+        id="active-orchestrator"
+        class="inline-flex items-center gap-1 rounded bg-zinc-800/60 px-2 py-0.5 text-xs text-zinc-300 transition-colors"
+        title={@orchestrator_working_dir || "no working directory"}
+      >
+        <span class="text-zinc-500">brain:</span>
+        <span class="font-mono">{@orchestrator_name}</span>
+        <span :if={@orchestrator_context > 0} class="text-zinc-500">
+          · {@orchestrator_context} tok
+        </span>
+      </span>
     </form>
     """
   end

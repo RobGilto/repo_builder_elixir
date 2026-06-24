@@ -169,6 +169,17 @@ defmodule RepoBuilder.Dashboard do
   end
 
   @doc """
+  Unsubscribe from an orchestrator's queue-snapshot topic. Used by the console when the
+  operator switches projects (orchestrator↔project binding): the old brain's queue
+  events must stop arriving before the new brain's are subscribed.
+  """
+  @spec unsubscribe_orchestrator_queue(Ecto.UUID.t()) :: :ok
+  def unsubscribe_orchestrator_queue(orchestrator_id) do
+    _ = Phoenix.PubSub.unsubscribe(RepoBuilder.PubSub, orchestrator_queue_topic(orchestrator_id))
+    :ok
+  end
+
+  @doc """
   Broadcast the latest queue snapshot for `orchestrator_id` so a connected console
   re-renders the queued-messages strip and busy/queued badge. Subscribers receive
   `{:orchestrator_queue, orchestrator_id, snapshot}`. Additive seam (issue

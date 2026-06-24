@@ -40,6 +40,17 @@ defmodule RepoBuilder.Orchestrator.StartAdwWorkingDirTest do
     dir
   end
 
+  # Register `dir` as a first-class project so the explicit-working_dir guard allows it.
+  defp register_project(dir) do
+    {:ok, project} =
+      RepoBuilder.Projects.create_project(%{
+        "name" => "adw-proj-#{uniq()}",
+        "root_path" => dir
+      })
+
+    project
+  end
+
   defp orchestrator(working_dir \\ nil) do
     {:ok, orch} = Orchestrators.create(%{name: "orch-#{uniq()}", harness: "fake"})
 
@@ -76,6 +87,9 @@ defmodule RepoBuilder.Orchestrator.StartAdwWorkingDirTest do
     test "the worker spawns in the explicit target dir, not the orchestrator's" do
       slug = "planx"
       target = dir_with_adw(slug)
+      # The explicit working_dir must be a REGISTERED project (orchestrator↔project binding
+      # guard); register the target repo so the cross-repo ADW is allowed.
+      register_project(target)
       # Orchestrator has NO working dir of its own; the target is passed explicitly.
       orch = orchestrator()
 
@@ -95,8 +109,8 @@ defmodule RepoBuilder.Orchestrator.StartAdwWorkingDirTest do
     end
   end
 
-  describe "non-existent working_dir → error, no spawn" do
-    test "a bad working_dir returns {:error, _} and creates no worker" do
+  describe "unregistered working_dir → error, no spawn" do
+    test "a non-project working_dir returns {:error, _} and creates no worker" do
       orch = orchestrator()
       before = length(RepoBuilder.Agents.list_for_orchestrator(orch.id))
 
@@ -108,7 +122,7 @@ defmodule RepoBuilder.Orchestrator.StartAdwWorkingDirTest do
                  "working_dir" => "/no/such/dir-#{uniq()}"
                })
 
-      assert reason =~ "is not an existing directory"
+      assert reason =~ "is not the bound project / a registered project"
       # Validation precedes worker creation, so nothing was spawned.
       assert length(RepoBuilder.Agents.list_for_orchestrator(orch.id)) == before
     end

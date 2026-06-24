@@ -25,6 +25,14 @@ defmodule RepoBuilderWeb.TestStreamingConsoleTest do
 
   alias RepoBuilder.Dashboard
   alias RepoBuilder.Harness.Event
+  alias RepoBuilder.Orchestrators
+
+  # The chat pane is scoped to the ACTIVE orchestrator (the platform default on a
+  # no-project mount), so the streamed turn must broadcast under its id to enter the pane.
+  defp active_orch_agent_id do
+    {:ok, default} = Orchestrators.get_or_create_default()
+    "orch-#{default.id}-#{System.unique_integer([:positive])}"
+  end
 
   # Flush the throttled streaming buffer deterministically, then drain the mailbox.
   defp flush(view) do
@@ -44,7 +52,7 @@ defmodule RepoBuilderWeb.TestStreamingConsoleTest do
     test "[#{harness}] partials coalesce into one growing bubble, finalize once, no duplicate",
          %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/")
-      agent_id = "orch-stream-#{System.unique_integer([:positive])}"
+      agent_id = active_orch_agent_id()
 
       Dashboard.broadcast_event(agent_id, %Event.TextDelta{
         harness: @harness,
@@ -83,7 +91,7 @@ defmodule RepoBuilderWeb.TestStreamingConsoleTest do
     test "[#{harness}] the thinking channel coalesces independently and respects @show_thinking?",
          %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/")
-      agent_id = "orch-stream-think-#{System.unique_integer([:positive])}"
+      agent_id = active_orch_agent_id()
 
       Dashboard.broadcast_event(agent_id, %Event.TextDelta{
         harness: @harness,
@@ -121,7 +129,7 @@ defmodule RepoBuilderWeb.TestStreamingConsoleTest do
     test "[#{harness}] a partial-only stream ending in Done promotes the buffer once",
          %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/")
-      agent_id = "orch-stream-done-#{System.unique_integer([:positive])}"
+      agent_id = active_orch_agent_id()
 
       Dashboard.broadcast_event(agent_id, %Event.TextDelta{
         harness: @harness,

@@ -12,13 +12,40 @@ defmodule RepoBuilderWeb.PlanningLiveTest do
 
   alias RepoBuilder.Plans
   alias RepoBuilder.Projects
+  alias RepoBuilder.Workflows
+
+  # Wait for the async Runner to reach a terminal state so it never outlives the sandbox.
+  defp await_run_terminal(run_id, attempts \\ 400) do
+    case Workflows.get_run(run_id) do
+      %{status: status} = run when status in [:succeeded, :failed] -> run
+      _ when attempts > 0 -> Process.sleep(20) && await_run_terminal(run_id, attempts - 1)
+      run -> run
+    end
+  end
+
+  # Back the real-named "claude" harness with the safe canned-event Fake adapter so a
+  # launch on a *real* (non-`fake`) harness never spawns an external CLI in tests
+  # (registry is the single injection seam, BUILD_PROMPT.md §13).
+  setup do
+    original = Application.fetch_env!(:repo_builder, :harnesses)
+    Application.put_env(:repo_builder, :harnesses, Map.put(original, "claude", original["fake"]))
+    on_exit(fn -> Application.put_env(:repo_builder, :harnesses, original) end)
+    :ok
+  end
 
   defp fixture_project(attrs \\ %{}) do
     root = Path.join(System.tmp_dir!(), "rb_wiz_#{System.unique_integer([:positive])}")
     File.mkdir_p!(Path.join(root, ".claude/commands"))
     File.write!(Path.join(root, "mix.exs"), "defmodule X.MixProject do end")
     on_exit(fn -> File.rm_rf(root) end)
-    base = %{"name" => "wiz-#{System.unique_integer([:positive])}", "root_path" => root}
+    # A real `default_harness` so the wizard launches a run that actually runs (the
+    # launch path refuses the no-op `fake` harness).
+    base = %{
+      "name" => "wiz-#{System.unique_integer([:positive])}",
+      "root_path" => root,
+      "default_harness" => "claude"
+    }
+
     {:ok, project} = Projects.create_and_profile(Map.merge(base, attrs))
     project
   end
@@ -46,6 +73,9 @@ defmodule RepoBuilderWeb.PlanningLiveTest do
     assert plan.status == :launched
     assert plan.workflow_run_id != nil
     assert plan.resolved_steps["steps"] != []
+
+    # Drain the launched Runner before teardown.
+    _ = await_run_terminal(plan.workflow_run_id)
   end
 
   test "the budget cap blocks a plan whose estimate exceeds it", %{conn: conn} do

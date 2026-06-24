@@ -63,11 +63,12 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
       coherent slice) and track each with `check_adw` by its returned run id; report
       progress to the operator in plain text. Omitting `harness` runs the lightweight
       in-app catalog workflow instead (handy for demos/tests). Watch per-step progress
-      with `check_adw`. CROSS-REPO: an ADW's slash commands (`/plan`, `/build`, …)
-      resolve from the TARGET repo's `.claude/commands/`, so when the ADW must operate
-      on a repo OTHER than your working directory, pass `working_dir` (an absolute path
-      to that repo) to `start_adw` — otherwise the commands won't resolve and the run
-      does nothing.
+      with `check_adw`. COMMAND WORKERS AND ADWs AGAINST *YOUR* PROJECT: by default omit
+      `working_dir` so the ADW runs in your bound project. CROSS-REPO: an ADW's slash
+      commands (`/plan`, `/build`, …) resolve from the TARGET repo's `.claude/commands/`,
+      so to operate on a DIFFERENT repo pass `working_dir` — but it must be a REGISTERED
+      project's path (otherwise the run is refused to prevent work landing in the wrong
+      repo). Register the repo on the Projects page first if it isn't already.
     - If a tier shows `(unassigned — cannot spawn here)` or a spawn fails with "no
       model selected", call `get_config` to inspect the available harnesses/models,
       then `configure_tier` to assign one — do NOT stop and ask the operator unless
@@ -154,12 +155,45 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     end)
   end
 
-  # Make the brain self-aware of where it (and the workers it commands) operate. When
-  # a working dir is set, both run there; the platform itself (its prompts, scripts,
-  # and source) lives at the BEAM cwd (the repo root) — named so the orchestrator can
-  # refer to platform context while doing its work in the working directory.
+  # Resolve the orchestrator's bound project (orchestrator↔project binding): the explicit
+  # `project_id` wins (the brain literally knows its repo), falling back to today's
+  # working-dir → registered-project lookup for the platform/unbound case. `nil` when
+  # neither resolves.
+  @spec resolve_project(Orchestrator.t()) :: Projects.Project.t() | nil
+  defp resolve_project(%Orchestrator{project_id: project_id}) when is_binary(project_id),
+    do: Projects.get_project(project_id)
+
+  defp resolve_project(%Orchestrator{working_dir: working_dir})
+       when is_binary(working_dir) and working_dir != "",
+       do: Projects.get_by_root_path(working_dir)
+
+  defp resolve_project(%Orchestrator{}), do: nil
+
+  # Make the brain self-aware of where it (and the workers it commands) operate. When a
+  # project is bound it is named (name + root); otherwise the working-dir/no-dir copy
+  # applies. The platform itself (its prompts, scripts, and source) lives at the BEAM cwd
+  # (the repo root) — named so the orchestrator can refer to platform context.
   @spec working_dir_block(Orchestrator.t()) :: String.t()
-  defp working_dir_block(%Orchestrator{working_dir: working_dir})
+  defp working_dir_block(%Orchestrator{} = orchestrator) do
+    case resolve_project(orchestrator) do
+      %Projects.Project{name: name, root_path: root} -> project_working_dir_block(name, root)
+      nil -> unbound_working_dir_block(orchestrator)
+    end
+  end
+
+  @spec project_working_dir_block(String.t(), String.t()) :: String.t()
+  defp project_working_dir_block(name, root) do
+    """
+    - You are working on project #{name} at `#{root}`; you and every worker you command
+      run there. Do all project work there.
+    - The repo_builder platform itself (its prompts, scripts, and source) lives at
+      `#{platform_root()}` — refer to it for platform context, but operate in the project directory above.
+    """
+    |> String.trim_trailing()
+  end
+
+  @spec unbound_working_dir_block(Orchestrator.t()) :: String.t()
+  defp unbound_working_dir_block(%Orchestrator{working_dir: working_dir})
        when is_binary(working_dir) and working_dir != "" do
     """
     - You and every worker you command run in `#{working_dir}`. Do all project work there.
@@ -169,7 +203,7 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     |> String.trim_trailing()
   end
 
-  defp working_dir_block(%Orchestrator{}) do
+  defp unbound_working_dir_block(%Orchestrator{}) do
     """
     - No working directory is set: you and your workers each run in an isolated, empty
       scratch workspace with no project files. If a task needs a real codebase, ask the
@@ -185,12 +219,12 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
   defp platform_root, do: File.cwd!()
 
   # Inject the active project's primed context (agentic-layer adaptor) when the
-  # orchestrator's working dir maps to a registered Project carrying a stored primer.
-  # No project / no primer ⇒ "" (back-compatible: prompt is unchanged when nil).
+  # orchestrator resolves to a registered Project carrying a stored primer (the bound
+  # `project_id` first, else the working-dir lookup). No project / no primer ⇒ ""
+  # (back-compatible: prompt is unchanged when nil).
   @spec project_primer_block(Orchestrator.t()) :: String.t()
-  defp project_primer_block(%Orchestrator{working_dir: working_dir})
-       when is_binary(working_dir) and working_dir != "" do
-    case Projects.get_by_root_path(working_dir) do
+  defp project_primer_block(%Orchestrator{} = orchestrator) do
+    case resolve_project(orchestrator) do
       %Projects.Project{context_primer: primer} when is_binary(primer) and primer != "" ->
         "\n" <> primer
 
@@ -198,8 +232,6 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
         ""
     end
   end
-
-  defp project_primer_block(%Orchestrator{}), do: ""
 
   # Make the brain self-aware of its execution context (harness + provider + model).
   @spec own_harness_block(Orchestrator.t()) :: String.t()
@@ -279,12 +311,14 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
   # any of these placed at the start of a line in a worker prompt, so listing them here
   # empowers the orchestrator to reuse templated workflows on any harness.
   @spec slash_commands_block(Orchestrator.t()) :: String.t()
-  defp slash_commands_block(%Orchestrator{working_dir: working_dir}) do
-    dir = if is_binary(working_dir) and working_dir != "", do: working_dir, else: nil
+  defp slash_commands_block(%Orchestrator{working_dir: working_dir} = orchestrator) do
+    case resolve_project(orchestrator) do
+      %Projects.Project{} = project ->
+        resolved_slash_block(project)
 
-    case dir && Projects.get_by_root_path(dir) do
-      %Projects.Project{} = project -> resolved_slash_block(project)
-      _ -> discovered_slash_block(dir)
+      nil ->
+        dir = if is_binary(working_dir) and working_dir != "", do: working_dir, else: nil
+        discovered_slash_block(dir)
     end
   end
 

@@ -205,6 +205,29 @@ defmodule RepoBuilder.Logs do
   end
 
   @doc """
+  The most recent `limit` `:text_delta` chat rows for ONE orchestrator, in
+  chronological order — the per-orchestrator conversation backfill source
+  (issue-conversation-history-scope). Identical shape/ordering to
+  `list_recent_orchestrator_messages/2` (the unscoped global view kept for back-compat)
+  but adds `where l.orchestrator_id == ^orchestrator_id`, so switching projects reloads
+  exactly the active orchestrator's own conversation rather than a global slice that
+  bleeds other projects' chat.
+
+  Rows soft-hidden by the console CLEAR action are skipped unless `include_hidden?`
+  is true (parity with the global query and the "show hidden" toggle).
+  """
+  @spec list_orchestrator_messages(Ecto.UUID.t(), pos_integer(), boolean()) :: [AgentLog.t()]
+  def list_orchestrator_messages(orchestrator_id, limit \\ 100, include_hidden? \\ false) do
+    AgentLog
+    |> where([l], l.orchestrator_id == ^orchestrator_id and l.event_type == :text_delta)
+    |> filter_hidden(include_hidden?)
+    |> order_by([l], desc: l.inserted_at, desc: l.id)
+    |> limit(^limit)
+    |> Repo.all()
+    |> Enum.reverse()
+  end
+
+  @doc """
   Soft-hide EVERY currently-visible agent_logs row (the console "CLEAR" log action).
   Persists the cleared state so a reconnect stays empty; rows are NOT deleted and are
   revealed again by the settings "show hidden" toggle. Returns the count hidden.

@@ -14,7 +14,18 @@ defmodule RepoBuilder.WorkflowEngine do
 
   @type reason :: atom() | Ecto.Changeset.t()
 
-  @doc "Create a run and start its Runner. Returns `{:ok, run_id, runner_pid}`."
+  @doc """
+  Create a run and start its Runner. Returns `{:ok, run_id, runner_pid}`.
+
+  Optional opts thread the run's *execution location* down to each step session
+  (agentic-layer adaptor — fix planning-wizard target-repo launch):
+
+    * `:cwd` — the target project's working directory. Each step session runs there
+      (`Session` §6) instead of an ephemeral managed scratch workspace. Omitted/`nil`
+      ⇒ today's managed-scratch behaviour (every existing caller is unchanged).
+    * `:isolation_mode` — `:worktree` provisions a git worktree+branch per run on a
+      git-backed `:cwd`; `:direct`/`nil` runs in `:cwd` itself.
+  """
   @spec start_workflow(Workflow.t(), keyword()) :: {:ok, Ecto.UUID.t(), pid()} | {:error, term()}
   def start_workflow(%Workflow{} = workflow, opts \\ []) do
     case Workflows.create_run(%{
@@ -29,7 +40,12 @@ defmodule RepoBuilder.WorkflowEngine do
       {:ok, run} ->
         case DynamicSupervisor.start_child(
                @sup,
-               {Runner, workflow: workflow, run: run, inputs: opts[:inputs] || %{}}
+               {Runner,
+                workflow: workflow,
+                run: run,
+                inputs: opts[:inputs] || %{},
+                cwd: opts[:cwd],
+                isolation_mode: opts[:isolation_mode]}
              ) do
           {:ok, pid} -> {:ok, run.id, pid}
           {:error, reason} -> {:error, reason}

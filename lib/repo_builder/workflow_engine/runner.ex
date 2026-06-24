@@ -24,6 +24,7 @@ defmodule RepoBuilder.WorkflowEngine.Runner do
   alias RepoBuilder.Budget.Scope
   alias RepoBuilder.Harness.Event
   alias RepoBuilder.Logs.Usage
+  alias RepoBuilder.Projects.Worktree
   alias RepoBuilder.Session
   alias RepoBuilder.WorkflowEngine
   alias RepoBuilder.WorkflowEngine.Step
@@ -43,6 +44,11 @@ defmodule RepoBuilder.WorkflowEngine.Runner do
       field :artifacts, map(), default: %{}
       field :session_agent_id, String.t(), enforce: false
       field :text_buf, String.t(), default: ""
+      # Execution location threaded from `start_workflow/2` (fix planning-wizard
+      # target-repo launch): the target project's working directory and its isolation
+      # mode. Both nil ⇒ each step runs in an ephemeral managed scratch workspace.
+      field :cwd, Path.t(), enforce: false
+      field :isolation_mode, atom(), enforce: false
     end
   end
 
@@ -60,7 +66,9 @@ defmodule RepoBuilder.WorkflowEngine.Runner do
       run: run,
       steps: parse_steps(workflow.steps),
       current_step: first_step_name(workflow.steps),
-      artifacts: stringify_keys(inputs)
+      artifacts: stringify_keys(inputs),
+      cwd: Keyword.get(opts, :cwd),
+      isolation_mode: Keyword.get(opts, :isolation_mode)
     }
 
     if state.current_step do
@@ -107,10 +115,17 @@ defmodule RepoBuilder.WorkflowEngine.Runner do
            agent_id: agent_id,
            harness: step.harness,
            prompt: prompt,
-           workflow_run_id: run.id
+           workflow_run_id: run.id,
+           # Run THIS step in the target repo (fix planning-wizard target-repo launch).
+           # The session runtime (§6) honours these from Phase 4: a nil `cwd` falls back
+           # to the managed scratch workspace and a nil `isolation_mode` runs direct, so
+           # every cwd-less caller is unchanged.
+           run_id: run.id,
+           cwd: state.cwd,
+           isolation_mode: state.isolation_mode
          ) do
       {:ok, _pid} ->
-        {:noreply, state}
+        {:noreply, maybe_record_worktree(state)}
 
       {:error, reason} ->
         Logger.warning("workflow #{run.id} step #{name} could not start: #{inspect(reason)}")
@@ -118,6 +133,29 @@ defmodule RepoBuilder.WorkflowEngine.Runner do
         reply(advance(state, step.on_failure))
     end
   end
+
+  # Persist the run's reviewable worktree (path + `adw/<run_id>` branch) for the UI
+  # PR/merge handoff once the worktree-backed session has started. The provisioning is
+  # deterministic (`Worktree`), so this records the same path the session resolved
+  # without re-provisioning. Guarded for the non-git fallthrough (no worktree) and the
+  # direct/managed paths, where there is nothing to record. Updates `state.run` so the
+  # later `finalize/2` write keeps the worktree columns.
+  @spec maybe_record_worktree(State.t()) :: State.t()
+  defp maybe_record_worktree(%State{cwd: cwd, isolation_mode: :worktree, run: run} = state)
+       when is_binary(cwd) do
+    if Worktree.git_repo?(cwd) do
+      %{path: path, branch: branch} = Worktree.expected_info(cwd, run.id)
+
+      case Workflows.record_worktree(run, %{path: path, branch: branch}) do
+        {:ok, updated} -> %{state | run: updated}
+        {:error, _changeset} -> state
+      end
+    else
+      state
+    end
+  end
+
+  defp maybe_record_worktree(state), do: state
 
   @impl true
   def handle_info(

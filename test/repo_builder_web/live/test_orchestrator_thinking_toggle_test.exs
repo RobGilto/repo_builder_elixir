@@ -24,10 +24,17 @@ defmodule RepoBuilderWeb.TestOrchestratorThinkingToggleTest do
 
   import Phoenix.LiveViewTest
 
-  alias RepoBuilder.{Agents, Dashboard}
+  alias RepoBuilder.{Agents, Dashboard, Orchestrators}
   alias RepoBuilder.Harness.Event
 
   defp uniq_name, do: "thinking-agent-#{System.unique_integer([:positive])}"
+
+  # The chat pane is scoped to the ACTIVE orchestrator (the platform default on a
+  # no-project mount), so a chat-bound turn must broadcast under its id.
+  defp active_orch_agent_id do
+    {:ok, default} = Orchestrators.get_or_create_default()
+    "orch-#{default.id}-#{System.unique_integer([:positive])}"
+  end
 
   # Flush the throttled streaming buffer deterministically, then drain the mailbox.
   defp flush(view) do
@@ -50,7 +57,7 @@ defmodule RepoBuilderWeb.TestOrchestratorThinkingToggleTest do
 
     # Orchestrator turns broadcast under the `"orch-…"` namespace; only those reach
     # the chat pane (worker UUIDs stay in the center event stream).
-    orch_id = "orch-#{System.unique_integer([:positive])}-1"
+    orch_id = active_orch_agent_id()
     broadcast = fn event -> Dashboard.broadcast_event(orch_id, event) end
     broadcast.(%Event.TextDelta{harness: :fake, text: "deep thoughts", thinking?: true})
     broadcast.(%Event.TextDelta{harness: :fake, text: "hello response", thinking?: false})
@@ -68,7 +75,7 @@ defmodule RepoBuilderWeb.TestOrchestratorThinkingToggleTest do
 
   test "the thinking toggle hides/shows the live streaming THINKING bubble", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/")
-    agent_id = "orch-stream-think-#{System.unique_integer([:positive])}"
+    agent_id = active_orch_agent_id()
 
     # In-flight (partial) reasoning + response stream into separate live bubbles.
     Dashboard.broadcast_event(agent_id, %Event.TextDelta{
