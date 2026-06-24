@@ -29,6 +29,9 @@ defmodule RepoBuilderWeb.Router do
     live "/projects/:id", ProjectsLive, :show
     live "/plan", PlanningLive, :new
     live "/plans/:id", PlanningLive, :show
+
+    # Agentic plugin system: the plugin store / management UI.
+    live "/plugins", PluginsLive
   end
 
   scope "/webhooks", RepoBuilderWeb do

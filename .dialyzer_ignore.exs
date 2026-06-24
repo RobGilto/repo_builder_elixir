@@ -14,5 +14,11 @@
   # that false positive. The functions return normally at runtime — the wire-type
   # boundary tests exercise them. Pinned to type_check 0.13.7.
   {"lib/repo_builder/harness/wire.ex", :no_return},
-  {"lib/repo_builder/harness/wire.ex", :extra_range}
+  {"lib/repo_builder/harness/wire.ex", :extra_range},
+  # Same TypeCheck `@type!` quirk in the plugin manifest wire boundary
+  # (`wire/0`, `wire_value/0`); the dependent `:extra_range` on `conforms?/1`
+  # cascades from it. Exercised by RepoBuilder.Plugins.ManifestTest. Pinned to
+  # type_check 0.13.7.
+  {"lib/repo_builder/plugins/manifest.ex", :no_return},
+  {"lib/repo_builder/plugins/manifest.ex", :extra_range}
 ]

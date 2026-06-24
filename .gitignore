@@ -67,3 +67,7 @@ __pycache__/
 # Use .env.sample as a template.
 /.env
 .env
+
+# Installed plugins are runtime artifacts; the source of truth is plugin_library/ + the store.
+/agentic_plugins/*
+!/agentic_plugins/.gitkeep

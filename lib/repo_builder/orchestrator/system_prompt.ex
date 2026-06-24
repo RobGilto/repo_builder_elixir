@@ -11,6 +11,7 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
   alias RepoBuilder.Harness.Registry
   alias RepoBuilder.Orchestrator.{Orchestrator, Templates, ToolCatalog}
   alias RepoBuilder.Orchestrators
+  alias RepoBuilder.Plugins.Activation
   alias RepoBuilder.Projects
   alias RepoBuilder.WorkflowEngine.Catalog
 
@@ -225,8 +226,19 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
   @spec project_primer_block(Orchestrator.t()) :: String.t()
   defp project_primer_block(%Orchestrator{} = orchestrator) do
     case resolve_project(orchestrator) do
-      %Projects.Project{context_primer: primer} when is_binary(primer) and primer != "" ->
-        "\n" <> primer
+      %Projects.Project{} = project ->
+        primer =
+          case project.context_primer do
+            value when is_binary(value) and value != "" -> "\n" <> value
+            _ -> ""
+          end
+
+        # Append the active plugins' context fragments (agentic plugin system
+        # foundation) so behaviour primes per project. No active plugins ⇒ unchanged.
+        case Activation.context_fragments(project.id) do
+          "" -> primer
+          fragments -> primer <> "\n\n## Active plugins\n\n" <> fragments
+        end
 
       _ ->
         ""

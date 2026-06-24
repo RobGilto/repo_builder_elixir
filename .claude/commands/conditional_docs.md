@@ -25,6 +25,7 @@
 | Ecto schemas, migrations, contexts, JSONB, Enum, or the cost float→Decimal boundary | `BUILD_PROMPT.md` §8; `ai_docs/typed-elixir-standard.md` (rule 10) |
 | The LiveView dashboard, streams, swimlanes, `assign_async`, or reconnect handling | `BUILD_PROMPT.md` §9; `AGENTS.md` (Phoenix v1.8 + LiveView guidelines) |
 | Adding or swapping a harness/provider | `BUILD_PROMPT.md` §10 (add a harness = one module + config) |
+| Plugins, the plugin store/library, manifest/contributions, install or activation lifecycle, or the `agentic_plugins/` dir | `ai_docs/plugin-authoring.md` (the authoring reference) + `BUILD_PROMPT.md` §10 (the open-identity/closed-contract doctrine it generalizes) |
 | Secrets, credential sourcing, or `raw` redaction | `BUILD_PROMPT.md` §4.1 (redaction) + §6 (secrets) |
 | Tests, Mox, the FakeHarness, normalizer property tests, or crash-isolation tests | `BUILD_PROMPT.md` §13; `ai_docs/typed-elixir-standard.md` (Enforcement) |
 | Anything touching the existing Python ADW scripts | `adws/README.md` (scripts are Astral `uv` single-file Python) |

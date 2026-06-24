@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan: Agentic Plugin System — Foundation</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#161a24; --panel-2:#1d2330; --ink:#e7e9ee; --muted:#9aa3b2;
+    --line:#2a3140; --primary:#7c6cff; --primary-2:#a99bff; --accent:#28c2a8; --accent-2:#3ad0b6;
+    --warn:#ffb454; --danger:#ff6b6b; --ok:#46d39a;
+    --mono:"JetBrains Mono","SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
+    --sans:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --radius:14px; --maxw:1080px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:radial-gradient(1200px 700px at 70% -10%,#1a2030 0%,var(--bg) 55%);
+       color:var(--ink);font-family:var(--sans);line-height:1.6;font-size:16px}
+  main{max-width:var(--maxw);margin:0 auto;padding:48px 24px 120px}
+  h1{font-size:2.2rem;letter-spacing:-.02em;margin:.2em 0 .1em;line-height:1.15}
+  h2{font-size:1.5rem;letter-spacing:-.01em;margin:1.8em 0 .5em;padding-bottom:.3em;border-bottom:1px solid var(--line)}
+  h3{font-size:1.18rem;margin:1.4em 0 .4em}
+  h4{font-size:1rem;margin:1.1em 0 .3em;color:var(--primary-2);text-transform:uppercase;letter-spacing:.06em;font-weight:600}
+  p{color:var(--ink)}
+  a{color:var(--primary-2);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{font-family:var(--mono);font-size:.86em;background:var(--panel-2);border:1px solid var(--line);
+       border-radius:6px;padding:.08em .4em;color:var(--accent-2)}
+  pre{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;
+      overflow:auto;font-family:var(--mono);font-size:.83rem;line-height:1.55;color:#d6dae4}
+  pre code{background:none;border:none;color:inherit;padding:0}
+  header{border-bottom:1px solid var(--line);padding-bottom:14px}
+  header .kicker{font-family:var(--mono);color:var(--accent);font-size:.8rem;letter-spacing:.18em;text-transform:uppercase}
+  details.meta{margin-top:14px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:6px 16px}
+  details.meta summary{cursor:pointer;font-family:var(--mono);font-size:.8rem;color:var(--muted);letter-spacing:.08em}
+  dl{display:grid;grid-template-columns:130px 1fr;gap:4px 18px;margin:12px 0 6px}
+  dl dt{font-family:var(--mono);font-size:.74rem;color:var(--accent);text-transform:uppercase;letter-spacing:.07em}
+  dl dd{margin:0;font-family:var(--mono);font-size:.8rem;color:var(--muted);word-break:break-word}
+  section{margin-top:6px}
+  figure{margin:22px 0;text-align:center}
+  figure img{max-width:100%;height:auto;border-radius:var(--radius);border:1px solid var(--line);
+             box-shadow:0 12px 40px -16px rgba(124,108,255,.45)}
+  figcaption{color:var(--muted);font-size:.85rem;margin-top:10px;font-style:italic}
+  .files ul{list-style:none;padding:0;margin:0}
+  .files li{padding:8px 12px;border:1px solid var(--line);border-radius:10px;margin-bottom:7px;background:var(--panel);font-size:.92rem}
+  .tag{font-family:var(--mono);font-size:.66rem;text-transform:uppercase;letter-spacing:.08em;padding:.12em .55em;
+       border-radius:999px;margin-right:8px;vertical-align:middle}
+  .tag.existing{background:rgba(40,194,168,.14);color:var(--accent-2);border:1px solid rgba(40,194,168,.4)}
+  .tag.new{background:rgba(124,108,255,.16);color:var(--primary-2);border:1px solid rgba(124,108,255,.45)}
+  .phase{background:linear-gradient(180deg,var(--panel) 0%,rgba(22,26,36,.6) 100%);
+         border:1px solid var(--line);border-left:3px solid var(--primary);border-radius:var(--radius);
+         padding:8px 24px 22px;margin:20px 0}
+  .phase h3{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .status{font-family:var(--mono);font-size:.78em;background:var(--panel-2);border:1px solid var(--line);
+          color:var(--warn);padding:.05em .45em;border-radius:5px}
+  ul.checklist{list-style:none;padding:0;margin:.4em 0}
+  ul.checklist li{padding:5px 0 5px 4px;border-bottom:1px dashed rgba(42,49,64,.7);font-size:.93rem}
+  ul.checklist li .status{margin-right:8px}
+  .loop{margin-top:14px;background:rgba(40,194,168,.08);border:1px solid rgba(40,194,168,.35);
+        border-radius:10px;padding:10px 14px;font-size:.88rem;color:var(--accent-2)}
+  #validation .loop{background:rgba(124,108,255,.1);border-color:rgba(124,108,255,.4);color:var(--primary-2)}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.88rem}
+  th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+  th{background:var(--panel-2);font-family:var(--mono);font-size:.74rem;text-transform:uppercase;letter-spacing:.06em;color:var(--accent)}
+  td code{font-size:.82em}
+  #questionables details,#amendments details{background:var(--panel);border:1px solid var(--line);
+        border-radius:10px;padding:6px 16px;margin-bottom:9px}
+  #questionables summary,#amendments summary{cursor:pointer;font-weight:600;color:var(--primary-2)}
+  .qa-answer{color:var(--muted);font-size:.92rem;margin:.6em 0 .3em}
+  .callout{background:var(--panel-2);border:1px solid var(--line);border-left:3px solid var(--accent);
+           border-radius:10px;padding:12px 16px;margin:16px 0;font-size:.92rem}
+  .callout.warn{border-left-color:var(--warn)}
+  .callout.danger{border-left-color:var(--danger)}
+  .lead{font-size:1.05rem;color:var(--ink)}
+  .pillrow{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}
+  .pill{font-family:var(--mono);font-size:.74rem;background:var(--panel);border:1px solid var(--line);
+        border-radius:999px;padding:.3em .8em;color:var(--muted)}
+  .pill b{color:var(--primary-2);font-weight:600}
+  hr{border:none;border-top:1px solid var(--line);margin:32px 0}
+</style>
+</head>
+<body>
+<main>
+
+  <!-- ===== HEADER + UPDATABLE METADATA ===== -->
+  <header>
+    <div class="kicker">repo_builder_elixir · extensibility foundation</div>
+    <h1>Plan: Agentic Plugin System — Foundation</h1>
+    <p class="lead">Make the orchestration platform <em>pluggable</em>: a typed plugin contract, a local <strong>folder library</strong> and a real remote <strong>store</strong>, live install into <code>agentic_plugins/</code>, and <strong>per-project activation</strong> so switching the orchestrator's bound repo changes behaviour by the plugins active for it.</p>
+    <details class="meta">
+      <summary>Metadata</summary>
+      <dl>
+        <dt>created</dt>      <dd>2026-06-24T09:32:28Z</dd>
+        <dt>modified</dt>     <dd>2026-06-24T09:32:28Z</dd>
+        <dt>commits</dt>      <dd>32df805</dd>
+        <dt>agent name</dt>   <dd>sdlc_planner</dd>
+        <dt>session id</dt>   <dd>3773caa0-7704-4c79-9fea-720b1dacfd33</dd>
+        <dt>back refs</dt>    <dd>BUILD_PROMPT.md §10, specs/agentic-layer-adaptor-and-planning-wizard.html, ai_docs/agentic-layer-adaptor.md</dd>
+        <dt>forward refs</dt> <dd>ai_docs/plugin-authoring.md</dd>
+      </dl>
+    </details>
+  </header>
+
+  <figure>
+    <img src="agentic-plugin-system-foundation/hero.png" alt="A central orchestrator core with modular plugin blocks snapping into labelled extension slots; a project toggle lights a subset.">
+    <figcaption>One core, swappable contributions — the active plugin set is a function of the bound project.</figcaption>
+  </figure>
+
+  <!-- ===== PURPOSE / PROBLEM / SOLUTION ===== -->
+  <section id="purpose">
+    <h2>Purpose</h2>
+    <p>Stand up the <strong>foundation</strong> of a first-class plugin system so the platform's behaviour is no longer hard-wired. A plugin is a versioned package that <em>contributes</em> to a closed set of extension points (slash commands, workflow/ADW types, agent templates, context-primer fragments, capability/stack detection, and — via an optional code layer — harness adapters). Plugins are authored in a local <strong>folder library</strong>, distributed through a remote <strong>store</strong>, <strong>installed live</strong> into <code>agentic_plugins/</code>, and <strong>activated per project</strong>. Switching the orchestrator's bound project recomputes the effective contribution set, so each target repo gets exactly the behaviour its active plugins define.</p>
+    <div class="pillrow">
+      <span class="pill"><b>Library</b> author/source dir</span>
+      <span class="pill"><b>Store</b> remote distribution (Req)</span>
+      <span class="pill"><b>agentic_plugins/</b> live install target</span>
+      <span class="pill"><b>Activation</b> per-project (nullable project_id)</span>
+      <span class="pill"><b>Declarative</b> + optional <b>code</b> layer</span>
+    </div>
+  </section>
+
+  <section id="problem">
+    <h2>Problem</h2>
+    <p>"Not every agentic-layer repo is the same," yet the platform's behaviour is fixed in core code. Today extensibility is unevenly distributed across ad-hoc seams: harness adapters live in a config map (<code>RepoBuilder.Harness.Registry</code>), command packs are filesystem dirs with a precedence chain (<code>Commands.Resolver</code>), agent/ADW/slash-command definitions are merged from app + working-dir roots (<code>Definitions</code>, <code>Orchestrator.Templates</code>), capabilities are per-language struct defaults (<code>Projects.Capabilities</code>) — and crucially the <strong>workflow/ADW catalog is hardcoded Elixir</strong> (<code>WorkflowEngine.Catalog.types/0</code> + <code>steps/2</code>), the one extension point that is <em>not</em> externally pluggable. There is no unifying concept of a "plugin," no manifest contract, no install/uninstall lifecycle, no store, and no way to scope a bundle of behaviours to one project. An operator cannot package "the Elixir-Phoenix way of working" or "the Rust embedded way" and drop it in per repo.</p>
+    <figure>
+      <img src="agentic-plugin-system-foundation/problem.png" alt="Several disconnected, differently-shaped extension seams with no common contract binding them.">
+      <figcaption>Extensibility exists, but as disconnected seams — no manifest, no store, no per-project bundle.</figcaption>
+    </figure>
+  </section>
+
+  <section id="solution">
+    <h2>Solution</h2>
+    <p>Introduce a <strong>typed plugin contract</strong> modelled on the platform's revered keystone — the canonical <code>Harness.Event</code> sum type: a <strong>closed set of contribution kinds</strong> with an <strong>open plugin identity</strong> (a string id). A <code>Plugin.Manifest</code> (validated at the wire boundary with TypeCheck, then normalized into a strict struct) declares what a package contributes. A <code>Plugins.Source</code> behaviour abstracts <em>where plugins come from</em> — a <code>LocalLibrary</code> source over the <code>plugin_library/</code> folder and a real <code>RemoteStore</code> source over HTTP (Req) — exactly mirroring the "add a harness = one adapter + one config entry" proof. An <code>Installer</code> fetches → verifies (checksum/trust) → unpacks into <code>agentic_plugins/&lt;id&gt;@&lt;version&gt;/</code> → records a durable <code>plugins</code> row; a boot <code>Loader</code> reconciles disk vs DB and <code>Code.require_file</code>s any code-bearing modules. Activation is a per-project join (<code>project_plugins</code>, nullable <code>project_id</code> = "the platform itself"). A <code>Plugins.Activation</code> resolver computes the <strong>effective contribution set</strong> for a project (cached, invalidated on activate/switch), and every existing seam is wired to consult it. Switching the orchestrator's project recomputes the set — behaviour changes live, per repo.</p>
+    <figure>
+      <img src="agentic-plugin-system-foundation/solution.png" alt="Layered architecture: sources feed an installer into agentic_plugins and a DB, then a per-project activation resolver fans into four extension points.">
+      <figcaption>Source → Installer → <code>agentic_plugins/</code> → per-project Activation → the four wired seams.</figcaption>
+    </figure>
+
+    <h3>The contribution contract (the keystone)</h3>
+    <pre><code># plugin.json — the wire manifest (validated by TypeCheck, normalized to Plugin.Manifest)
+{
+  "schema": "agentic.plugin/1",
+  "id": "elixir-phoenix-way",          # open identity (string), like harness keys
+  "name": "Elixir / Phoenix Way",
+  "version": "1.0.0",                   # semver
+  "description": "Phoenix-flavoured ADWs, commands, and review agents.",
+  "author": "robgilto",
+  "compat": { "platform": ">= 3.0.0" }, # checked against mix project version
+  "requires": { "capabilities": ["test_command"] },
+  "contributions": [
+    { "kind": "command_pack",   "path": "commands" },
+    { "kind": "workflow_type",  "path": "workflows/phoenix_sdlc.json" },
+    { "kind": "agent_template", "path": "agents" },
+    { "kind": "context_fragment","path": "context/phoenix.md" },
+    { "kind": "capability",     "path": "capabilities/elixir.json" }
+  ],
+  "code": {                            # OPTIONAL — only for code-bearing plugins
+    "modules": ["lib/my_harness.ex"],
+    "on_load": "ElixirPhoenixWay.Plugin"  # implements RepoBuilder.Plugins.Code
+  },
+  "checksum": "sha256:…"               # integrity, verified on install
+}</code></pre>
+    <p>The <strong>seven contribution kinds form a closed sum type</strong> (<code>RepoBuilder.Plugins.Contribution</code>); the plugin <strong>id stays open</strong>. Adding a <em>new kind</em> is a deliberate core edit (it means a new extension point); adding a <em>new plugin</em> is just a package — zero core change. This is the same trade the harness identity makes (BUILD_PROMPT §10).</p>
+  </section>
+
+  <!-- ===== RELEVANT FILES ===== -->
+  <section id="files" class="files">
+    <h2>Relevant Files</h2>
+
+    <h3>Existing Files (read &amp; extend)</h3>
+    <ul>
+      <li><span class="tag existing">existing</span> <code>BUILD_PROMPT.md</code> §10 — the "open identity + closed contract" extensibility doctrine this plan generalizes from harnesses to plugins.</li>
+      <li><span class="tag existing">existing</span> <code>ai_docs/typed-elixir-standard.md</code> — the enforced typed standard every new module must follow (the always-on doc).</li>
+      <li><span class="tag existing">existing</span> <code>ai_docs/agentic-layer-adaptor.md</code> — the Projects / command-pack / capability model the plugin system layers on top of.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/harness/registry.ex</code> — the canonical config-map + behaviour seam; the template for <code>Plugins.Registry</code> and the dynamic harness-adapter contribution.</li>
+      <li><span class="tag existing">existing</span> <code>config/config.exs</code> (~:78–340) — registry of <code>:harnesses</code> and ~25 config seams; add a <code>:plugins</code> block (dirs, sources, trust).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/application.ex</code> — supervision tree; add <code>Plugins.Loader</code> after <code>Repo</code>.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/projects/project.ex</code> + <code>projects.ex</code> — the per-project anchor; activation scopes to <code>project_id</code> (nullable = platform).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/commands/resolver.ex</code> + <code>pack.ex</code> — add a <code>plugin</code> precedence layer (repo-local → <strong>plugins</strong> → pinned → stack → generic).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/workflow_engine/catalog.ex</code> — make <code>types/1</code> + <code>steps/3</code> project-aware and merge plugin-provided workflow types (the key code→data win).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/templates.ex</code> + <code>definitions.ex</code> — merge active-plugin <code>agents/</code> roots into template/agent discovery.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/projects/context_primer.ex</code> + <code>profiler.ex</code> + <code>capabilities.ex</code> — append plugin context fragments; consult plugin stack markers / capability defaults.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/router.ex</code> + <code>live/console_live.ex</code> — add <code>/plugins</code>; recompute active plugins on project switch (<code>switch_orchestrator/2</code>).</li>
+      <li><span class="tag existing">existing</span> <code>.claude/commands/conditional_docs.md</code>, <code>AGENTS.md</code>, <code>README.md</code>, <code>.gitignore</code>, <code>priv/repo/seeds.exs</code> — routing, conventions, ignore rules, seeds.</li>
+    </ul>
+
+    <h3>New Files</h3>
+    <ul>
+      <li><span class="tag new">new</span> <code>agentic_plugins/.gitkeep</code> — live install target (runtime contents git-ignored).</li>
+      <li><span class="tag new">new</span> <code>plugin_library/&lt;sample&gt;/…</code> — the local folder library + 2–3 sample plugins (command-only, workflow-type, code-bearing harness).</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/plugins.ex</code> — context (sole <code>Repo</code> caller for plugin tables; install/uninstall/activate API).</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/plugins/plugin.ex</code> — installed-plugin schema (<code>plugins</code> table).</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/plugins/project_plugin.ex</code> — per-project activation schema (<code>project_plugins</code> join).</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/plugins/manifest.ex</code> — typed <code>Manifest</code> struct + wire-type (<code>@type!</code>) + parse/validate/normalize.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/plugins/contribution.ex</code> — closed sum type of contribution kinds (the contract).</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/plugins/source.ex</code> — <code>@behaviour</code> (<code>list/0</code>, <code>info/2</code>, <code>fetch/2</code>).</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/plugins/source/local_library.ex</code> + <code>remote_store.ex</code> — the two source adapters.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/plugins/installer.ex</code> — fetch → verify → unpack → register lifecycle.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/plugins/trust.ex</code> — checksum/signature verification + trust policy.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/plugins/loader.ex</code> — boot GenServer: scan disk, reconcile DB, <code>Code.require_file</code> code plugins, call <code>on_load</code>.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/plugins/activation.ex</code> — effective-contribution resolver + per-project cache + invalidation.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/plugins/registry.ex</code> — config reader + active-contribution accessor (the single test seam).</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/plugins/code.ex</code> — optional <code>@behaviour</code> for code-bearing plugins (<code>on_load/1</code>, <code>contributions/0</code>).</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder_web/live/plugins_live.ex</code> — the store/management UI (<code>/plugins</code>).</li>
+      <li><span class="tag new">new</span> <code>priv/repo/migrations/*_create_plugins.exs</code> + <code>*_create_project_plugins.exs</code> — the two tables.</li>
+      <li><span class="tag new">new</span> <code>ai_docs/plugin-authoring.md</code> — the plugin-authoring reference (manifest schema, kinds, lifecycle, code+trust, worked examples).</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/plugins/*</code> + <code>test/repo_builder_web/live/plugins_live_test.exs</code> — unit/boundary/integration tests.</li>
+    </ul>
+  </section>
+
+  <!-- ===== IMPLEMENTATION PHASES ===== -->
+  <section id="phases">
+    <h2>Implementation Phases</h2>
+    <p><strong>IMPORTANT:</strong> Execute every phase and task step by step, in order, top to bottom. Each phase is independently green-gateable; do not advance until its phase gate passes.</p>
+    <p>Status markers: <code>[]</code> idle · <code>[wip]</code> in progress · <code>[x]</code> complete · <code>[f]</code> failed. All start as <code>[]</code>; the Build Plan workflow updates them.</p>
+
+    <!-- ===================== PHASE 0 ===================== -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 0: Manifest Contract, Package Format &amp; Authoring Doc</h3>
+      <p>The keystone. Define the closed contribution-kind sum type, the typed manifest with a TypeCheck wire boundary, the on-disk package layout, and write the authoring reference up front (it is both the contract's spec and a forcing function). No persistence or runtime wiring yet — pure types + parsing + docs.</p>
+      <figure>
+        <img src="agentic-plugin-system-foundation/phase0.png" alt="A manifest card validated through a wire-to-domain boundary into a typed struct, with seven contribution-kind chips.">
+        <figcaption>Wire manifest → TypeCheck boundary → typed <code>Manifest</code>; seven closed contribution kinds.</figcaption>
+      </figure>
+
+      <h4>0.1 Contribution kinds (closed contract)</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Create <code>lib/repo_builder/plugins/contribution.ex</code> with a closed sum type of kinds: <code>:command_pack | :workflow_type | :agent_template | :context_fragment | :capability | :harness_adapter | :mcp_tools</code>, each a <code>typedstruct</code> carrying <code>path</code> (relative) + kind-specific fields; an umbrella <code>@type t</code> union and <code>kinds/0</code>.</li>
+        <li><code class="status">[]</code> Document each kind's required asset shape inline (<code>@moduledoc</code>), mirroring the <code>Harness.Event</code> variant docs.</li>
+      </ul>
+
+      <h4>0.2 Wire-validated manifest</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Create <code>lib/repo_builder/plugins/manifest.ex</code>: a <code>typedstruct enforce: true</code> domain struct (<code>id, name, version, description, author, compat, requires, contributions, code, checksum, source</code>) + a permissive TypeCheck <code>@type!</code> wire type for the raw JSON.</li>
+        <li><code class="status">[]</code> Implement <code>parse/1</code>: <code>Jason.decode/1</code> → <code>conforms/2</code> wire check → normalize into the struct; returns <code>{:ok, t} | {:error, reason}</code> and <strong>never raises</strong> (per typed standard rule 6/8). Use <code>String.to_existing_atom/1</code> for kind atoms against the closed set — never <code>to_atom/1</code> on untrusted input.</li>
+        <li><code class="status">[]</code> Implement <code>compat?/2</code> (manifest vs <code>Mix.Project</code> version) and <code>validate/2</code> (assets referenced by each contribution exist on disk).</li>
+        <li><code class="status">[]</code> Decide manifest filename = <code>plugin.json</code> (Jason is core; JSON is the store wire format). Note YAML support as a future kind-agnostic loader.</li>
+      </ul>
+
+      <h4>0.3 Authoring reference (write first)</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Create <code>ai_docs/plugin-authoring.md</code>: the <code>agentic.plugin/1</code> manifest schema, a contribution-kinds table (kind → asset layout → how it wires in → example), the package directory layout, the install/activate lifecycle, and the typed-Elixir rules plugin code must follow. Leave the code+trust section as a stub to be completed in Phases 2 &amp; 5.</li>
+        <li><code class="status">[]</code> Add the worked example skeletons (command-only, workflow-type, code-bearing) as fenced blocks.</li>
+      </ul>
+
+      <h4>0.4 Testing Strategy</h4>
+      <p>ExUnit boundary tests on <code>Manifest.parse/1</code>: valid manifest round-trips to the struct; malformed JSON, unknown kind, missing required field, and bad semver each return a tagged <code>{:error, _}</code> and never raise. Property-style fixtures mirror the normalizer tests in BUILD_PROMPT §13.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/plugins/manifest_test.exs</code> — parse/validate/compat all green; no raises on bad input.</li>
+        <li><code class="status">[]</code> <code>mix compile --warnings-as-errors</code> — closed sum type + structs compile clean.</li>
+        <li><code class="status">[]</code> <code>mix credo --strict</code> — every public fn has an <code>@spec</code>.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- ===================== PHASE 1 ===================== -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 1: Persistence, Context, Config &amp; Registry</h3>
+      <p>Durable state for installed plugins and per-project activation, the <code>RepoBuilder.Plugins</code> context (sole <code>Repo</code> caller), the <code>:plugins</code> config block, and <code>Plugins.Registry</code> — the config reader + active-contribution accessor that is the single test seam (the harness-registry pattern).</p>
+
+      <h4>1.1 Schemas &amp; migrations</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix ecto.gen.migration create_plugins</code>: <code>plugins</code> table — <code>id :binary_id</code>, <code>plugin_id :string</code>, <code>version :string</code>, <code>source :string</code>, <code>install_path :string</code>, <code>manifest :map</code> (JSONB), <code>checksum :string</code>, <code>status :string</code> (<code>:installed|:disabled</code>), <code>timestamps</code>; <code>unique_index [:plugin_id, :version]</code>.</li>
+        <li><code class="status">[]</code> <code>mix ecto.gen.migration create_project_plugins</code>: <code>project_plugins</code> join — <code>project_id :binary_id</code> (nullable FK, <code>on_delete: :delete_all</code>), <code>plugin_id :string</code>, <code>version :string</code>, <code>enabled :boolean</code>, <code>priority :integer</code>, <code>config :map</code>; <code>unique_index [:project_id, :plugin_id]</code> (treat NULL project as platform via a partial/expression index or a sentinel).</li>
+        <li><code class="status">[]</code> Create <code>plugins/plugin.ex</code> + <code>plugins/project_plugin.ex</code> via <code>use RepoBuilder.Schema</code>, hand-written precise <code>@type t</code>, <code>Ecto.Enum</code> for <code>status</code>, changesets with <code>validate_inclusion</code>/<code>foreign_key_constraint</code>/<code>unique_constraint</code>.</li>
+      </ul>
+
+      <h4>1.2 Context</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Create <code>lib/repo_builder/plugins.ex</code> — <code>@spec</code>'d API: <code>list_installed/0</code>, <code>get/1</code>, <code>install_record/1</code>, <code>uninstall_record/1</code>, <code>activate/2</code> (project_id, plugin_id), <code>deactivate/2</code>, <code>list_active/1</code> (for a project, ordered by <code>priority</code>), <code>set_config/3</code>. Returns <code>{:ok, t} | {:error, Ecto.Changeset.t()}</code>. The ONLY <code>Repo</code> caller for both tables.</li>
+      </ul>
+
+      <h4>1.3 Config &amp; Registry</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add to <code>config/config.exs</code>: <code>config :repo_builder, :plugins, install_dir: "agentic_plugins", library_dir: "plugin_library", sources: %{"library" =&gt; %{module: …LocalLibrary}, "store" =&gt; %{module: …RemoteStore, base_url: …}}, trust: %{require_checksum: true, allow_code: true, require_signature: false}</code>.</li>
+        <li><code class="status">[]</code> Create <code>plugins/registry.ex</code>: <code>sources/0</code>, <code>source_fetch/1</code>, <code>install_dir/0</code>, <code>library_dir/0</code>, <code>trust/0</code> — the single config reader (mirrors <code>Harness.Registry</code>), so tests override <code>:plugins</code> rather than poke internals.</li>
+      </ul>
+
+      <h4>1.4 Testing Strategy</h4>
+      <p>Ecto round-trip + constraint tests via the <code>DataCase</code>; assert contexts return <code>{:error, changeset}</code> (not raw Postgrex) when unique/FK constraints fire — proving indexes exist. Per-project activation ordering by <code>priority</code> verified.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix ecto.migrate</code> then <code>mix test test/repo_builder/plugins/plugins_test.exs</code> — CRUD + activation + JSONB manifest round-trip green.</li>
+        <li><code class="status">[]</code> <code>mix dialyzer</code> — schemas' hand-written <code>@type t</code> + context specs clean.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> Loop until all pass.</div>
+    </div>
+
+    <!-- ===================== PHASE 2 ===================== -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 2: Sources, Installer, Trust &amp; Boot Loader</h3>
+      <p>The "store" seam: a <code>Plugins.Source</code> behaviour with a fully-working <code>LocalLibrary</code> source and a real HTTP <code>RemoteStore</code> source (Req). The <code>Installer</code> fetch→verify→unpack→register pipeline, the <code>Trust</code> checksum/signature gate, and the boot <code>Loader</code> that reconciles <code>agentic_plugins/</code> against the DB.</p>
+      <figure>
+        <img src="agentic-plugin-system-foundation/phase2.png" alt="A pipeline: folder and cloud sources converge into an installer with a checksum gate, writing to a directory and a DB row.">
+        <figcaption>Two sources, one verified install pipeline into <code>agentic_plugins/</code> + a durable record.</figcaption>
+      </figure>
+
+      <h4>2.1 Source behaviour + adapters</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Create <code>plugins/source.ex</code> <code>@behaviour</code>: <code>list/0 :: {:ok, [summary]} | {:error, t}</code>, <code>info/2 (id, version)</code>, <code>fetch/2 (id, version) :: {:ok, %{manifest, tarball_path | dir}} | {:error, t}</code>.</li>
+        <li><code class="status">[]</code> Create <code>source/local_library.ex</code>: enumerate <code>plugin_library/*/plugin.json</code>, return summaries, <code>fetch/2</code> hands back the package dir. Fully functional, hermetic (no network).</li>
+        <li><code class="status">[]</code> Create <code>source/remote_store.ex</code>: <code>Req</code>-backed (the project's required HTTP client) — <code>GET {base_url}/index.json</code> for <code>list/0</code>, <code>GET {base_url}/plugins/{id}/{version}.tar.gz</code> for <code>fetch/2</code>, streaming to a temp file. Honour an optional bearer token from config/env. Never log secrets.</li>
+      </ul>
+
+      <h4>2.2 Trust &amp; installer</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Create <code>plugins/trust.ex</code>: verify the package <code>sha256</code> against <code>manifest.checksum</code> (constant-time compare); enforce <code>trust.require_checksum</code>; if <code>code</code> present, gate on <code>trust.allow_code</code>; stub <code>require_signature</code> hook for a future signing scheme. Returns <code>:ok | {:error, :checksum_mismatch | :code_not_allowed | :unsigned}</code>.</li>
+        <li><code class="status">[]</code> Create <code>plugins/installer.ex</code>: <code>install(source_key, id, version)</code> → <code>Source.fetch</code> → <code>Manifest.parse</code> → <code>Trust.verify</code> → unpack to <code>agentic_plugins/&lt;id&gt;@&lt;version&gt;/</code> (atomic: temp dir + rename) → <code>Plugins.install_record</code>. <code>uninstall(id)</code> → deactivate everywhere → remove dir (idempotent) → delete row. All steps tagged-tuple, no partial state on failure.</li>
+      </ul>
+
+      <h4>2.3 Boot loader + supervision</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Create <code>plugins/loader.ex</code> (GenServer): on <code>init</code>, scan <code>agentic_plugins/</code>, parse each manifest, reconcile against <code>plugins</code> rows (warn + skip on mismatch), and for code-bearing plugins <code>Code.require_file</code> the modules then call the <code>on_load/1</code> callback. Expose <code>reload/0</code>.</li>
+        <li><code class="status">[]</code> Wire <code>RepoBuilder.Plugins.Loader</code> into <code>application.ex</code> <strong>after</strong> <code>Repo</code> (needs the DB) and before <code>Endpoint</code>.</li>
+        <li><code class="status">[]</code> Create <code>agentic_plugins/.gitkeep</code>; add <code>agentic_plugins/*</code> (except <code>.gitkeep</code>) to <code>.gitignore</code> as runtime-installed artifacts.</li>
+      </ul>
+
+      <h4>2.4 Testing Strategy</h4>
+      <p>Hermetic source tests (LocalLibrary over a fixture <code>plugin_library/</code>; RemoteStore against a <code>Req.Test</code> stub — no real network). Installer happy-path + checksum-mismatch rejection + idempotent uninstall. Loader reconciliation with a planted dir. Use <code>start_supervised!/1</code> and <code>Process.monitor</code> per test guidelines (no <code>Process.sleep</code>).</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/plugins/source_test.exs test/repo_builder/plugins/installer_test.exs test/repo_builder/plugins/loader_test.exs</code> — all green.</li>
+        <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — full suite still green (no regressions).</li>
+        <li><code class="status">[]</code> <code>mix dialyzer</code> — Source behaviour callbacks + installer specs clean.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> Loop until all pass.</div>
+    </div>
+
+    <!-- ===================== PHASE 3 ===================== -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 3: Activation Resolver &amp; Per-Project Switching</h3>
+      <p>The behaviour-changes-per-repo engine. Given a project, compute the <strong>effective contribution set</strong> — the merged, priority-ordered contributions of its enabled plugins — cached and invalidated on activate/deactivate/switch. Wire the orchestrator project switch to recompute it.</p>
+
+      <h4>3.1 Effective-contribution resolver</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Create <code>plugins/activation.ex</code>: <code>effective(project_id) :: %{command_pack: [...], workflow_type: [...], agent_template: [...], context_fragment: [...], capability: [...], harness_adapter: [...]}</code> built from <code>Plugins.list_active/1</code> (ordered by <code>priority</code>) by reading each plugin's manifest contributions resolved to absolute <code>agentic_plugins/</code> paths.</li>
+        <li><code class="status">[]</code> Add an ETS/GenServer cache keyed by <code>project_id</code> (<code>nil</code> = platform); <code>invalidate/1</code> + <code>invalidate_all/0</code>. Broadcast <code>{:plugins_changed, project_id}</code> on PubSub so live views and <code>Definitions</code> can refresh.</li>
+        <li><code class="status">[]</code> Extend <code>plugins.ex</code> <code>activate/2</code>/<code>deactivate/2</code> to call <code>Activation.invalidate/1</code> + broadcast.</li>
+      </ul>
+
+      <h4>3.2 Bind switching to the orchestrator</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> In <code>console_live.ex</code> <code>switch_orchestrator/2</code> (the project-select path), resolve <code>Activation.effective(active_project_id)</code>, stash it in socket assigns, and trigger a <code>Definitions.refresh/1</code> so the slash-command/agent/ADW palette reflects the new active set.</li>
+        <li><code class="status">[]</code> Subscribe ConsoleLive to <code>{:plugins_changed, _}</code> so activating a plugin updates a live session without a project re-select.</li>
+      </ul>
+
+      <h4>3.3 Testing Strategy</h4>
+      <p>Resolver tests: two projects with different active plugins yield different effective sets; priority ordering respected; <code>nil</code> project = platform defaults. Cache invalidation asserted via the PubSub broadcast (<code>assert_receive</code>), not sleeps.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/plugins/activation_test.exs</code> — per-project divergence + invalidation green.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder_web/live/console_live_test.exs</code> — project switch recomputes active set (assert via a known plugin-contributed command/agent appearing).</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> Loop until all pass.</div>
+    </div>
+
+    <!-- ===================== PHASE 4 ===================== -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 4: Wire the Four Proof Seams</h3>
+      <p>Make active plugins actually change behaviour through the four existing seams. Each wiring reads <code>Activation.effective(project_id)</code> and merges the plugin's contributions at the right precedence — declarative, zero recompile.</p>
+      <figure>
+        <img src="agentic-plugin-system-foundation/phase4.png" alt="Hub and spoke: the activation resolver wiring into four panels — commands, workflows, agents, context.">
+        <figcaption>One resolver feeds four seams: commands, workflow catalog, agent templates, context + capabilities.</figcaption>
+      </figure>
+
+      <h4>4.1 Command packs</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Extend <code>commands/resolver.ex</code> <code>layers/1</code> to insert a <code>plugin</code> layer between <code>repo_local</code> and <code>pinned_pack</code>: for each active plugin with a <code>command_pack</code> contribution, search <code>agentic_plugins/&lt;id&gt;@&lt;v&gt;/commands/&lt;name&gt;.md</code>, filling capability tokens via the existing <code>fill_tokens/2</code>. Repo-local still wins.</li>
+        <li><code class="status">[]</code> Thread <code>project</code> (already available) so <code>resolve/2</code>/<code>resolve_all/1</code> include plugin commands; de-dup across layers preserved.</li>
+      </ul>
+
+      <h4>4.2 Workflow / ADW catalog (the code→data win)</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Refactor <code>workflow_engine/catalog.ex</code>: add <code>types/1</code> (project-aware) merging built-in <code>TypeDef</code>s with plugin <code>workflow_type</code> data parsed from each contribution's JSON (<code>slug, label, description, steps[]</code>); <code>steps/3</code> resolves built-in clauses OR a plugin's declared steps. Keep <code>types/0</code>/<code>steps/2</code> as <code>nil</code>-project delegators for back-compat.</li>
+        <li><code class="status">[]</code> Define the workflow-type data schema (the JSON a plugin ships): an ordered list of <code>%{"name","harness","prompt_template","on_success","on_failure"}</code> maps — exactly the JSONB shape <code>Step.from_map/1</code> already hydrates. Validate at load; reject unknown edges.</li>
+        <li><code class="status">[]</code> Confirm <code>Definitions.Adw</code> / <code>start_adw</code> consult the project-aware catalog so a plugin-contributed ADW is launchable.</li>
+      </ul>
+
+      <h4>4.3 Agent / subagent templates</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Extend <code>orchestrator/templates.ex</code> root-merge (<code>agents_dir</code> + <code>agents_builtin_dir</code>) and <code>definitions.ex</code> agent scan to also merge active plugins' <code>agents/</code> roots for the bound project (read-only, lower precedence than the writable <code>agents_dir</code>).</li>
+      </ul>
+
+      <h4>4.4 Context primer + capabilities</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Extend <code>projects/context_primer.ex</code> <code>render/1</code> to append each active plugin's <code>context_fragment</code> markdown (ordered by priority) to the primed orchestrator system prompt.</li>
+        <li><code class="status">[]</code> Extend <code>projects/profiler.ex</code> stack markers and <code>projects/capabilities.ex</code> defaults to consult plugin <code>capability</code> contributions (additional marker → language mappings and per-language command defaults), still operator-overridable.</li>
+      </ul>
+
+      <h4>4.5 Testing Strategy</h4>
+      <p>Per-seam integration test: install + activate a fixture plugin for a project, then assert the contributed command resolves, the workflow type appears in <code>types/1</code> and launches, the agent template lists, and the context primer contains the fragment. Switching to a project <em>without</em> the plugin shows none of it.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/commands/resolver_test.exs test/repo_builder/workflow_engine/catalog_test.exs test/repo_builder/projects/context_primer_test.exs</code> — all seams reflect active plugins.</li>
+        <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — no regressions; built-in behaviour unchanged when no plugins active.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> Loop until all pass.</div>
+    </div>
+
+    <!-- ===================== PHASE 5 ===================== -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 5: Code-Bearing Plugin Path</h3>
+      <p>The power layer: a plugin may ship BEAM modules (e.g. a new harness adapter). The <code>Loader</code> <code>Code.require_file</code>s them at boot and the plugin registers contributions programmatically. "Live" here means <em>reload-required</em> — explicitly documented as a trust boundary.</p>
+      <div class="callout danger"><strong>Trust boundary:</strong> code plugins execute arbitrary BEAM code in-node — there is no true sandbox on the BEAM. Gate on <code>trust.allow_code</code>, verified checksum (and a signature hook), and an explicit operator confirmation in the install UI. Document this loudly; never auto-install code plugins from the remote store without confirmation.</div>
+
+      <h4>5.1 Code behaviour + dynamic harness contribution</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Create <code>plugins/code.ex</code> <code>@behaviour</code>: <code>on_load(plugin_ctx) :: :ok | {:error, t}</code> and optional <code>contributions/0</code>. The canonical use: a plugin implements <code>RepoBuilder.Harness</code> (+ optionally <code>CustomSpawn</code>) and registers itself as a harness.</li>
+        <li><code class="status">[]</code> Make <code>harness/registry.ex</code> merge plugin-contributed harness adapters: a runtime overlay (ETS or persistent_term written by the Loader) consulted by <code>fetch/1</code>/<code>known/0</code> on top of the static <code>:harnesses</code> config. Keep static config authoritative; plugins layer additively.</li>
+        <li><code class="status">[]</code> Loader: after <code>Code.require_file</code>, call <code>on_load/1</code>; on success record the adapter in the overlay so <code>Agents</code>/<code>Workflows</code> can select it by string with zero core edit — the BUILD_PROMPT §10 "add a harness = one module" promise, now satisfied by a <em>dropped-in plugin</em>.</li>
+      </ul>
+
+      <h4>5.2 Sample code plugin (the proof)</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Ship a no-op code plugin in <code>plugin_library/</code> (a <code>RepoBuilder.Harness</code> adapter whose <code>normalize/2</code> is all <code>:skip</code>, mirroring the Cursor proof) to demonstrate a harness arriving entirely via plugin install — zero edits to <code>Event</code>/<code>Agent</code>/runtime.</li>
+      </ul>
+
+      <h4>5.3 Complete the authoring doc's code+trust section</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Fill the deferred <code>ai_docs/plugin-authoring.md</code> code-plugin + trust sections: the <code>Plugins.Code</code> contract, module layout, the reload semantics, the typed-Elixir rules, and the security/trust model.</li>
+      </ul>
+
+      <h4>5.4 Testing Strategy</h4>
+      <p>Install + load the fixture code plugin from a hermetic library dir; assert its harness key appears in <code>Registry.known/0</code> and resolves via <code>fetch/1</code>; a workflow step can select it; <code>trust.allow_code: false</code> rejects load with a tagged error. No real CLI spawned (Fake/no-op adapter).</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/plugins/code_plugin_test.exs</code> — load, register, reject-when-untrusted all green.</li>
+        <li><code class="status">[]</code> <code>mix dialyzer</code> — behaviour + overlay specs clean.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> Loop until all pass.</div>
+    </div>
+
+    <!-- ===================== PHASE 6 ===================== -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 6: Plugin Store / Management LiveView (<code>/plugins</code>)</h3>
+      <p>A minimal but real UI: browse sources (library + remote store), install/uninstall, and activate/deactivate per the bound project — with the code-plugin trust confirmation. Follows the Phoenix v1.8 + LiveView stream/async conventions in <code>AGENTS.md</code>.</p>
+
+      <h4>6.1 Route + LiveView</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add <code>live "/plugins", PluginsLive</code> to <code>router.ex</code>; create <code>live/plugins_live.ex</code> wrapped in <code>&lt;Layouts.app&gt;</code>.</li>
+        <li><code class="status">[]</code> Browse: list each source's catalog (<code>Source.list/0</code>) + installed plugins; show manifest summary + contribution chips. Use streams for the catalog list (flat memory) per the LiveView guidelines.</li>
+        <li><code class="status">[]</code> Actions: <code>install</code> (with a confirmation modal showing checksum + a <strong>code-plugin warning</strong> when <code>manifest.code</code> present), <code>uninstall</code>, and per-project <code>activate</code>/<code>deactivate</code> bound to the console's active project. Drive everything through the <code>Plugins</code>/<code>Installer</code> contexts — never <code>Repo</code> directly.</li>
+        <li><code class="status">[]</code> Long-running installs (remote fetch) via <code>start_async</code>/<code>handle_async</code> with an <code>AsyncResult</code> loading state.</li>
+      </ul>
+
+      <h4>6.2 Testing Strategy</h4>
+      <p><code>Phoenix.LiveViewTest</code> against element IDs (per AGENTS.md): render the page with a stubbed local library, install a plugin, assert it shows installed; activate for a project and assert the active badge; assert the code-plugin confirmation appears for a code-bearing manifest.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder_web/live/plugins_live_test.exs</code> — browse/install/activate flows green via element selectors.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> Loop until all pass.</div>
+    </div>
+
+    <!-- ===================== PHASE 7 ===================== -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 7: Docs, Samples, Seeds &amp; Full Green Gate</h3>
+      <p>Finalize the reference material, ship sample plugins, route the new docs, and pass the complete five-command green gate.</p>
+
+      <h4>7.1 Docs &amp; routing</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Finalize <code>ai_docs/plugin-authoring.md</code> (all sections incl. code+trust + worked examples) and add a one-line quick-ref to the package layout.</li>
+        <li><code class="status">[]</code> Add a routing row to <code>.claude/commands/conditional_docs.md</code>: "Plugins, the plugin store, manifest/contributions, install lifecycle → <code>ai_docs/plugin-authoring.md</code> + <code>BUILD_PROMPT.md</code> §10".</li>
+        <li><code class="status">[]</code> Update <code>AGENTS.md</code> (new "Plugins" subsection: contexts are the only <code>Repo</code> callers; closed kinds / open id rule) and <code>README.md</code> (Features + a "Plugins" section: library, store, <code>agentic_plugins/</code>, per-project activation, "adding a plugin = one package").</li>
+      </ul>
+
+      <h4>7.2 Sample plugins &amp; seeds</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Ship 2–3 samples in <code>plugin_library/</code>: a command-only pack, a workflow-type plugin, and the Phase 5 no-op code harness. Each a complete, valid <code>plugin.json</code>.</li>
+        <li><code class="status">[]</code> Optionally seed one installed+activated platform plugin in <code>priv/repo/seeds.exs</code> so a fresh dev DB demonstrates the loop.</li>
+      </ul>
+
+      <h4>7.3 Final Green Gate</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix compile --warnings-as-errors</code></li>
+        <li><code class="status">[]</code> <code>mix format --check-formatted</code></li>
+        <li><code class="status">[]</code> <code>mix credo --strict</code></li>
+        <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code></li>
+        <li><code class="status">[]</code> <code>mix dialyzer</code></li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> Loop until all pass.</div>
+    </div>
+  </section>
+
+  <!-- ===== GLOBAL VALIDATION ===== -->
+  <section id="validation">
+    <h2>Validation Commands</h2>
+    <p>Execute these to validate the entire plan is complete:</p>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>mix compile --warnings-as-errors</code> — the closed contribution contract, schemas, behaviours, and overlays all type-check.</li>
+      <li><code class="status">[]</code> <code>mix format --check-formatted</code> — style clean.</li>
+      <li><code class="status">[]</code> <code>mix credo --strict</code> — every public function has an <code>@spec</code> (the enforced standard).</li>
+      <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — manifest boundary, sources, installer, loader, activation, all four seams, code plugin, and the <code>/plugins</code> LiveView all green; built-in behaviour unchanged with no plugins active.</li>
+      <li><code class="status">[]</code> <code>mix dialyzer</code> — no new warnings; behaviour callbacks + specs consistent.</li>
+      <li><code class="status">[]</code> Manual smoke (IEx/Tidewave): <code>Installer.install("library", "&lt;sample&gt;", "1.0.0")</code> → <code>Plugins.activate(project_id, "&lt;sample&gt;")</code> → confirm the contributed command/workflow/agent/context appears for that project and vanishes when switched away.</li>
+    </ul>
+    <div class="loop">🔁 <strong>The plan is not complete until every box is checked and every command passes. If a step is genuinely impossible, mark it <code>[f]</code> and move on if possible.</strong></div>
+  </section>
+
+  <!-- ===== QUESTIONABLES ===== -->
+  <section id="questionables">
+    <h2>Questionables</h2>
+    <figure>
+      <img src="agentic-plugin-system-foundation/questionables.png" alt="A balance scale weighing platform-versus-target install and power-versus-safety code trust.">
+      <figcaption>The decisions worth surfacing before building — install scope and the code-trust boundary.</figcaption>
+    </figure>
+
+    <details>
+      <summary>Where do installed plugins live — the platform repo or the target/orchestrated repo?</summary>
+      <p class="qa-answer"><strong>Assumption:</strong> packages install into the <em>platform's</em> root <code>agentic_plugins/</code> (global on disk) and are <strong>activated per target project</strong> via <code>project_plugins</code>. Additionally, the <code>Profiler</code> auto-discovers a target-repo-local <code>&lt;root&gt;/.agentic_plugins/</code> as repo-shipped plugins (repo-local wins, mirroring the <code>.claude/commands</code> precedence rule). This satisfies both readings of "installed live in the repo" without forcing a choice.</p>
+    </details>
+    <details>
+      <summary>"separate to the apps folder" — which folder is that in a non-umbrella Elixir app?</summary>
+      <p class="qa-answer"><strong>Assumption:</strong> there is no umbrella <code>apps/</code> here, so "the apps folder" maps to <code>lib/</code> (the application source). <code>agentic_plugins/</code> sits at the repo root, a sibling of <code>lib/</code>, <code>priv/</code>, and <code>adws/</code> — never compiled as part of the main app; loaded explicitly by the <code>Loader</code>.</p>
+    </details>
+    <details>
+      <summary>Manifest format: JSON vs YAML vs Elixir?</summary>
+      <p class="qa-answer"><strong>Decision:</strong> <code>plugin.json</code>. Jason is core, JSON is the natural store-distribution wire format, and it fits the wire-type≠domain-type discipline (decode → <code>conforms/2</code> → normalize) the codebase already uses for harness events. <code>plugin.exs</code> was rejected (executing config code at install is a security footgun); YAML stays a possible future loader since <code>yaml_elixir</code> is already a dep.</p>
+    </details>
+    <details>
+      <summary>Code plugins execute arbitrary BEAM code — is that acceptable?</summary>
+      <p class="qa-answer"><strong>Risk, accepted with mitigations.</strong> There is no real sandbox for BEAM modules in-node. The user explicitly chose the code layer now. Mitigations: <code>trust.allow_code</code> gate, mandatory checksum verification, a signature hook stubbed for later, an explicit operator confirmation in the install UI, and loud documentation. The remote store never auto-installs code plugins without confirmation. Default config could ship <code>allow_code: false</code> for safety and require an opt-in.</p>
+    </details>
+    <details>
+      <summary>Should <code>agentic_plugins/</code> contents be committed?</summary>
+      <p class="qa-answer"><strong>Assumption:</strong> no — installed packages are runtime artifacts; <code>.gitignore</code> them (keep <code>.gitkeep</code>). The authoring source of truth is <code>plugin_library/</code> (committed) and the remote store. An operator who wants reproducible installs can pin versions and re-install from a source. Revisit if teams want vendored, committed plugin sets.</p>
+    </details>
+    <details>
+      <summary>How is concurrent install / live reload handled safely?</summary>
+      <p class="qa-answer"><strong>Approach:</strong> the <code>Installer</code> writes to a temp dir and atomically renames into place; the <code>Loader</code> serializes reloads through its GenServer. Declarative contributions take effect on the next <code>Activation</code> resolve (cache invalidated + PubSub broadcast). Code contributions take effect on <code>Loader.reload/0</code> (or restart) — never mid-request — and are explicitly documented as reload-required.</p>
+    </details>
+  </section>
+
+  <!-- ===== NOTES ===== -->
+  <section id="notes">
+    <h2>Notes</h2>
+
+    <h3>Design doctrine — generalize the harness seam</h3>
+    <p>The whole plan is a deliberate generalization of BUILD_PROMPT §10's proven move: <strong>open identity, closed contract, single registry seam, one test override point.</strong> Harnesses proved "add one = one module + one config entry." Plugins extend that to "add a behaviour-bundle = one package." Wherever a choice arises, prefer the pattern the codebase already trusts (the <code>Harness.Registry</code> config-map + behaviour, and the <code>Commands.Pack</code> builtin/operator filesystem split) over inventing a new shape.</p>
+
+    <h3>Contribution kinds → existing seam map</h3>
+    <table>
+      <thead><tr><th>Kind</th><th>Wires into</th><th>Mechanism</th><th>Phase</th></tr></thead>
+      <tbody>
+        <tr><td><code>command_pack</code></td><td><code>Commands.Resolver</code></td><td>new precedence layer (repo-local → <b>plugin</b> → pinned → stack → generic)</td><td>4.1</td></tr>
+        <tr><td><code>workflow_type</code></td><td><code>WorkflowEngine.Catalog</code></td><td><code>types/1</code>+<code>steps/3</code> merge plugin JSON step-lists (code→data)</td><td>4.2</td></tr>
+        <tr><td><code>agent_template</code></td><td><code>Orchestrator.Templates</code>, <code>Definitions</code></td><td>merge active-plugin <code>agents/</code> roots</td><td>4.3</td></tr>
+        <tr><td><code>context_fragment</code></td><td><code>Projects.ContextPrimer</code></td><td>append fragment markdown to primed system prompt</td><td>4.4</td></tr>
+        <tr><td><code>capability</code></td><td><code>Profiler</code>, <code>Capabilities</code></td><td>extra stack markers + per-language defaults</td><td>4.4</td></tr>
+        <tr><td><code>harness_adapter</code></td><td><code>Harness.Registry</code></td><td>code plugin registers a runtime overlay adapter</td><td>5.1</td></tr>
+        <tr><td><code>mcp_tools</code></td><td>per-orchestrator MCP endpoint</td><td><em>kind declared now; wiring is documented follow-on</em></td><td>future</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Dependencies</h3>
+    <p>No new Hex deps required: <code>Req</code> (HTTP store, already a dep + the mandated client), <code>Jason</code> (manifest), <code>type_check</code> (wire validation), <code>typedstruct</code> (structs), <code>:crypto</code> (checksums), <code>:erl_tar</code>/<code>:zlib</code> (OTP, tarball unpack). <code>Code.require_file/1</code> (Elixir core) loads code plugins. The remote store assumes a simple static layout (<code>index.json</code> + <code>plugins/&lt;id&gt;/&lt;version&gt;.tar.gz</code>) — a real backend is out of scope; the <code>RemoteStore</code> adapter only needs that contract.</p>
+
+    <h3>Rejected / deferred approaches</h3>
+    <ul>
+      <li><strong>Compile plugins into the release</strong> (recompile-to-install) — rejected: contradicts "install live."</li>
+      <li><strong>Hot code upgrades / appups</strong> for code plugins — deferred: heavy and brittle; reload-required is the honest, simple contract.</li>
+      <li><strong>A single global active plugin set</strong> — rejected: the requirement is explicitly per-project (behaviour changes when the bound repo changes).</li>
+      <li><strong>Putting <code>mcp_tools</code> wiring in this foundation</strong> — deferred: the per-orchestrator MCP endpoint exists, but tool-bundle contribution is its own surface; the kind is reserved so the contract is complete.</li>
+    </ul>
+
+    <figure>
+      <img src="agentic-plugin-system-foundation/notes.png" alt="An open ring intersecting a fixed seven-segment ring — open identity, closed set of kinds.">
+      <figcaption>The invariant: open plugin identity, closed set of contribution kinds.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== AMENDMENTS ===== -->
+  <section id="amendments">
+    <h2>Amendments</h2>
+    <p class="qa-answer">None yet — appended by Update Plan / Update References after first execution.</p>
+  </section>
+
+</main>
+</body>
+</html>

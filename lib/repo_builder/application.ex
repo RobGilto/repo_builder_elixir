@@ -68,6 +68,14 @@ defmodule RepoBuilder.Application do
       # (issue-unified-adw-swimlane-cards): a one-shot session that never persists and
       # never hits the global feed; on reply it writes only `Workflow.metadata["title"]`.
       {DynamicSupervisor, name: RepoBuilder.TitleHumanizerSupervisor, strategy: :one_for_one},
+      # Plugin activation cache (agentic plugin system): memoizes the per-project
+      # effective contribution set; the DB read runs in the caller, so it is correct
+      # under the test sandbox (caching is gated off in test).
+      RepoBuilder.Plugins.Activation,
+      # Plugin boot reconciler + code loader (agentic plugin system): scans
+      # agentic_plugins/ and loads code-bearing plugins. After Repo; reconcile-on-boot
+      # is disabled in tests so it never races the Ecto sandbox.
+      RepoBuilder.Plugins.Loader,
       # Boot-time reconciliation of orphaned OS children via the durable ledger.
       # Runs AFTER Repo (it reads os_pid_ledger). Disabled on boot in tests.
       RepoBuilder.OrphanReaper,

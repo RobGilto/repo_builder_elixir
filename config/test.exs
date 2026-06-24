@@ -137,6 +137,19 @@ config :repo_builder, :budget, refresh_ms: 3_600_000, reconcile_on_boot?: false
 # Tests that exercise the watch path start their own Definitions instance with polling.
 config :repo_builder, RepoBuilder.Definitions, watch_enabled?: false, poll_interval_ms: 30_000
 
+# Plugin activation cache: compute the effective contribution set fresh in the calling
+# (sandbox-owning) process for every test, so a cached set never leaks across tests.
+config :repo_builder, :plugins,
+  install_dir: "agentic_plugins",
+  library_dir: "plugin_library",
+  cache_enabled?: false,
+  reconcile_on_boot?: false,
+  sources: %{
+    "library" => %{module: RepoBuilder.Plugins.Source.LocalLibrary},
+    "store" => %{module: RepoBuilder.Plugins.Source.RemoteStore, base_url: nil}
+  },
+  trust: [require_checksum: false, allow_code: true, require_signature: false]
+
 # Oban in manual testing mode: jobs are inserted (assert_enqueued) but not run by
 # queues/cron; execution tests use Oban.Testing helpers / perform_job.
 config :repo_builder, Oban, testing: :manual

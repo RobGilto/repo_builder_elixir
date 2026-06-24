@@ -338,6 +338,20 @@ config :repo_builder, :session,
   max_line_bytes: 16_777_216,
   workspace_base: "priv/workspaces"
 
+# Agentic plugin system (the agentic plugin system foundation). The SINGLE reader is
+# `RepoBuilder.Plugins.Registry`. `install_dir` is the live install target (a sibling
+# of `lib/`); `library_dir` is the local authoring/source folder; `sources` is the
+# pluggable "store" seam (a fully-working local library + an HTTP remote store);
+# `trust` gates checksum/code/signature on install.
+config :repo_builder, :plugins,
+  install_dir: "agentic_plugins",
+  library_dir: "plugin_library",
+  sources: %{
+    "library" => %{module: RepoBuilder.Plugins.Source.LocalLibrary},
+    "store" => %{module: RepoBuilder.Plugins.Source.RemoteStore, base_url: nil}
+  },
+  trust: [require_checksum: false, allow_code: true, require_signature: false]
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

@@ -1,0 +1,16 @@
+{
+  "schema": "agentic.plugin/1",
+  "id": "noop-harness",
+  "name": "No-op Harness",
+  "version": "1.0.0",
+  "description": "A code-bearing plugin proving a harness adapter can arrive entirely via plugin install (the Cursor-style §10 extensibility proof).",
+  "author": "repo_builder",
+  "compat": { "platform": ">= 0.0.0" },
+  "contributions": [
+    { "kind": "harness_adapter", "meta": { "key": "noop" } }
+  ],
+  "code": {
+    "modules": ["lib/adapter.ex", "lib/plugin.ex"],
+    "on_load": "RepoBuilder.SamplePlugins.NoopHarness.Plugin"
+  }
+}

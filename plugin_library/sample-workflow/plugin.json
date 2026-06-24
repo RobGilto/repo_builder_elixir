@@ -1,0 +1,12 @@
+{
+  "schema": "agentic.plugin/1",
+  "id": "sample-workflow",
+  "name": "Sample Workflow",
+  "version": "1.0.0",
+  "description": "Contributes a data-defined ADW type: plan → build → ship.",
+  "author": "repo_builder",
+  "compat": { "platform": ">= 0.0.0" },
+  "contributions": [
+    { "kind": "workflow_type", "path": "workflows/plan_build_ship.json" }
+  ]
+}

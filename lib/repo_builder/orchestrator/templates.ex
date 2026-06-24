@@ -20,6 +20,7 @@ defmodule RepoBuilder.Orchestrator.Templates do
   require Logger
 
   alias RepoBuilder.Orchestrator.Template
+  alias RepoBuilder.Plugins.Activation
 
   @type reason :: atom() | String.t()
   @type summary :: %{
@@ -249,9 +250,32 @@ defmodule RepoBuilder.Orchestrator.Templates do
   # are loaded first so a writable file at the same version SHADOWS the built-in.
   @spec version_entries(String.t()) :: %{pos_integer() => String.t()}
   defp version_entries(name) do
-    Enum.reduce([builtin_root(), writable_root()], %{}, fn root, acc ->
+    Enum.reduce(read_roots(), %{}, fn root, acc ->
       collect_versions(Path.join(root, name), acc)
     end)
+  end
+
+  # Read roots in precedence order (later shadows earlier): built-in, then the
+  # platform's active-plugin agent dirs (agentic plugin system foundation), then the
+  # writable operator dir — so an operator template always wins over a plugin's.
+  @spec read_roots() :: [String.t()]
+  defp read_roots do
+    [builtin_root() | plugin_agent_roots()] ++ [writable_root()]
+  end
+
+  # Best-effort: agent-template enrichment must NEVER break template listing, which is
+  # called from processes that may not have DB access (e.g. the Definitions watcher at
+  # boot). A DB/plugin error yields no plugin agent roots rather than crashing.
+  @spec plugin_agent_roots() :: [String.t()]
+  defp plugin_agent_roots do
+    nil
+    |> Activation.contributions(:agent_template)
+    |> Enum.flat_map(fn
+      %Activation.Resolved{abs_path: dir} when is_binary(dir) -> [dir]
+      _resolved -> []
+    end)
+  rescue
+    _error -> []
   end
 
   @spec collect_versions(String.t(), %{pos_integer() => String.t()}) ::
@@ -282,7 +306,7 @@ defmodule RepoBuilder.Orchestrator.Templates do
 
   @spec template_names() :: [String.t()]
   defp template_names do
-    [builtin_root(), writable_root()]
+    read_roots()
     |> Enum.reduce(MapSet.new(), &collect_names/2)
     |> MapSet.to_list()
     |> Enum.sort()

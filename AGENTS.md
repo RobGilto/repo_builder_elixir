@@ -7,6 +7,22 @@ This is a web application written using the Phoenix web framework.
 - Use `mix precommit` alias when you are done with all changes and fix any pending issues
 - Use the already included and available `:req` (`Req`) library for HTTP requests, **avoid** `:httpoison`, `:tesla`, and `:httpc`. Req is included by default and is the preferred HTTP client for Phoenix apps
 
+### Agentic plugin system (`agentic_plugins/`)
+
+- A **plugin** is a versioned package that *contributes* to a **closed set of kinds**
+  (`RepoBuilder.Plugins.Contribution`) with an **open string `id`** — the §10 doctrine
+  generalized. `RepoBuilder.Plugins` is the ONLY `Repo` caller for `plugins` /
+  `project_plugins`. Manifests (`plugin.json`) cross the wire→domain boundary through
+  `Plugins.Manifest.parse/1` (never raises). See `ai_docs/plugin-authoring.md`.
+- **Install** (global, on disk + a `plugins` row) vs **activate** (per project, a
+  `project_plugins` row; `nil` `project_id` = the platform). Switching the
+  orchestrator's project recomputes the effective set (`Plugins.Activation`), so
+  behaviour changes per repo. Adding a kind is a deliberate core edit; adding a plugin
+  is just a package.
+- **Sources** (`Plugins.Source`): `LocalLibrary` (`plugin_library/`) + Req-backed
+  `RemoteStore`. **Trust**: `Plugins.Trust` gates checksum/code/signature; code plugins
+  run arbitrary BEAM code in-node — never auto-install one without confirmation.
+
 ### Agentic layer adaptor (target-repo Projects)
 
 - A **target repository** is a first-class `RepoBuilder.Projects.Project`. `RepoBuilder.Projects` is the ONLY `Repo` caller for `projects` (§8); `RepoBuilder.Plans` is the only caller for `plans`. Scope other tables with the **nullable** `project_id` FK — `nil` means "the platform itself" (the back-compatible default); never make it required.

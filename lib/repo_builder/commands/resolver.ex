@@ -16,6 +16,7 @@ defmodule RepoBuilder.Commands.Resolver do
   """
   alias RepoBuilder.Commands.{Pack, Resolved}
   alias RepoBuilder.Orchestrator.Template
+  alias RepoBuilder.Plugins.Activation
   alias RepoBuilder.Projects.Capabilities
   alias RepoBuilder.Projects.Project
   alias RepoBuilder.PromptStandard.Builder
@@ -70,10 +71,47 @@ defmodule RepoBuilder.Commands.Resolver do
   defp layers(%Project{} = project, name) do
     [
       repo_local(project, name),
+      plugin_layer(project, name),
       pinned_pack(project, name),
       stack_pack(project, name),
       generic_pack(project, name)
     ]
+  end
+
+  # Active-plugin command packs (the agentic plugin system foundation). Each active
+  # plugin's `command_pack` contribution resolves to its `commands/` dir; the
+  # first (highest-priority) plugin that supplies `name` wins. Capability tokens are
+  # filled like any pack, but the repo-local layer still wins over plugins.
+  @spec plugin_layer(Project.t(), String.t()) :: Resolved.t() | nil
+  defp plugin_layer(%Project{id: project_id} = project, name) do
+    project_id
+    |> plugin_command_contributions()
+    |> Enum.find_value(fn %Activation.Resolved{plugin_id: plugin_id, abs_path: commands_dir} ->
+      path = command_file(commands_dir, name)
+
+      case path && read_body(path) do
+        {:ok, body} ->
+          %Resolved{
+            name: name,
+            body: fill_tokens(body, project),
+            layer: :plugin,
+            pack: plugin_id,
+            version: nil,
+            provenance: "plugin #{plugin_id} commands/#{name}.md"
+          }
+
+        _ ->
+          nil
+      end
+    end)
+  end
+
+  @spec command_file(String.t() | nil, String.t()) :: String.t() | nil
+  defp command_file(nil, _name), do: nil
+
+  defp command_file(commands_dir, name) do
+    path = Path.join(commands_dir, String.replace(name, ":", "/") <> ".md")
+    if File.regular?(path), do: path, else: nil
   end
 
   @spec repo_local(Project.t(), String.t()) :: Resolved.t() | nil
@@ -183,11 +221,48 @@ defmodule RepoBuilder.Commands.Resolver do
   @spec available_names(Project.t()) :: [String.t()]
   defp available_names(%Project{} = project) do
     repo = repo_local_names(project.root_path)
+    plugins = plugin_command_names(project)
 
     pack_ids =
       Enum.uniq([project.command_pack, Pack.stack_pack_id(project.stack), "generic"])
 
-    (repo ++ Enum.flat_map(pack_ids, &pack_command_names/1)) |> Enum.uniq()
+    (repo ++ plugins ++ Enum.flat_map(pack_ids, &pack_command_names/1)) |> Enum.uniq()
+  end
+
+  # All command names contributed by the project's active plugins.
+  @spec plugin_command_names(Project.t()) :: [String.t()]
+  defp plugin_command_names(%Project{id: project_id}) do
+    project_id
+    |> plugin_command_contributions()
+    |> Enum.flat_map(fn %Activation.Resolved{abs_path: commands_dir} ->
+      command_names_in(commands_dir)
+    end)
+  end
+
+  # Best-effort: command resolution must fall through to packs if the plugin subsystem
+  # (DB) is unavailable — e.g. a resolver call from a process without DB access. Never
+  # crashes resolution.
+  @spec plugin_command_contributions(Ecto.UUID.t() | nil) :: [Activation.Resolved.t()]
+  defp plugin_command_contributions(project_id) do
+    Activation.contributions(project_id, :command_pack)
+  rescue
+    _error -> []
+  end
+
+  @spec command_names_in(String.t() | nil) :: [String.t()]
+  defp command_names_in(nil), do: []
+
+  defp command_names_in(commands_dir) do
+    commands_dir
+    |> Path.join("**/*.md")
+    |> Path.wildcard()
+    |> Enum.map(fn path ->
+      path
+      |> Path.relative_to(commands_dir)
+      |> Path.rootname()
+      |> Path.split()
+      |> Enum.join(":")
+    end)
   end
 
   @spec repo_local_names(String.t() | nil) :: [String.t()]

@@ -1,0 +1,12 @@
+{
+  "schema": "agentic.plugin/1",
+  "id": "sample-commands",
+  "name": "Sample Commands",
+  "version": "1.0.0",
+  "description": "A command-pack-only plugin: contributes a stack-aware /ship-it slash command.",
+  "author": "repo_builder",
+  "compat": { "platform": ">= 0.0.0" },
+  "contributions": [
+    { "kind": "command_pack", "path": "commands" }
+  ]
+}

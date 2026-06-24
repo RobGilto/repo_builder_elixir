@@ -9,12 +9,25 @@ defmodule RepoBuilder.Harness.Registry do
   separate `:harness_adapter` key, which the runtime would never consult.
   """
 
+  alias RepoBuilder.Plugins.HarnessOverlay
+
   @typedoc "Open harness identity (a registry key); intentionally atom()/String.t(), not a closed union (§3 rule 5)."
   @type harness :: atom() | String.t()
 
-  @doc "The full registry map: harness key (string) => config map (`:module`, `:exe`, …)."
+  @doc """
+  The full registry map: harness key (string) => config map (`:module`, `:exe`, …).
+
+  The static `config :repo_builder, :harnesses` is authoritative; plugin-contributed
+  adapters (the runtime `HarnessOverlay`, code-plugin layer) merge in additively so a
+  static key always wins a conflict.
+  """
   @spec all() :: %{optional(String.t()) => map()}
-  def all, do: Application.fetch_env!(:repo_builder, :harnesses)
+  def all do
+    Map.merge(
+      HarnessOverlay.all(),
+      Application.fetch_env!(:repo_builder, :harnesses)
+    )
+  end
 
   @doc "All registered harness keys — used by changeset `validate_inclusion/3` at the write boundary."
   @spec known() :: [String.t()]

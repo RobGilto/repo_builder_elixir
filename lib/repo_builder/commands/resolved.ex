@@ -7,14 +7,14 @@ defmodule RepoBuilder.Commands.Resolved do
   """
   use TypedStruct
 
-  @type layer :: :repo_local | :pinned_pack | :stack_pack | :generic
+  @type layer :: :repo_local | :plugin | :pinned_pack | :stack_pack | :generic
 
   typedstruct enforce: true do
     field :name, String.t()
     field :body, String.t()
     field :layer, layer()
-    field :pack, String.t() | nil
-    field :version, String.t() | nil
+    field :pack, String.t(), enforce: false
+    field :version, String.t(), enforce: false
     field :provenance, String.t()
   end
 end

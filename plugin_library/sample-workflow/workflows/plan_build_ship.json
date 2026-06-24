@@ -1,0 +1,10 @@
+{
+  "slug": "plan_build_ship",
+  "label": "Plan → Build → Ship",
+  "description": "Plan the work, build it, then ship it. A plugin-contributed ADW type.",
+  "steps": [
+    { "name": "plan",  "prompt_template": "Plan the work for: {{input}}", "on_success": "build", "on_failure": "abort" },
+    { "name": "build", "prompt_template": "Build from the plan: {{plan}}", "on_success": "ship",  "on_failure": "abort" },
+    { "name": "ship",  "prompt_template": "Ship the build: {{build}}",      "on_success": "done",  "on_failure": "abort" }
+  ]
+}
