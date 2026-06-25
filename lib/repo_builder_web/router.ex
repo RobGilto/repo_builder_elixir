@@ -32,6 +32,9 @@ defmodule RepoBuilderWeb.Router do
 
     # Agentic plugin system: the plugin store / management UI.
     live "/plugins", PluginsLive
+
+    # The Forge: author project-specific tooling (forge-meta-artifact-generation).
+    live "/forge", ForgeLive
   end
 
   scope "/webhooks", RepoBuilderWeb do

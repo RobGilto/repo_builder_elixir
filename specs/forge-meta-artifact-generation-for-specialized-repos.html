@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan: The Forge — Meta-Artifact Generation for Specialized Repos</title>
+<style>
+  :root {
+    /* Visual identity: "the forge" — a generative engine that casts tooling.
+       Deep indigo (meta/abstraction) + molten amber (generation/output) on slate. */
+    --bg:            #0f1117;
+    --bg-soft:       #161a24;
+    --panel:         #1b2030;
+    --panel-2:       #222840;
+    --ink:           #e8eaf2;
+    --ink-soft:      #aab0c6;
+    --ink-faint:     #6e7693;
+    --meta:          #8a7bff;   /* indigo-violet: the meta layer */
+    --meta-soft:     #b3a8ff;
+    --forge:         #ff9d4d;   /* molten amber: generation/output */
+    --forge-soft:    #ffc287;
+    --ok:            #4ade80;
+    --warn:          #fbbf24;
+    --fail:          #f87171;
+    --line:          #2c3350;
+    --radius:        14px;
+    --mono:          ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", monospace;
+    --sans:          "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(1100px 520px at 82% -8%, rgba(138,123,255,0.14), transparent 60%),
+      radial-gradient(900px 480px at 8% 4%, rgba(255,157,77,0.10), transparent 55%),
+      var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.62;
+    font-size: 16px;
+  }
+  main { max-width: 940px; margin: 0 auto; padding: 56px 26px 120px; }
+
+  h1, h2, h3, h4 { line-height: 1.25; font-weight: 700; letter-spacing: -0.012em; }
+  h1 { font-size: 2.3rem; margin: 0 0 6px; }
+  h1 .accent { color: var(--forge); }
+  h2 {
+    font-size: 1.5rem; margin: 52px 0 14px; padding-bottom: 9px;
+    border-bottom: 1px solid var(--line);
+  }
+  h2::before { content: "▮ "; color: var(--meta); font-size: 0.85em; }
+  h3 { font-size: 1.18rem; margin: 26px 0 10px; color: var(--ink); }
+  h4 { font-size: 1.0rem; margin: 20px 0 8px; color: var(--forge-soft); text-transform: none; }
+  p  { margin: 11px 0; color: var(--ink-soft); }
+  a  { color: var(--meta-soft); }
+  strong { color: var(--ink); }
+
+  code {
+    font-family: var(--mono); font-size: 0.86em;
+    background: var(--panel-2); color: var(--forge-soft);
+    padding: 1.5px 6px; border-radius: 6px; border: 1px solid var(--line);
+  }
+  pre {
+    background: var(--bg-soft); border: 1px solid var(--line); border-left: 3px solid var(--meta);
+    border-radius: var(--radius); padding: 16px 18px; overflow-x: auto; margin: 14px 0;
+  }
+  pre code { background: none; border: none; color: var(--ink); padding: 0; font-size: 0.82rem; line-height: 1.6; }
+
+  header {
+    background: linear-gradient(135deg, rgba(138,123,255,0.10), rgba(255,157,77,0.06));
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 30px 30px 22px; margin-bottom: 26px;
+  }
+  header h1 { background: none; }
+  .subtitle { color: var(--ink-soft); font-size: 1.04rem; margin-top: 4px; }
+  .pill-row { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .pill {
+    font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.02em;
+    background: var(--panel); border: 1px solid var(--line); color: var(--ink-soft);
+    padding: 4px 10px; border-radius: 999px;
+  }
+  .pill.meta  { color: var(--meta-soft);  border-color: rgba(138,123,255,0.5); }
+  .pill.forge { color: var(--forge-soft); border-color: rgba(255,157,77,0.5); }
+
+  details.meta { margin-top: 18px; }
+  details.meta > summary {
+    cursor: pointer; font-family: var(--mono); font-size: 0.78rem;
+    color: var(--ink-faint); list-style: none; user-select: none;
+  }
+  details.meta > summary::before { content: "⌄ "; }
+  details.meta[open] > summary::before { content: "⌃ "; }
+  dl { display: grid; grid-template-columns: 130px 1fr; gap: 4px 14px; margin: 12px 0 0; }
+  dl dt { color: var(--meta-soft); font-family: var(--mono); font-size: 0.74rem; padding-top: 2px; }
+  dl dd { margin: 0; color: var(--ink-soft); font-family: var(--mono); font-size: 0.74rem; word-break: break-word; }
+
+  figure {
+    margin: 22px 0; padding: 0; text-align: center;
+    background: var(--bg-soft); border: 1px dashed var(--line); border-radius: var(--radius);
+  }
+  figure img { max-width: 100%; height: auto; border-radius: var(--radius); display: block; margin: 0 auto; }
+  figure .placeholder {
+    padding: 40px 22px; color: var(--ink-faint); font-family: var(--mono); font-size: 0.78rem;
+  }
+  figcaption { color: var(--ink-faint); font-size: 0.84rem; padding: 10px 16px 14px; font-style: italic; }
+
+  section { scroll-margin-top: 20px; }
+
+  ul, ol { color: var(--ink-soft); }
+  li { margin: 5px 0; }
+
+  .files ul { list-style: none; padding-left: 0; }
+  .files li { padding: 4px 0; border-bottom: 1px dashed var(--line); }
+  .tag {
+    font-family: var(--mono); font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.05em;
+    padding: 2px 7px; border-radius: 5px; margin-right: 6px; vertical-align: middle;
+  }
+  .tag.existing { background: rgba(138,123,255,0.16); color: var(--meta-soft);  border: 1px solid rgba(138,123,255,0.4); }
+  .tag.new      { background: rgba(255,157,77,0.16);  color: var(--forge-soft); border: 1px solid rgba(255,157,77,0.4); }
+  .tag.edit     { background: rgba(251,191,36,0.14);  color: var(--warn);       border: 1px solid rgba(251,191,36,0.4); }
+
+  .phase {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 8px 24px 22px; margin: 18px 0;
+  }
+  .phase h3 { display: flex; align-items: center; gap: 10px; }
+  .status {
+    font-family: var(--mono); font-weight: 700; color: var(--ink-faint);
+    background: var(--bg-soft); border: 1px solid var(--line);
+  }
+  .checklist { list-style: none; padding-left: 2px; }
+  .checklist li { margin: 7px 0; padding-left: 2px; }
+  .checklist .status { margin-right: 8px; }
+
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 0.9rem; }
+  th, td { border: 1px solid var(--line); padding: 8px 11px; text-align: left; vertical-align: top; }
+  th { background: var(--panel-2); color: var(--ink); font-size: 0.82rem; }
+  td { color: var(--ink-soft); }
+
+  .loop {
+    margin: 16px 0 4px; padding: 12px 16px; font-size: 0.9rem;
+    background: rgba(255,157,77,0.08); border: 1px solid rgba(255,157,77,0.34);
+    border-radius: 10px; color: var(--forge-soft);
+  }
+  .callout {
+    margin: 18px 0; padding: 14px 18px; border-radius: 10px;
+    background: rgba(138,123,255,0.08); border: 1px solid rgba(138,123,255,0.34); color: var(--ink-soft);
+  }
+  .callout.warn { background: rgba(251,191,36,0.07); border-color: rgba(251,191,36,0.34); }
+
+  #questionables details, #amendments details {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 4px 16px; margin: 10px 0;
+  }
+  #questionables summary, #amendments summary {
+    cursor: pointer; color: var(--forge-soft); font-weight: 600; padding: 8px 0;
+  }
+  .qa-answer { border-top: 1px dashed var(--line); padding-top: 10px; }
+
+  .flow {
+    font-family: var(--mono); font-size: 0.8rem; color: var(--ink-soft);
+    background: var(--bg-soft); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; overflow-x: auto; white-space: pre; margin: 14px 0;
+  }
+  .flow .m { color: var(--meta-soft); }
+  .flow .f { color: var(--forge-soft); }
+</style>
+</head>
+<body>
+<main>
+
+  <!-- ===== HEADER + UPDATABLE METADATA ===== -->
+  <header>
+    <h1>Plan: The <span class="accent">Forge</span> — Meta-Artifact Generation for Specialized Repos</h1>
+    <p class="subtitle">Fold the <code>meta-properties</code> generators (meta-skill, meta-prompt, meta-agent) into <code>repo_builder</code> so the platform can <em>author</em> the plugins, commands, agents, and skills a project needs — and activate them per repo. Open identity, closed contract — the same doctrine, one level up.</p>
+    <div class="pill-row">
+      <span class="pill meta">doctrine: open-id / closed-contract</span>
+      <span class="pill forge">subsystem: RepoBuilder.Forge</span>
+      <span class="pill">reuses: Plugins · WorkflowEngine · Session</span>
+      <span class="pill">scope: per-Project specialization</span>
+    </div>
+    <details class="meta">
+      <summary>Metadata</summary>
+      <dl>
+        <dt>created</dt>      <dd>2026-06-25</dd>
+        <dt>modified</dt>     <dd>2026-06-25</dd>
+        <dt>commits</dt>      <dd>—</dd>
+        <dt>agent name</dt>   <dd>claude-opus-4-8 (Claude Code)</dd>
+        <dt>session id</dt>   <dd>prime+planf3-2026-06-25</dd>
+        <dt>back refs</dt>    <dd>specs/agentic-plugin-system-foundation.html, specs/agentic-layer-adaptor-and-planning-wizard.html, specs/orchestrator-project-binding-and-pinned-workers.html</dd>
+        <dt>forward refs</dt> <dd>—</dd>
+      </dl>
+    </details>
+  </header>
+
+  <!-- Hero image -->
+  <figure>
+    <img src="forge-meta-artifact-generation-for-specialized-repos/hero.png" alt="A forge anvil casting glowing command, agent, and skill tokens that snap into labeled project-directory slots; caption: spec to generate to activate.">
+    <figcaption>The Forge casts project-specific tooling from a natural-language spec and seats it into the right repo.</figcaption>
+  </figure>
+
+  <!-- ===== PURPOSE ===== -->
+  <section id="purpose">
+    <h2>Purpose</h2>
+    <p><code>/data/1.Projects/meta-properties/</code> is a curated workshop of <strong>meta-artifacts</strong>: a meta-skill that authors Agent Skills (<code>creating-new-skills</code>), a meta-prompt that authors slash commands (<code>slash-command-generator</code> / <code>meta-prompt</code>), and a meta-agent that authors sub-agents (<code>subagent-generator</code> / <code>meta-agent</code>). Its founding doctrine — <em>"collected technique becomes a template; a template that earns its keep becomes a skill or agent"</em>, with <strong>one artifact = one folder</strong> and <strong>inputs/outputs as contracts</strong> — is the <em>same</em> open-identity / closed-contract seam <code>repo_builder</code> already runs for harnesses and plugins.</p>
+    <p>This plan incorporates that workshop into the platform as a first-class <strong>generation subsystem — <code>RepoBuilder.Forge</code></strong> — so that when a target repo becomes specialized, the platform can <strong>generate the exact tooling it needs</strong> (a stack-correct <code>/command</code>, a domain sub-agent, a skill, a workflow), <strong>package it as a valid <code>agentic.plugin/1</code></strong>, and <strong>activate it for that project only</strong>. The meta-artifacts stop being a static reference and become the platform's <em>generation method</em>, driven through the very harness-session machinery the platform exists to run.</p>
+  </section>
+
+  <!-- ===== PROBLEM ===== -->
+  <section id="problem">
+    <h2>Problem</h2>
+    <p>The plugin system can already <em>distribute and activate</em> tooling per project, but every plugin must be <strong>hand-authored</strong>. As project directories specialize (a Phoenix app, a Rust CLI, a data pipeline), each accrues a long tail of bespoke commands/agents/skills that nobody has time to write by hand, and the knowledge for <em>how to write them well</em> lives in a separate repo (<code>meta-properties</code>) that the platform can't reach. Three concrete gaps:</p>
+    <ul>
+      <li><strong>No generator path.</strong> <code>Plugins.Installer</code> consumes packages; nothing <em>produces</em> them. The meta-artifacts that know how to produce them are out-of-tree.</li>
+      <li><strong>Skills aren't a contribution kind.</strong> The closed set is <code>command_pack · workflow_type · agent_template · context_fragment · capability · harness_adapter · mcp_tools</code>. The meta-skill's whole output — an Agent Skill (<code>.claude/skills/&lt;name&gt;/SKILL.md</code>) — has nowhere to land.</li>
+      <li><strong>Specialization is manual.</strong> A <code>Project</code> carries a detected stack + capability map, but turning that context into <em>generated, stack-correct tooling</em> is a human step today.</li>
+    </ul>
+    <figure>
+      <img src="forge-meta-artifact-generation-for-specialized-repos/problem.png" alt="Left: a craftsman hand-carving one tool slowly. Right: a repo shelf with empty command/agent/skill slots, separated by a broken dashed gap from an external 'meta' book.">
+      <figcaption>The know-how to author tooling is out-of-tree, skills have no home, and specialization stays manual.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== SOLUTION ===== -->
+  <section id="solution">
+    <h2>Solution</h2>
+    <p>Add a thin, typed <strong><code>RepoBuilder.Forge</code></strong> subsystem that treats <em>generating a plugin</em> as just another deterministic ADW — exactly what the platform already does best. The meta-artifact bodies become <strong>generator prompt templates</strong>; the platform drives a real harness session to produce the artifact; a validator + packager turn the output into an <code>agentic.plugin/1</code> package; and the existing <strong>install → activate-per-project</strong> lifecycle does the rest.</p>
+    <div class="flow"><span class="m">meta-properties generators</span>  ──vendor──▶  priv/forge/generators/{command,agent,skill,workflow}.md
+        │
+   Forge.request(project, kind, spec)        ← typed boundary (forge_artifacts row)
+        │
+   <span class="f">forge ADW</span>  (WorkflowEngine + Session.Server, scratch cwd)
+   render generator prompt  ─▶  harness writes artifact file(s)  ─▶  Validator (frontmatter/naming/limits)
+        │   ▲ retry on validation failure (deterministic on_failure edge)
+        ▼
+   <span class="f">Packager</span>  ─▶  plugin_library/&lt;id&gt;/  (plugin.json = agentic.plugin/1 + assets)
+        │
+   Plugins.Installer.install  ─▶  Plugins.activate(<span class="m">project_id</span>, id)   ← scoped to THIS repo only
+        │
+   Commands.Resolver / Catalog / ContextPrimer / (new) SkillPack  ──effective set recomputed──▶  specialized repo</div>
+    <p>Three properties make this a <em>small</em> change rather than a new platform:</p>
+    <ul>
+      <li><strong>It dogfoods the core.</strong> Generation is a harness session under the WorkflowEngine — the same path agents already run. No new execution engine.</li>
+      <li><strong>It lands on the existing seam.</strong> Output is a normal plugin; <code>Installer</code>/<code>Activation</code>/<code>Resolver</code> are unchanged except for one deliberate new kind.</li>
+      <li><strong>One honest core edit.</strong> Adding <code>:skill</code> to the closed <code>Contribution</code> set is the single new extension point — the doctrine's sanctioned "adding a kind is a deliberate core edit."</li>
+    </ul>
+    <figure>
+      <img src="forge-meta-artifact-generation-for-specialized-repos/solution.png" alt="A horizontal pipeline: spec document, forge anvil with a gear, validated artifact card with a checkmark, plugin package, and a project slot lighting up; labels generate, validate, package, activate.">
+      <figcaption>Spec in, activated per-project plugin out — riding the WorkflowEngine + Plugins seam that already exists.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== RELEVANT FILES ===== -->
+  <section id="files" class="files">
+    <h2>Relevant Files</h2>
+
+    <h3>Existing Files</h3>
+    <ul>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/plugins/contribution.ex</code> — closed kind set; the <strong>one deliberate edit</strong> adds <code>:skill</code> (Phase 4).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/plugins/manifest.ex</code> — <code>agentic.plugin/1</code> wire→domain parser; the Packager emits manifests this must accept.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/plugins.ex</code> — only Repo caller for plugins/activation; Forge calls <code>Installer.install</code> + <code>activate/2</code> through it.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/plugins/installer.ex</code> — install/uninstall; consumes the Packager's output dir.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/plugins/activation.ex</code> — per-project effective set; must learn the new <code>:skill</code> kind.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/plugins/source/</code> — <code>LocalLibrary</code> reads <code>plugin_library/</code>; the Forge writes there, so installs flow unchanged.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/commands/resolver.ex</code> + <code>commands/pack.ex</code> — the <code>command_pack</code> precedence layer; model for the new <code>SkillPack</code> resolver.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/workflow_engine.ex</code>, <code>workflow_engine/{runner,step,catalog}.ex</code> — the deterministic engine + workflow-type catalog the forge ADW registers into.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/session/server.ex</code> — the harness session the generate step drives (scratch cwd, redaction, idle timeout).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/projects/{project,profiler,context_primer}.ex</code> — supplies stack + capability context that conditions the generator prompt.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/plans.ex</code> + <code>plans/plan.ex</code> — durable artifact pattern to mirror for <code>forge_artifacts</code>.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/live/{plugins_live,planning_live,projects_live}.ex</code> — UI patterns; <code>/forge</code> follows them; <code>/plugins</code> gains a "Forge a plugin" entry.</li>
+      <li><span class="tag existing">existing</span> <code>ai_docs/plugin-authoring.md</code>, <code>ai_docs/agentic-layer-adaptor.md</code>, <code>ai_docs/prompt-anatomy.md</code> — the doctrine the vendored generators must align with.</li>
+      <li><span class="tag existing">existing</span> <code>plugin_library/</code> + <code>priv/command_packs/</code> — output target + capability-token convention the generators must honor.</li>
+      <li><span class="tag existing">existing</span> <code>config/config.exs</code> — <code>:plugins</code> + <code>:harnesses</code> config; add a <code>:forge</code> block (generator dir, generation harness, scratch base).</li>
+    </ul>
+
+    <h3>New Files</h3>
+    <ul>
+      <li><span class="tag new">new</span> <code>ai_docs/meta-artifacts.md</code> — vendored doctrine + the generator catalog; the conditional-docs router gets a row.</li>
+      <li><span class="tag new">new</span> <code>priv/forge/generators/{command,agent,skill,workflow}.md</code> — the meta-artifact bodies, re-cast as repo-aware generation prompts (capability tokens, typed-standard, naming rules).</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/forge.ex</code> — the typed context; the <strong>only</strong> Repo caller for <code>forge_artifacts</code>; public API <code>request/1</code>, <code>get/1</code>, <code>list_for_project/1</code>.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/forge/artifact.ex</code> — Ecto schema <code>forge_artifacts</code> (project_id, kind, spec, status, output_path, plugin_id, workflow_run_id).</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/forge/generator.ex</code> — closed generator registry: <code>kind → {prompt_template_path, validator, packager_hint}</code>; mirrors the Harness registry seam.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/forge/validator.ex</code> — per-kind structural checks (third-person description, gerund/kebab name, <500-line body, valid frontmatter); never raises.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/forge/packager.ex</code> — validated artifact(s) → <code>plugin_library/&lt;id&gt;/</code> with a synthesized <code>plugin.json</code> + checksum.</li>
+      <li><span class="tag new">new</span> <code>priv/workflows/forge.json</code> (or <code>lib/repo_builder/workflows/forge.ex</code>) — the <code>forge</code> workflow_type: <code>render → generate → validate → package</code> with a validate→generate retry edge.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/plugins/skill_pack.ex</code> — resolver/loader for the new <code>:skill</code> kind (writes/links <code>.claude/skills/</code> for the active project).</li>
+      <li><span class="tag new">new</span> <code>priv/repo/migrations/*_create_forge_artifacts.exs</code> — binary_id table.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder_web/live/forge_live.ex</code> + route <code>/forge</code> — pick project → kind → spec → preview → generate → review → activate.</li>
+      <li><span class="tag new">new</span> <code>plugin_library/forge-meta/</code> — a bundled "meta" plugin packaging the generators as a <code>context_fragment</code> + sample, proving the loop end-to-end.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/forge/*_test.exs</code> + <code>test/repo_builder_web/live/forge_live_test.exs</code> — driven through the <code>Fake</code> harness.</li>
+    </ul>
+  </section>
+
+  <!-- ===== IMPLEMENTATION PHASES ===== -->
+  <section id="phases">
+    <h2>Implementation Phases</h2>
+    <p><strong>IMPORTANT:</strong> Execute every phase and task step by step, in order, top to bottom. Each phase must end green against the five-command gate (<code>compile --warnings-as-errors · format · credo --strict · test · dialyzer</code>) before the next begins.</p>
+    <p>Status markers: <code>[]</code> idle · <code>[wip]</code> in progress · <code>[x]</code> complete · <code>[f]</code> failed. All start as <code>[]</code>; the Build Plan workflow updates them as it works.</p>
+
+    <!-- PHASE 1 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 1: Vendor the generators &amp; doctrine</h3>
+      <p>Bring the <code>meta-properties</code> know-how in-tree as repo-aware generation prompts, and document the lineage. No runtime behavior yet — this is the prompt/asset foundation everything else renders.</p>
+      <figure>
+        <img src="forge-meta-artifact-generation-for-specialized-repos/phase-1-vendor.png" alt="Three source books (skill, prompt, agent) transcribed by an amber arrow into four repo-shaped generator cards labeled command, agent, skill, workflow.">
+        <figcaption>The external trifecta becomes four in-tree, capability-aware generator templates.</figcaption>
+      </figure>
+
+      <h4>1. Author the generator templates</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Create <code>priv/forge/generators/command.md</code> from <code>meta-properties/.../slash-command-generator/PROMPT_TEMPLATE.md</code> — keep the 6-section anatomy, but require <strong>capability tokens</strong> (<code>{{TEST_COMMAND}}</code>, <code>{{SPEC_DIR}}</code>) instead of hard-wired toolchains so output is stack-portable.</li>
+        <li><code class="status">[]</code> Create <code>priv/forge/generators/agent.md</code> from <code>subagent-generator/AGENT-strict.md</code> (disciplined 4-section, real frontmatter, minimal inferred tools) — drop the live doc-fetch step (offline/hermetic generation).</li>
+        <li><code class="status">[]</code> Create <code>priv/forge/generators/skill.md</code> from <code>creating-new-skills/SKILL.md</code> — distill to the hard rules: gerund/kebab name, third-person description, body &lt;500 lines, progressive disclosure, one capability per skill.</li>
+        <li><code class="status">[]</code> Create <code>priv/forge/generators/workflow.md</code> — generate a <code>workflow_type</code> JSON matching <code>WorkflowEngine.Step</code> (edges ∈ sibling|done|abort; harness optional per step).</li>
+        <li><code class="status">[]</code> Add a <code>{{PROJECT_CONTEXT}}</code> slot to every template, filled at render time from <code>Projects.ContextPrimer</code> (stack, capabilities, conventions).</li>
+      </ul>
+
+      <h4>2. Document the doctrine &amp; lineage</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Write <code>ai_docs/meta-artifacts.md</code>: the open-id/closed-contract framing, the generator catalog, and the <code>meta-properties</code> provenance (source repo + sweep date).</li>
+        <li><code class="status">[]</code> Add a routing row to <code>.claude/commands/conditional_docs.md</code> ("Forging tooling / generating plugins → <code>ai_docs/meta-artifacts.md</code> + <code>ai_docs/plugin-authoring.md</code>").</li>
+        <li><code class="status">[]</code> Add the <code>:forge</code> config block to <code>config/config.exs</code> (<code>generators_dir</code>, <code>generation_harness</code>, <code>scratch_base</code>, <code>default_source</code>).</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>No code yet — assert the assets exist, are well-formed, and the config reads back. ExUnit + a small fixture check that each generator template contains its required section headers and the <code>{{PROJECT_CONTEXT}}</code> slot.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>test/repo_builder/forge/generators_present_test.exs</code> — asserts all four templates exist and contain required markers — proves the asset contract.</li>
+        <li><code class="status">[]</code> <code>mix format --check-formatted &amp;&amp; mix credo --strict</code> — proves docs/config edits are clean.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- PHASE 2 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 2: <code>Forge</code> context, schema &amp; generator registry</h3>
+      <p>The typed boundary: a durable record of "this project asked for this kind of tool with this spec," plus the closed registry mapping each kind to its template + validator. Pure data + lookups — no generation yet.</p>
+
+      <h4>1. Schema + migration</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix ecto.gen.migration create_forge_artifacts</code> — binary_id PK; cols: <code>project_id</code> (nullable FK, <code>nil</code>=platform), <code>kind :string</code> (validated vs registry), <code>spec :text</code>, <code>status</code> Ecto.Enum <code>[:requested,:generating,:validating,:packaged,:installed,:failed]</code>, <code>output_path :string</code>, <code>plugin_id :string</code>, <code>workflow_run_id</code> FK (nullable), <code>error :map</code>.</li>
+        <li><code class="status">[]</code> Write <code>lib/repo_builder/forge/artifact.ex</code> with <code>use RepoBuilder.Schema</code>, hand-written <code>@type t</code>, and a typed <code>changeset/2</code> (<code>validate_inclusion(:kind, Forge.Generator.kinds())</code>).</li>
+      </ul>
+
+      <h4>2. Generator registry (the seam)</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Write <code>lib/repo_builder/forge/generator.ex</code>: a closed map <code>kind → %{template:, validator:, contribution_kind:}</code> for <code>:command | :agent | :skill | :workflow</code>; <code>@spec kinds() :: [atom(),...]</code>, <code>fetch/1 :: {:ok, map()} | {:error, :unknown_generator}</code> — mirrors <code>Harness.Registry</code>.</li>
+        <li><code class="status">[]</code> Map each generator kind to its target <code>Contribution.kind</code> (<code>:command→:command_pack</code>, <code>:agent→:agent_template</code>, <code>:skill→:skill</code> [Phase 4], <code>:workflow→:workflow_type</code>).</li>
+      </ul>
+
+      <h4>3. Context API</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Write <code>lib/repo_builder/forge.ex</code> — the only Repo caller for <code>forge_artifacts</code>: <code>request/1</code> (insert <code>:requested</code>), <code>get/1</code>, <code>list_for_project/1</code>, <code>mark_status/3</code>. Every public fn <code>@spec</code>'d, tagged-tuple returns.</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>Round-trip the schema/Enum/JSONB through the context; assert unknown kinds are rejected at the changeset boundary (not a raw Postgrex error). <code>async: true</code> ExUnit.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>test/repo_builder/forge_test.exs</code> — request/get/list + status transitions — proves the context contract.</li>
+        <li><code class="status">[]</code> <code>test/repo_builder/forge/generator_test.exs</code> — <code>fetch/1</code> returns each kind; unknown → <code>{:error, :unknown_generator}</code> — proves the closed seam.</li>
+        <li><code class="status">[]</code> <code>mix test --warnings-as-errors &amp;&amp; mix dialyzer</code> — proves types + specs hold.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> Loop until green.</div>
+    </div>
+
+    <!-- PHASE 3 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 3: The forge ADW — generate &amp; validate</h3>
+      <p>Wire generation as a deterministic workflow driven by a real harness session, with a validate→generate retry edge. This is the heart: the meta-artifact prompt drives an agent that writes the artifact into a scratch cwd; the validator gates it.</p>
+      <figure>
+        <img src="forge-meta-artifact-generation-for-specialized-repos/phase-3-adw.png" alt="A four-node state machine — render, generate, validate, package — with a dashed amber retry loop from validate back to generate.">
+        <figcaption>render → generate → validate → package, with a deterministic validate-fail retry edge.</figcaption>
+      </figure>
+
+      <h4>1. Validator</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Write <code>lib/repo_builder/forge/validator.ex</code>: per-kind total checks returning <code>:ok | {:error, [reason]}</code> — frontmatter parses (yaml_elixir), name is kebab/gerund, description third-person &amp; ≤1024 chars, skill body &lt;500 lines, workflow edges valid. Never raises.</li>
+      </ul>
+
+      <h4>2. The forge workflow_type</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Define the <code>forge</code> workflow (<code>priv/workflows/forge.json</code> or a code module): steps <code>render</code> (deterministic prompt fill from generator + ContextPrimer) → <code>generate</code> (harness session, scratch cwd) → <code>validate</code> (Validator) → <code>package</code>. <code>validate.on_failure → generate</code> (bounded retry); terminal failure marks the artifact <code>:failed</code>.</li>
+        <li><code class="status">[]</code> Register it in <code>WorkflowEngine.Catalog</code> so <code>Forge.request/1</code> can launch it via <code>WorkflowEngine.start_workflow</code>, threading <code>project.cwd</code> + <code>isolation_mode</code> (reuse the planning-wizard launch fix).</li>
+        <li><code class="status">[]</code> The <code>generate</code> step must resolve a <strong>real</strong> harness (refuse no-op/Fake in prod via the same <code>:no_real_harness</code> guard as PlanningLive), running in an isolated scratch workspace so generation can't stomp the target repo.</li>
+      </ul>
+
+      <h4>3. Capture &amp; persist</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> On <code>generate</code> done, collect the written file(s) from the scratch cwd; on <code>validate</code> ok, set <code>forge_artifacts.output_path</code> + status <code>:validating→:packaged</code>; broadcast progress on the existing <code>console:events</code> seam.</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>Drive the whole ADW through the <code>Fake</code>/<code>Mock</code> harness (registry seam) emitting a canned artifact; assert validate passes for good output and the retry edge fires for bad output. Crash-isolation: a failing generate is contained to its run.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>test/repo_builder/forge/validator_test.exs</code> — good/bad fixtures per kind — proves gates.</li>
+        <li><code class="status">[]</code> <code>test/repo_builder/forge/forge_workflow_test.exs</code> — Fake harness writes a valid command; assert <code>:packaged</code>; a malformed run retries then fails cleanly — proves the deterministic edges.</li>
+        <li><code class="status">[]</code> <code>mix test --warnings-as-errors &amp;&amp; mix dialyzer</code>.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> Loop until green.</div>
+    </div>
+
+    <!-- PHASE 4 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 4: Package, the <code>:skill</code> kind &amp; activate</h3>
+      <p>Turn validated output into a real plugin and run it through the existing lifecycle — including the single sanctioned core edit that gives skills a home.</p>
+
+      <h4>1. The one deliberate core edit: <code>:skill</code> kind</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add <code>:skill</code> to the closed union + <code>@kinds</code> in <code>lib/repo_builder/plugins/contribution.ex</code> (asset = a <code>skills/</code> dir of <code>&lt;name&gt;/SKILL.md</code> bundles).</li>
+        <li><code class="status">[]</code> Write <code>lib/repo_builder/plugins/skill_pack.ex</code> + teach <code>Plugins.Activation</code> the new kind (materialize/link active skills into the project's <code>.claude/skills/</code>).</li>
+        <li><code class="status">[]</code> Update <code>ai_docs/plugin-authoring.md</code> + <code>ai_docs/meta-artifacts.md</code> to document the new kind (keep the contract table complete).</li>
+      </ul>
+
+      <h4>2. Packager</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Write <code>lib/repo_builder/forge/packager.ex</code>: given validated artifact(s) + generator metadata, synthesize a <code>plugin.json</code> (<code>schema "agentic.plugin/1"</code>, kebab <code>id</code>, semver <code>version</code>, the right <code>contributions[]</code>, <code>sha256</code> checksum) and write the package into <code>plugin_library/&lt;id&gt;/</code> — round-trip-verified by <code>Plugins.Manifest.parse/1</code>.</li>
+      </ul>
+
+      <h4>3. Install + activate</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Forge calls <code>Plugins.Installer.install(:local_library, id, version)</code> then <code>Plugins.activate(project_id, id)</code>; set <code>forge_artifacts</code> → <code>:installed</code>, record <code>plugin_id</code>.</li>
+        <li><code class="status">[]</code> Confirm the effective set recompute surfaces the new tooling for that project only (a generated <code>/command</code> resolves via <code>Commands.Resolver</code>; a skill appears in <code>.claude/skills/</code>; <code>nil</code> project = platform-wide).</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>End-to-end through Fake: generate → package → install → activate, then assert the contribution is live for the project and absent for others. Verify the <code>plugin.json</code> the Packager writes parses back through the strict manifest boundary.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>test/repo_builder/forge/packager_test.exs</code> — emitted manifest parses; checksum verifies — proves the wire boundary holds both directions.</li>
+        <li><code class="status">[]</code> <code>test/repo_builder/plugins/skill_pack_test.exs</code> — <code>:skill</code> activates per project — proves the new kind.</li>
+        <li><code class="status">[]</code> <code>mix test --warnings-as-errors &amp;&amp; mix dialyzer</code> — full closed-set exhaustiveness still holds.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> Loop until green.</div>
+    </div>
+
+    <!-- PHASE 5 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 5: <code>/forge</code> UI &amp; the bundled meta plugin</h3>
+      <p>Close the loop with a human-in-the-loop surface and a bundled sample that proves the whole path with one click.</p>
+
+      <h4>1. The <code>/forge</code> LiveView</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Write <code>lib/repo_builder_web/live/forge_live.ex</code> + route <code>/forge</code>: project picker → kind (command/agent/skill/workflow) → spec textarea → <strong>preview</strong> rendered prompt + cost/context estimate → generate (live stream via PubSub) → review artifact → activate.</li>
+        <li><code class="status">[]</code> Add a "Forge a plugin →" affordance to <code>plugins_live.ex</code>; reuse <code>planning_live.ex</code> launch/preview patterns (always-render forms, streams for the live event feed).</li>
+      </ul>
+
+      <h4>2. Bundled proof plugin</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Create <code>plugin_library/forge-meta/</code>: a <code>context_fragment</code> teaching the orchestrator about forging + a sample generated <code>command_pack</code>, proving install→activate end-to-end with zero hand-authoring beyond the manifest.</li>
+        <li><code class="status">[]</code> Add a seed/IEx one-liner demoing: register a project → forge a stack-correct <code>/smoke-test</code> command → activate → resolve it.</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p><code>Phoenix.LiveViewTest</code> against element IDs; the LiveView is backed by the Fake harness via the registry seam so CI needs no CLI. Assert the generate stream renders and activation reflects in the UI.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>test/repo_builder_web/live/forge_live_test.exs</code> — drive project→kind→spec→generate→activate; assert <code>#forge-form</code>, stream container, activated badge — proves the surface.</li>
+        <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — full suite green (target: existing 1,110 + new).</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> Loop until green.</div>
+    </div>
+  </section>
+
+  <!-- ===== GLOBAL VALIDATION ===== -->
+  <section id="validation">
+    <h2>Validation Commands</h2>
+    <p>Execute these to validate the entire plan is complete (the project's five-command green gate, plus the end-to-end loop):</p>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>scripts/pg.sh start</code> — Postgres up for the session (prereq).</li>
+      <li><code class="status">[]</code> <code>mix compile --warnings-as-errors</code> — no warnings; the new <code>:skill</code> kind compiles exhaustively.</li>
+      <li><code class="status">[]</code> <code>mix format --check-formatted</code> — canonical style.</li>
+      <li><code class="status">[]</code> <code>mix credo --strict</code> — every new public fn has an <code>@spec</code>.</li>
+      <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — full suite green, forge path driven by Fake.</li>
+      <li><code class="status">[]</code> <code>mix dialyzer</code> — success-typing + contract checking; closed-set exhaustiveness intact.</li>
+      <li><code class="status">[]</code> Manual loop: at <code>/forge</code>, forge a stack-correct command for a registered project, activate it, and confirm it resolves there and nowhere else — proves "specialize specific repos."</li>
+    </ul>
+    <div class="loop">🔁 <strong>The plan is not complete until every box is checked and every command passes. If a step is genuinely impossible, mark it <code>[f]</code> and move on if possible.</strong></div>
+  </section>
+
+  <!-- ===== QUESTIONABLES ===== -->
+  <section id="questionables">
+    <h2>Questionables</h2>
+    <p>Open decisions worth your call before/while building — surfaced rather than silently decided.</p>
+    <figure>
+      <img src="forge-meta-artifact-generation-for-specialized-repos/questionables.png" alt="A single amber path forking into three branches, each marked by a signpost — representing three open design decisions.">
+      <figcaption>Three forks that change the shape of the build.</figcaption>
+    </figure>
+
+    <details>
+      <summary>Should skills be a new <code>:skill</code> contribution kind, or be smuggled into an existing kind?</summary>
+      <p class="qa-answer"><strong>Assumption: add the <code>:skill</code> kind (Phase 4).</strong> The doctrine explicitly sanctions "adding a kind is a deliberate core edit," and an Agent Skill (<code>SKILL.md</code> bundle) is structurally distinct from a command pack or agent template — folding it into one would blur the closed contract Dialyzer relies on. The cost is one edit to <code>Contribution</code> + <code>Activation</code> + a <code>SkillPack</code> resolver. Alternative (reject): model skills as a sub-dir of <code>agent_template</code> — cheaper but dishonest and harder to resolve.</p>
+    </details>
+    <details>
+      <summary>Generate via a real harness session, or via deterministic templating?</summary>
+      <p class="qa-answer"><strong>Assumption: real harness session under the WorkflowEngine.</strong> It dogfoods the platform's reason to exist and yields genuinely novel, context-fit artifacts; the Validator + retry edge tame non-determinism. A pure-template fallback is cheaper and fully hermetic but can only stamp boilerplate. Recommendation: ship harness-driven, keep a <code>Fake</code>-backed template path for CI/offline (it already exists via the registry seam).</p>
+    </details>
+    <details>
+      <summary>How do the <code>meta-properties</code> generators enter the tree — vendor, git submodule, or remote source?</summary>
+      <p class="qa-answer"><strong>Assumption: vendor a distilled copy into <code>priv/forge/generators/</code></strong> (Phase 1) with provenance recorded in <code>ai_docs/meta-artifacts.md</code>. The upstream artifacts are reference-grade and slow-moving, and we must re-cast them to be capability-token aware anyway. A submodule couples build to an external repo; a <code>RemoteStore</code>-style source is overkill for four prompts. Revisit if the generator set grows or upstream churns.</p>
+    </details>
+    <details>
+      <summary>Who may trigger a forge — and where does generated code run?</summary>
+      <p class="qa-answer"><strong>Assumption: forging declarative artifacts (command/agent/skill/workflow) is operator-gated but unprivileged; forging a <code>harness_adapter</code> (code) inherits the existing code-plugin trust gate</strong> (<code>trust.allow_code</code> + checksum + explicit confirm). Generation always runs in an isolated scratch cwd, never the target repo, so a bad generation can't mutate real source. This plan scopes the four declarative kinds; code-bearing forge is follow-on.</p>
+    </details>
+    <details>
+      <summary>Project-scoped vs platform-wide generated tooling by default?</summary>
+      <p class="qa-answer"><strong>Assumption: default to the requesting <code>project_id</code></strong> (the whole point — "specialize specific repos"). <code>nil</code> project (platform-wide) is an explicit opt-in in the <code>/forge</code> UI, matching the existing nullable-<code>project_id</code> convention.</p>
+    </details>
+  </section>
+
+  <!-- ===== NOTES ===== -->
+  <section id="notes">
+    <h2>Notes</h2>
+
+    <h3>Why this is a small change, not a new platform</h3>
+    <p>The platform already owns every hard part: driving harness CLIs deterministically (<code>Session.Server</code>), fixed-shape workflows with retry edges (<code>WorkflowEngine</code>), a closed-contract plugin system with per-project activation (<code>Plugins.*</code>), and stack/capability detection (<code>Projects.*</code>). The Forge is glue: it points the generation prompt at the meta-artifacts, captures the output, validates it, and hands it to the lifecycle that already exists. The only genuinely new <em>contract</em> is the <code>:skill</code> kind.</p>
+
+    <h3>Mapping: meta-artifact → contribution kind</h3>
+    <table>
+      <thead><tr><th>meta-properties artifact</th><th>produces</th><th>repo_builder kind</th><th>lands via</th></tr></thead>
+      <tbody>
+        <tr><td><code>slash-command-generator</code> (meta-prompt)</td><td><code>.claude/commands/*.md</code></td><td><code>command_pack</code> <span class="tag existing">existing</span></td><td><code>Commands.Resolver</code></td></tr>
+        <tr><td><code>subagent-generator</code> (meta-agent)</td><td><code>.claude/agents/*.md</code></td><td><code>agent_template</code> <span class="tag existing">existing</span></td><td><code>Orchestrator.Templates</code></td></tr>
+        <tr><td><code>creating-new-skills</code> (meta-skill)</td><td><code>.claude/skills/&lt;name&gt;/</code></td><td><code>:skill</code> <span class="tag new">new</span></td><td><code>Plugins.SkillPack</code></td></tr>
+        <tr><td>(composed)</td><td>an ADW definition</td><td><code>workflow_type</code> <span class="tag existing">existing</span></td><td><code>WorkflowEngine.Catalog</code></td></tr>
+      </tbody>
+    </table>
+
+    <h3>Doctrine alignment</h3>
+    <p>The <code>meta-properties</code> README and the <code>repo_builder</code> plugin system converge on the same three rules, which is why the fit is clean:</p>
+    <div class="callout">
+      <strong>One artifact, one folder.</strong> ≙ one plugin = one package.<br>
+      <strong>Inputs/outputs are contracts.</strong> ≙ the <code>agentic.plugin/1</code> wire→domain boundary (<code>Manifest.parse/1</code>) + the per-kind Validator.<br>
+      <strong>Promote, don't accumulate.</strong> ≙ a technique → a generated plugin → an activated, versioned capability; lineage recorded in <code>forge_artifacts</code> + <code>ARTIFACT.md</code>-style provenance.
+    </div>
+
+    <h3>Dependencies / risks</h3>
+    <ul>
+      <li><strong>No new deps.</strong> <code>yaml_elixir</code> (frontmatter) and the harness/WorkflowEngine/plugins stack are all already in <code>mix.exs</code>.</li>
+      <li><strong>Non-determinism of generation</strong> is the main risk — mitigated by the Validator gate + bounded validate→generate retry + human review in <code>/forge</code> before activation.</li>
+      <li><strong>Closed-set exhaustiveness.</strong> Adding <code>:skill</code> will make Dialyzer flag every non-exhaustive match on <code>Contribution.kind</code> — that's the feature; fix each surfaced site.</li>
+      <li><strong>Scratch isolation.</strong> Generation must run in a per-run scratch workspace (reuse the session cwd provisioning) so a hallucinated write never touches the target repo.</li>
+    </ul>
+
+    <h3>Follow-on (out of scope here)</h3>
+    <ul>
+      <li>Forging <code>harness_adapter</code> (code) plugins end-to-end under the trust gate.</li>
+      <li>Wiring the reserved <code>mcp_tools</code> kind, so a forge can emit a tool bundle.</li>
+      <li>An eval harness (mirroring <code>meta-properties/evals/</code>) asserting generated artifacts meet the per-kind rubric — auto-run as the forge ADW's <code>validate</code> step grows teeth.</li>
+      <li>A "forge from a failing run" loop: when an agent lacks a tool mid-workflow, request the Forge to mint it, then resume.</li>
+    </ul>
+
+    <figure>
+      <img src="forge-meta-artifact-generation-for-specialized-repos/notes.png" alt="A timeline of a project directory growing a toolbelt over time — from empty to command, agent, and skill icons, each stamped by the same forge; caption: repos specialize over time.">
+      <figcaption>Over time each repo accrues a forged, activated toolbelt fit to its stack.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== AMENDMENTS ===== -->
+  <section id="amendments">
+    <h2>Amendments</h2>
+    <p style="color:var(--ink-faint);font-style:italic;">None yet — populated by the Update Plan / Update References workflows after first execution.</p>
+  </section>
+
+</main>
+</body>
+</html>

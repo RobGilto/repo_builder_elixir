@@ -71,3 +71,6 @@ __pycache__/
 # Installed plugins are runtime artifacts; the source of truth is plugin_library/ + the store.
 /agentic_plugins/*
 !/agentic_plugins/.gitkeep
+
+# Forge generation scratch workspaces (forge-meta-artifact-generation)
+/priv/forge_scratch/

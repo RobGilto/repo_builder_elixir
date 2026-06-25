@@ -1,0 +1,13 @@
+{
+  "schema": "agentic.plugin/1",
+  "id": "forge-meta",
+  "name": "Forge Meta",
+  "version": "1.0.0",
+  "description": "The bundled proof plugin for the Forge: a context fragment teaching the orchestrator how to forge tooling, plus a sample forged /smoke-test command — proving install → activate end-to-end with zero hand-authoring beyond this manifest.",
+  "author": "repo_builder",
+  "compat": { "platform": ">= 0.0.0" },
+  "contributions": [
+    { "kind": "context_fragment", "path": "context/forging.md" },
+    { "kind": "command_pack", "path": "commands" }
+  ]
+}

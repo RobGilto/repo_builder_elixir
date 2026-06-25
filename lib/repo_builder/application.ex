@@ -49,6 +49,9 @@ defmodule RepoBuilder.Application do
       # One supervised state machine per running ADW; a failed step is isolated to
       # its workflow.
       {DynamicSupervisor, name: RepoBuilder.WorkflowSupervisor, strategy: :one_for_one},
+      # Detached tasks (forge-meta-artifact-generation: the `/forge` run drives a forge
+      # ADW here so the LiveView keeps streaming).
+      {Task.Supervisor, name: RepoBuilder.TaskSupervisor},
       # One :temporary monitor per orchestrator turn (issue-c): subscribes to the
       # orchestrator session's events, captures session_id/cost, and dispatches
       # in-process tool calls for harnesses without an external (MCP/extension)

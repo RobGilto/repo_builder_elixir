@@ -98,7 +98,16 @@ defmodule RepoBuilderWeb.PluginsLive do
     <Layouts.app flash={@flash}>
       <div class="space-y-6">
         <.link navigate={~p"/"} class="text-cyan-400 text-sm">← back to console</.link>
-        <h1 class="text-xl font-semibold">Plugins</h1>
+        <div class="flex items-center justify-between">
+          <h1 class="text-xl font-semibold">Plugins</h1>
+          <.link
+            navigate={~p"/forge"}
+            class="rounded bg-amber-600 px-3 py-1 text-sm"
+            id="forge-a-plugin"
+          >
+            Forge a plugin →
+          </.link>
+        </div>
         <p class="text-sm text-zinc-400">
           Install plugins into <code class="text-cyan-300">agentic_plugins/</code>, then activate
           them for the platform. Switching the orchestrator's project changes which plugins apply.

@@ -14,6 +14,9 @@ defmodule RepoBuilder.Plugins.Contribution do
     * `:command_pack`     — a `commands/` dir of capability-tokenized `*.md` bodies
     * `:workflow_type`    — a JSON file: `{slug, label, description, steps[]}`
     * `:agent_template`   — an `agents/` dir of markdown-with-frontmatter templates
+    * `:skill`            — a `skills/` dir of `<name>/SKILL.md` Agent Skill bundles
+      (forge-meta-artifact-generation; materialized into `.claude/skills/` by
+      `RepoBuilder.Plugins.SkillPack`)
     * `:context_fragment` — a markdown file appended to the orchestrator system prompt
     * `:capability`       — a JSON file of stack markers + capability defaults
     * `:harness_adapter`  — registered by a code plugin (see `RepoBuilder.Plugins.Code`)
@@ -26,12 +29,13 @@ defmodule RepoBuilder.Plugins.Contribution do
           :command_pack
           | :workflow_type
           | :agent_template
+          | :skill
           | :context_fragment
           | :capability
           | :harness_adapter
           | :mcp_tools
 
-  @kinds ~w(command_pack workflow_type agent_template context_fragment capability harness_adapter mcp_tools)a
+  @kinds ~w(command_pack workflow_type agent_template skill context_fragment capability harness_adapter mcp_tools)a
   @kind_strings Enum.map(@kinds, &Atom.to_string/1)
 
   typedstruct enforce: true do

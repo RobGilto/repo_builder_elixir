@@ -23,6 +23,8 @@
     my_sdlc.json
   agents/                      # :agent_template — markdown-with-frontmatter templates
     my_reviewer/0001.md
+  skills/                      # :skill — Agent Skill bundles (<name>/SKILL.md)
+    processing-invoices/SKILL.md
   context/                     # :context_fragment — system-prompt markdown
     primer.md
   capabilities/                # :capability — stack markers + capability defaults
@@ -82,6 +84,7 @@ semver all return a tagged error and never crash.
 | `command_pack` | `commands/` dir of `*.md` | `Commands.Resolver` (a `:plugin` precedence layer) | Adds/overrides slash commands; capability tokens (`{{TEST_COMMAND}}` …) are filled per project. |
 | `workflow_type` | a `*.json` file | `WorkflowEngine.Catalog` | Adds a launchable ADW type (data-defined steps). |
 | `agent_template` | `agents/` dir | `Orchestrator.Templates` / `Definitions` | Adds agent/subagent templates. |
+| `skill` | `skills/` dir of `<name>/SKILL.md` | `Plugins.SkillPack` | Materializes Agent Skills into the active project's `.claude/skills/` (forge-meta-artifact-generation). |
 | `context_fragment` | a `*.md` file | `Projects.ContextPrimer` | Appends a fragment to the orchestrator system prompt. |
 | `capability` | a `*.json` file | `Projects.Profiler` / `Capabilities` | Adds stack markers + per-language command defaults. |
 | `harness_adapter` | (code) | `Harness.Registry` overlay | Registers a new harness — see **Code plugins**. |

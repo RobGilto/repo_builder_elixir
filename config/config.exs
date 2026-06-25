@@ -352,6 +352,21 @@ config :repo_builder, :plugins,
   },
   trust: [require_checksum: false, allow_code: true, require_signature: false]
 
+# The Forge (forge-meta-artifact-generation). The meta-artifact generators are vendored
+# in-tree; `RepoBuilder.Forge` renders one, drives a real harness session to write the
+# artifact into an isolated scratch workspace, validates + packages it, and hands the
+# result to the existing Plugins install→activate lifecycle. `generators_dir` is the
+# vendored template root; `generation_harness` is the harness the generate step runs on
+# (operator-overridable per project); `scratch_base` isolates generation from the target
+# repo; `default_source` is the install source the Packager writes for. `max_retries`
+# bounds the validate→generate retry edge.
+config :repo_builder, :forge,
+  generators_dir: "priv/forge/generators",
+  generation_harness: "claude",
+  scratch_base: "priv/forge_scratch",
+  default_source: "library",
+  max_retries: 1
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"
