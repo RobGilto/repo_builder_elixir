@@ -34,17 +34,31 @@ defmodule RepoBuilder.Plugins.Manifest do
     field :source, String.t(), enforce: false
   end
 
-  @typedoc "A JSON value as produced by `Jason.decode/1`."
-  @type! wire_value ::
-           nil
-           | boolean()
-           | number()
-           | binary()
-           | [any()]
-           | %{optional(binary()) => any()}
+  defmodule Wire do
+    @moduledoc """
+    The permissive wire types, in a NESTED module so `Manifest.conforms?/1` can drive
+    them through TypeCheck's COMPILE-TIME `conforms?/2` macro (statically boolean
+    `match?/2`) instead of the runtime `dynamic_conforms?/2`. The macro cannot reference
+    a `@type!` defined in its own compilation module — hence the split. This also keeps
+    `conforms?/1` Dialyzer-clean: the runtime form calls the `@type!`-generated `wire/0`
+    builder, which Dialyzer reads as `:no_return`, poisoning `conforms?` into a
+    false-positive `extra_range`. The inlined macro has no such call. Pinned to
+    type_check 0.13.7 (latest; no newer release supports Elixir 1.20).
+    """
+    use TypeCheck
 
-  @typedoc "A wire manifest: a string-keyed JSON object."
-  @type! wire :: %{optional(binary()) => wire_value()}
+    @typedoc "A JSON value as produced by `Jason.decode/1`."
+    @type! wire_value ::
+             nil
+             | boolean()
+             | number()
+             | binary()
+             | [any()]
+             | %{optional(binary()) => any()}
+
+    @typedoc "A wire manifest: a string-keyed JSON object."
+    @type! wire :: %{optional(binary()) => wire_value()}
+  end
 
   @type reason ::
           :invalid_json
@@ -100,7 +114,7 @@ defmodule RepoBuilder.Plugins.Manifest do
   Total; never raises.
   """
   @spec conforms?(term()) :: boolean()
-  def conforms?(value) when is_map(value), do: TypeCheck.dynamic_conforms?(value, wire())
+  def conforms?(value) when is_map(value), do: TypeCheck.conforms?(value, Wire.wire())
   def conforms?(_value), do: false
 
   # Structural gate for control flow (a JSON object loads with string keys). Kept

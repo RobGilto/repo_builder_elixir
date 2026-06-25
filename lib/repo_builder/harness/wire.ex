@@ -15,32 +15,47 @@ defmodule RepoBuilder.Harness.Wire do
   """
   use TypeCheck
 
-  @typedoc "A JSON value as produced by `Jason.decode/1` (string-keyed objects)."
-  @type! json_value ::
-           nil
-           | boolean()
-           | number()
-           | binary()
-           | [any()]
-           | %{optional(binary()) => any()}
+  defmodule Types do
+    @moduledoc """
+    The permissive wire types, in a NESTED module so `Wire.conforms?/2` can drive them
+    through TypeCheck's COMPILE-TIME `conforms?/2` macro (which inlines a statically
+    boolean `match?/2`) instead of the runtime `dynamic_conforms?/2`. The macro cannot
+    reference a `@type!` defined in its own compilation module — hence the split. This
+    also keeps Dialyzer clean: the runtime form calls the `@type!`-generated `frame/0`
+    builder, which Dialyzer reads as `:no_return`, poisoning `conforms?` into a
+    false-positive `extra_range`. The inlined macro has no such call. Pinned to
+    type_check 0.13.7 (latest; no newer release supports Elixir 1.20).
+    """
+    use TypeCheck
 
-  @typedoc "A harness wire frame: a string-keyed JSON object."
-  @type! frame :: %{optional(binary()) => json_value()}
+    @typedoc "A JSON value as produced by `Jason.decode/1` (string-keyed objects)."
+    @type! json_value ::
+             nil
+             | boolean()
+             | number()
+             | binary()
+             | [any()]
+             | %{optional(binary()) => any()}
+
+    @typedoc "A harness wire frame: a string-keyed JSON object."
+    @type! frame :: %{optional(binary()) => json_value()}
+  end
 
   @doc """
   True when `value` is a well-formed JSON object (string keys, JSON-shaped values)
   carrying a binary `"type"` discriminator. Total — never raises.
 
-  Uses the `@type! frame` wire type via TypeCheck's RUNTIME conformance
-  (`dynamic_conforms?/2`). The compile-time `conforms?/2` macro cannot reference a
-  `@type!` defined in this same module during its own compilation, so the runtime
-  variant is used here — which also genuinely exercises the wire type. The
-  `harness` argument lets future adapters specialize the contract per harness
-  without changing call sites.
+  Validates against the `Types.frame()` wire type via TypeCheck's compile-time
+  `conforms?/2` macro — genuinely exercising the pinned `type_check` dependency. The
+  `harness` argument lets future adapters specialize the contract per harness without
+  changing call sites.
   """
   @spec conforms?(term(), atom()) :: boolean()
   def conforms?(value, _harness) when is_map(value) do
-    TypeCheck.dynamic_conforms?(value, frame()) and is_binary(Map.get(value, "type"))
+    case Map.get(value, "type") do
+      type when is_binary(type) -> TypeCheck.conforms?(value, Types.frame())
+      _ -> false
+    end
   end
 
   def conforms?(_value, _harness), do: false
