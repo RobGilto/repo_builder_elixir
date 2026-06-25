@@ -32,6 +32,7 @@ defmodule RepoBuilder.Orchestrator.Queue do
 
   alias RepoBuilder.Agents
   alias RepoBuilder.Agents.Handover
+  alias RepoBuilder.Agents.Holding
   alias RepoBuilder.Dashboard
   alias RepoBuilder.Logs
   alias RepoBuilder.Orchestrator.Server
@@ -339,7 +340,50 @@ defmodule RepoBuilder.Orchestrator.Queue do
         handle_handover(state, info, path, enabled?)
 
       :none ->
-        if enabled?, do: resume_or_wind_down(state, info), else: state
+        cond do
+          # Branch 0 (issue holding-status-for-blocked-agents): the worker stopped HELD
+          # pending external input. It must SURVIVE (no reap, no wind-down) and be resumed
+          # via command_agent once unblocked. Checked before resume_or_wind_down so a held
+          # worker is never collapsed into "completed and returned".
+          Map.get(info, :holding?) == true -> hold(state, info)
+          enabled? -> resume_or_wind_down(state, info)
+          true -> state
+        end
+    end
+  end
+
+  # Branch 0: a worker is HOLDING (blocked pending external input). NEVER reap it and
+  # NEVER wind it down — a held worker must survive so it can be resumed. When auto-resume
+  # is enabled, enqueue ONE holding-aware resume turn (deduped like `normal_resume`, so a
+  # held worker does not spam resumes) telling the orchestrator the worker is blocked (not
+  # done) and resumable via `command_agent`. When disabled, leave it holding for the
+  # operator — the persistent `:holding` status + console badge make it discoverable.
+  @spec hold(State.t(), map()) :: State.t()
+  defp hold(%State{} = state, info) do
+    worker_id = Map.get(info, :worker_id)
+    duplicate? = is_binary(worker_id) and MapSet.member?(state.seen_worker_ids, worker_id)
+
+    cond do
+      not Orchestrators.auto_resume?() ->
+        state
+
+      duplicate? ->
+        state
+
+      true ->
+        name = worker_name(info) || "a worker"
+        reason = holding_reason(info)
+        prompt = Holding.holding_resume_prompt(name, reason)
+        seen = add_seen(state.seen_worker_ids, worker_id)
+        %{state | seen_worker_ids: seen} |> resume_with(info, prompt)
+    end
+  end
+
+  @spec holding_reason(map()) :: String.t()
+  defp holding_reason(info) do
+    case Map.get(info, :holding_reason) do
+      reason when is_binary(reason) and reason != "" -> reason
+      _ -> "blocked pending external input"
     end
   end
 

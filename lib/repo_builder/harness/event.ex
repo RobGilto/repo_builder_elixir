@@ -134,7 +134,16 @@ defmodule RepoBuilder.Harness.Event do
   end
 
   defmodule Done do
-    @moduledoc "Terminal SUCCESS marker. `ok` reflects the harness's `is_error`, not merely the subtype."
+    @moduledoc """
+    Terminal SUCCESS marker. `ok` reflects the harness's `is_error`, not merely the subtype.
+
+    `reason: :held_pending_input` is a **clean, resumable stop** (issue
+    holding-status-for-blocked-agents): a worker stopped because it is blocked on an
+    external/human action (a browser login, a credential, a manual step). It stays
+    `ok: true` (the stop is clean — no error, no degraded state), but it is NOT a
+    completion: the worker is HELD and resumable, never reaped, and the orchestrator can
+    `command_agent` it again once the blocking condition clears.
+    """
     use TypedStruct
 
     typedstruct enforce: true do
@@ -153,6 +162,7 @@ defmodule RepoBuilder.Harness.Event do
             | :max_structured_output_retries
             | :idle_timeout
             | :sigterm_on_blocking_step
+            | :held_pending_input
 
       field :duration_ms, integer(), enforce: false
       field :num_turns, integer(), enforce: false

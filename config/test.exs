@@ -157,6 +157,11 @@ config :repo_builder, Oban, testing: :manual
 # Webhook secret for signing tests.
 config :repo_builder, :webhooks, replay_window_seconds: 300, secret: "test-webhook-secret"
 
+# Per-project secrets vault master key (issue-per-project-encrypted-secrets-vault) — a
+# fixed base64-of-32-bytes key so the cipher/context/injection tests round-trip. A test
+# that asserts the unset/fail-closed path deletes this key at runtime and restores it.
+config :repo_builder, RepoBuilder.Secrets, key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
 # Never shell out to an editor in CI/test (issue file-diff-event-cards).
 config :repo_builder, :editor, enabled: false, command: ["true"]
 

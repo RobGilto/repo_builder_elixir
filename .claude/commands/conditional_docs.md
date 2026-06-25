@@ -27,7 +27,7 @@
 | Adding or swapping a harness/provider | `BUILD_PROMPT.md` §10 (add a harness = one module + config) |
 | Plugins, the plugin store/library, manifest/contributions, install or activation lifecycle, or the `agentic_plugins/` dir | `ai_docs/plugin-authoring.md` (the authoring reference) + `BUILD_PROMPT.md` §10 (the open-identity/closed-contract doctrine it generalizes) |
 | Forging tooling / generating plugins (the `RepoBuilder.Forge` subsystem, generators, the `:skill` kind, per-project specialization) | `ai_docs/meta-artifacts.md` (the doctrine + generator catalog) + `ai_docs/plugin-authoring.md` (the packaging boundary) |
-| Secrets, credential sourcing, or `raw` redaction | `BUILD_PROMPT.md` §4.1 (redaction) + §6 (secrets) |
+| Secrets, credential sourcing, or `raw` redaction | `BUILD_PROMPT.md` §4.1 (redaction) + §6 (secrets); `ai_docs/secrets-vault.md` (the per-project encrypted vault + name-only orchestrator exposure + threat model) |
 | Tests, Mox, the FakeHarness, normalizer property tests, or crash-isolation tests | `BUILD_PROMPT.md` §13; `ai_docs/typed-elixir-standard.md` (Enforcement) |
 | Anything touching the existing Python ADW scripts | `adws/README.md` (scripts are Astral `uv` single-file Python) |
 

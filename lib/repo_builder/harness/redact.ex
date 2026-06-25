@@ -26,6 +26,45 @@ defmodule RepoBuilder.Harness.Redact do
   @spec scrub(Event.t()) :: Event.t()
   def scrub(%{raw: raw} = event), do: %{event | raw: scrub_term(raw)}
 
+  @doc """
+  Value-based defense-in-depth scrub (issue-per-project-encrypted-secrets-vault): replace
+  every exact occurrence of each plaintext in `values` with `[REDACTED]`, in any string at
+  any depth of `term`. Complementary to the key-pattern `scrub/1` above.
+
+  Total — never raises. Short-circuits to identity on an empty `values` list, so a project
+  with no secrets pays ZERO hot-path cost.
+  """
+  @spec scrub_values(term(), [String.t()]) :: term()
+  def scrub_values(term, []), do: term
+
+  def scrub_values(term, values) when is_list(values) do
+    secrets = Enum.filter(values, &(is_binary(&1) and &1 != ""))
+    if secrets == [], do: term, else: scrub_values_term(term, secrets)
+  end
+
+  @spec scrub_values_term(term(), [String.t()]) :: term()
+  defp scrub_values_term(map, secrets) when is_map(map) and not is_struct(map) do
+    Map.new(map, fn {k, v} -> {k, scrub_values_term(v, secrets)} end)
+  end
+
+  defp scrub_values_term(%_{} = struct, secrets) do
+    # Walk a struct's fields too (e.g. an `Event` carrying `raw`/`text`) without losing
+    # its type — `Map.from_struct` then rebuild.
+    struct
+    |> Map.from_struct()
+    |> Enum.reduce(struct, fn {k, v}, acc -> Map.put(acc, k, scrub_values_term(v, secrets)) end)
+  end
+
+  defp scrub_values_term(list, secrets) when is_list(list) do
+    Enum.map(list, &scrub_values_term(&1, secrets))
+  end
+
+  defp scrub_values_term(bin, secrets) when is_binary(bin) do
+    Enum.reduce(secrets, bin, fn secret, acc -> String.replace(acc, secret, @redacted) end)
+  end
+
+  defp scrub_values_term(other, _secrets), do: other
+
   @doc "Recursively scrub an arbitrary term (exposed for persisting non-event payloads)."
   @spec scrub_term(term()) :: term()
   def scrub_term(map) when is_map(map) and not is_struct(map) do

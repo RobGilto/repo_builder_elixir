@@ -48,6 +48,16 @@ config :repo_builder, :tool_secrets, %{
   "firecrawl" => %{"FIRECRAWL_API_KEY" => System.get_env("FIRECRAWL_API_KEY")}
 }
 
+# Per-project secrets vault master key (issue-per-project-encrypted-secrets-vault) —
+# base64 of 32 random bytes (`openssl rand -base64 32`), sourced from the OS env at
+# runtime and NEVER persisted. `RepoBuilder.Secrets.Cipher` AES-256-GCM-encrypts the
+# operator's per-project secret values with it. Fail-closed: unset ⇒ the vault is
+# disabled (a clear error only when actually used), so dev without secrets is unaffected.
+# Guarded so it never clobbers a dev/test config key (mirrors WEBHOOK_SECRET above).
+if secrets_key = System.get_env("SECRETS_KEY") do
+  config :repo_builder, RepoBuilder.Secrets, key: secrets_key
+end
+
 # Orchestrator MCP base URL (issue-c) — the localhost-bound base the generated
 # `.mcp.json` / pi extension point at. Overridable per host; defaults to the local
 # endpoint. The orchestrator reuses the same per-harness `:harness_secrets` above.

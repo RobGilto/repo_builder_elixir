@@ -30,7 +30,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   # Lifecycle statuses an agent may display. Superset of the closed `Agent.status`
   # enum because the live `statuses` map also tracks terminal outcomes
   # (succeeded/failed) derived from canonical Done/Error events (§4.1).
-  @statuses [:idle, :running, :succeeded, :failed, :error, :cancelled, :queued]
+  @statuses [:idle, :running, :succeeded, :failed, :error, :cancelled, :queued, :holding]
 
   # Canonical-event categories the UI groups events under (the 4 chip categories
   # plus :system for non-chip lifecycle events, which always pass the filter).
@@ -3257,13 +3257,15 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   # Build chips for the live workers shown in the left rail. The token is the worker's
   # exact `name` — the string `Agents.get_by_name_for_orchestrator/2` (`Repo.get_by(name:)`)
   # matches — so a clicked chip lands a name the orchestrator resolves the first time.
-  # Only active workers (`:idle`/`:running`) are listed, idle-first then alphabetical,
-  # and each chip carries its resolved status for the row's status dot.
+  # Active workers (`:idle`/`:running`/`:holding`) are listed, idle-first then alphabetical,
+  # and each chip carries its resolved status for the row's status dot. A `:holding` worker
+  # (blocked pending external input) stays listed so it remains visible and resumable
+  # (issue holding-status-for-blocked-agents).
   @spec live_agent_chips([Agent.t()], %{optional(Ecto.UUID.t()) => atom()}) :: [chip()]
   defp live_agent_chips(agents, statuses) do
     agents
     |> Enum.map(fn agent -> {agent, Map.get(statuses, agent.id, agent.status)} end)
-    |> Enum.filter(fn {_agent, status} -> status in [:idle, :running] end)
+    |> Enum.filter(fn {_agent, status} -> status in [:idle, :running, :holding] end)
     |> Enum.sort_by(fn {agent, status} -> {status != :idle, agent.name} end)
     |> Enum.map(fn {agent, status} ->
       %{
@@ -3315,6 +3317,9 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   defp status_cat_class(:succeeded), do: "cns-cat--response"
   defp status_cat_class(:failed), do: "cns-cat--tool"
   defp status_cat_class(:error), do: "cns-cat--tool"
+  # A held worker (blocked pending external input) gets its own thinking-tinted badge,
+  # distinct from the emerald "succeeded" (issue holding-status-for-blocked-agents).
+  defp status_cat_class(:holding), do: "cns-cat--thinking"
   defp status_cat_class(_status), do: "cns-cat--system"
 
   @spec status_dot_class(atom()) :: String.t()
@@ -3323,6 +3328,8 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   defp status_dot_class(:failed), do: "bg-red-500"
   defp status_dot_class(:error), do: "bg-red-500"
   defp status_dot_class(:queued), do: "bg-amber-500"
+  # Amber dot, clearly different from the emerald "succeeded" dot.
+  defp status_dot_class(:holding), do: "bg-amber-500"
   defp status_dot_class(_status), do: "bg-gray-500"
 
   # Inference-only spec — fixed-length string returns supertype under :underspecs.

@@ -6,7 +6,7 @@ defmodule RepoBuilderWeb.DashboardComponents do
   """
   use RepoBuilderWeb, :html
 
-  @statuses [:queued, :running, :succeeded, :failed, :cancelled, :idle, :error]
+  @statuses [:queued, :running, :succeeded, :failed, :cancelled, :idle, :error, :holding]
 
   attr :kind, :string, required: true
   attr :body, :string, required: true
@@ -365,5 +365,8 @@ defmodule RepoBuilderWeb.DashboardComponents do
   defp status_class(:succeeded), do: "badge-success"
   defp status_class(:failed), do: "badge-error"
   defp status_class(:error), do: "badge-error"
+  # A held worker (blocked pending external input) gets a warning-tinted badge, distinct
+  # from the success badge (issue holding-status-for-blocked-agents).
+  defp status_class(:holding), do: "badge-warning"
   defp status_class(_status), do: "badge-ghost"
 end

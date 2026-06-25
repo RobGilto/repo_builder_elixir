@@ -13,6 +13,7 @@ defmodule RepoBuilderWeb.ProjectsLive do
   alias RepoBuilder.Commands
   alias RepoBuilder.FileBrowser
   alias RepoBuilder.Projects
+  alias RepoBuilder.Secrets
   alias RepoBuilder.Workflows
 
   @impl true
@@ -37,6 +38,8 @@ defmodule RepoBuilderWeb.ProjectsLive do
         |> assign(resolved: Commands.resolve_all(project))
         |> assign(runs: Workflows.list_recent_for_project(project.id, 20))
         |> assign(cost: project_cost(project.id))
+        |> assign(secrets: Secrets.list_names(project.id))
+        |> assign(secret_form: %{"name" => "", "value" => ""})
 
       {:error, :not_found} ->
         socket
@@ -93,6 +96,38 @@ defmodule RepoBuilderWeb.ProjectsLive do
   def handle_event("delete_project", _params, socket) do
     {:ok, _} = Projects.delete_project(socket.assigns.project)
     {:noreply, push_navigate(socket, to: ~p"/projects")}
+  end
+
+  def handle_event("add_secret", %{"name" => name, "value" => value}, socket) do
+    project = socket.assigns.project
+
+    case Secrets.put_secret(project.id, name, value) do
+      {:ok, _secret} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Saved secret #{name}")
+         # Never re-render the value: reset the form to a blank name/value pair.
+         |> assign(
+           secrets: Secrets.list_names(project.id),
+           secret_form: %{"name" => "", "value" => ""}
+         )}
+
+      {:error, changeset} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, error_message(changeset))
+         |> assign(secret_form: %{"name" => name, "value" => ""})}
+    end
+  end
+
+  def handle_event("delete_secret", %{"name" => name}, socket) do
+    project = socket.assigns.project
+    :ok = Secrets.delete_secret(project.id, name)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Deleted secret #{name}")
+     |> assign(secrets: Secrets.list_names(project.id))}
   end
 
   @impl true
@@ -201,6 +236,67 @@ defmodule RepoBuilderWeb.ProjectsLive do
 
         <.command_pack_panel resolved={@resolved} capabilities={@project.capabilities} />
 
+        <div class="rounded border border-zinc-700 p-4 space-y-3">
+          <div>
+            <h3 class="font-semibold">Secrets</h3>
+            <p class="text-xs text-zinc-500">
+              Deposited values are encrypted at rest and injected into a worker's environment
+              by $NAME only — the orchestrator sees the names, never the values.
+            </p>
+          </div>
+
+          <ul id="project-secrets" class="space-y-1 text-sm">
+            <li
+              :for={secret <- @secrets}
+              id={"secret-#{secret.name}"}
+              class="flex items-center justify-between border-t border-zinc-800 py-1"
+            >
+              <span class="font-mono">${secret.name}</span>
+              <span class="text-xs text-zinc-400">{mask(secret.last_four)}</span>
+              <button
+                phx-click="delete_secret"
+                phx-value-name={secret.name}
+                data-confirm={"Delete secret #{secret.name}?"}
+                class="rounded bg-red-800 px-2 py-0.5 text-xs"
+              >
+                Delete
+              </button>
+            </li>
+            <li :if={@secrets == []} class="text-zinc-400">
+              No secrets yet — add one below.
+            </li>
+          </ul>
+
+          <form
+            id="project-secret-form"
+            phx-submit="add_secret"
+            autocomplete="off"
+            class="flex flex-wrap items-end gap-2 text-sm"
+          >
+            <label class="flex flex-col">
+              <span class="text-xs text-zinc-400">Name</span>
+              <input
+                name="name"
+                value={@secret_form["name"]}
+                placeholder="STRIPE_API_KEY"
+                class="rounded border border-zinc-600 bg-zinc-800 px-2 py-1 font-mono"
+              />
+            </label>
+            <label class="flex flex-col">
+              <span class="text-xs text-zinc-400">Value</span>
+              <input
+                type="password"
+                name="value"
+                value=""
+                autocomplete="off"
+                placeholder="secret value"
+                class="rounded border border-zinc-600 bg-zinc-800 px-2 py-1"
+              />
+            </label>
+            <button class="rounded bg-cyan-700 px-3 py-1" type="submit">Save secret</button>
+          </form>
+        </div>
+
         <div class="rounded border border-zinc-700 p-4 space-y-2">
           <h3 class="font-semibold">Recent runs · total cost {format_cost(@cost)}</h3>
           <ul class="space-y-1 text-sm">
@@ -243,6 +339,11 @@ defmodule RepoBuilderWeb.ProjectsLive do
 
   @spec stack_of(Projects.Project.t()) :: String.t()
   defp stack_of(project), do: to_string(project.stack["language"] || "unknown")
+
+  # Masked UI hint for a secret row — last four chars only, never the value.
+  @spec mask(String.t() | nil) :: String.t()
+  defp mask(last_four) when is_binary(last_four) and last_four != "", do: "••••#{last_four}"
+  defp mask(_last_four), do: "••••"
 
   # Keep only the registration form fields (string keys). The `create_dir` checkbox is
   # only present in params when ticked, so an absent key naturally reads as unchecked.

@@ -25,9 +25,11 @@ defmodule RepoBuilder.Session.Server do
 
   require Logger
 
-  alias RepoBuilder.{Agents, Logs}
+  alias RepoBuilder.{Agents, Logs, Secrets}
+  alias RepoBuilder.Agents.Holding
   alias RepoBuilder.Harness.Event
   alias RepoBuilder.Harness.McpTools
+  alias RepoBuilder.Harness.Redact
   alias RepoBuilder.Harness.Registry, as: HarnessRegistry
   alias RepoBuilder.OsPidLedger
   alias RepoBuilder.Projects.Worktree
@@ -55,6 +57,11 @@ defmodule RepoBuilder.Session.Server do
       field :provider, String.t(), enforce: false
       field :config, map(), default: %{}
       field :secrets, map(), default: %{}
+      # Plaintext values of THIS session's project-vault secrets, captured at spawn
+      # (issue-per-project-encrypted-secrets-vault). The value-scrub set applied to every
+      # dispatched event's `raw`/`text` so a worker echoing `$SECRET` cannot leak its value
+      # to the live feed or the persisted row. Empty (the common case) ⇒ zero hot-path cost.
+      field :secret_values, [String.t()], default: []
       field :price_table, map(), default: %{}
       # Operator-chosen reasoning effort (issue-reasoning-effort). :default ⇒ the
       # adapter emits no effort/thinking flag (worker sessions also default here).
@@ -144,6 +151,10 @@ defmodule RepoBuilder.Session.Server do
     {base_cwd, base_managed?} = resolve_workspace(opts, cfg, session_id)
     {cwd, managed?, worktree} = maybe_worktree(opts, base_cwd, base_managed?, session_id)
 
+    # Decrypt the project vault ONCE at spawn: it both seeds the lowest-precedence env
+    # layer and supplies the value-scrub set carried in `secret_values`.
+    project_env = project_secrets(opts)
+
     %State{
       agent_id: to_string(opts[:agent_id]),
       agent_db_id: opts[:agent_db_id],
@@ -154,7 +165,8 @@ defmodule RepoBuilder.Session.Server do
       model: opts[:model] || Map.get(config, :default_model),
       provider: opts[:provider],
       config: opts[:config] || %{},
-      secrets: resolve_secrets(opts, harness),
+      secrets: merge_secrets(opts, harness, project_env),
+      secret_values: Map.values(project_env),
       reasoning_effort: opts[:reasoning_effort] || :default,
       price_table: resolve_price_table(harness, config),
       cwd: cwd,
@@ -191,14 +203,19 @@ defmodule RepoBuilder.Session.Server do
     Map.merge(config_table, catalog_table)
   end
 
-  # Merge runtime-configured per-harness secrets (§6) with the per-tool secrets the
-  # worker's config actually enables (issue firecrawl-grant), then any explicit
-  # per-session overrides (which win last); drop unset (nil) env values so they never
-  # reach the child env. Public (`@doc false`) as the hermetic test seam — it is a
-  # pure read with no process state.
+  # Merge the per-project encrypted vault (the lowest-precedence BASE layer,
+  # issue-per-project-encrypted-secrets-vault) UNDER the runtime-configured per-harness
+  # secrets (§6), the per-tool secrets the worker's config actually enables (issue
+  # firecrawl-grant), and any explicit per-session overrides (which win last) — so an
+  # explicit/tool secret of the same name still beats a project secret. Unset (nil) env
+  # values are dropped so they never reach the child env. Public (`@doc false`) as the
+  # hermetic test seam — a pure read with no process state.
   @doc false
   @spec resolve_secrets(keyword(), String.t()) :: map()
-  def resolve_secrets(opts, harness) do
+  def resolve_secrets(opts, harness), do: merge_secrets(opts, harness, project_secrets(opts))
+
+  @spec merge_secrets(keyword(), String.t(), map()) :: map()
+  defp merge_secrets(opts, harness, project_env) do
     configured =
       :repo_builder
       |> Application.get_env(:harness_secrets, %{})
@@ -206,10 +223,30 @@ defmodule RepoBuilder.Session.Server do
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
       |> Map.new()
 
-    configured
+    project_env
+    |> Map.merge(configured)
     |> Map.merge(tool_secrets(opts[:config] || %{}))
     |> Map.merge(opts[:secrets] || %{})
   end
+
+  # The decrypted `name => value` vault for this session's project — the base secret layer
+  # AND the scrub-value source. WORKERS ONLY: the orchestrator brain is gated out (its env
+  # would carry plaintext it never echoes, so we keep plaintext to worker children only,
+  # minimizing exposure). `nil`/unknown project or an unset key ⇒ `%{}` (fail-closed).
+  @spec project_secrets(keyword()) :: %{optional(String.t()) => String.t()}
+  defp project_secrets(opts) do
+    if orchestrator_session?(opts) do
+      %{}
+    else
+      case opts[:project_id] do
+        id when is_binary(id) -> Secrets.resolve_env(id)
+        _absent -> %{}
+      end
+    end
+  end
+
+  @spec orchestrator_session?(keyword()) :: boolean()
+  defp orchestrator_session?(opts), do: Map.get(opts[:config] || %{}, :orchestrator) == true
 
   # Fold in the env keys for the research tools enabled in this worker's config
   # (`config["tools"]`), pulling each value from the `:tool_secrets` runtime block.
@@ -515,6 +552,18 @@ defmodule RepoBuilder.Session.Server do
 
   @spec dispatch(Event.t(), State.t()) :: State.t()
   defp dispatch(event, %State{agent_id: agent_id} = state) do
+    # Reclassify a worker terminal that is actually a HOLDING stop (blocked pending
+    # external input) BEFORE the persist/lane/worker-terminal machinery runs, so the
+    # rewritten `reason: :held_pending_input` flows through every consumer uniformly
+    # (issue holding-status-for-blocked-agents).
+    event = classify_holding(event, state)
+
+    # Value-based defense-in-depth (issue-per-project-encrypted-secrets-vault): scrub this
+    # session's project-secret VALUES out of the event's `raw`/`text` BEFORE it is broadcast
+    # OR persisted, so a worker echoing `$SECRET` cannot leak the value to the live feed or
+    # the durable row. No-op (identity) when this session has no project secrets.
+    event = scrub_secret_values(event, state)
+
     # The per-agent topic broadcast is UNCONDITIONAL and FIRST: it serves the
     # timing-sensitive subscribers (Orchestrator.Server + the focused agent view) and
     # the ephemeral run (issue-explain, `broadcast_feed?: false`) observing its own
@@ -539,6 +588,14 @@ defmodule RepoBuilder.Session.Server do
     %{state | saw_output?: true, saw_terminal?: state.saw_terminal? or terminal?(event)}
     |> track_context(event)
   end
+
+  # Scrub the project-secret values out of an event (its `raw` map + `text`/`message`
+  # fields, at any depth). Empty value set ⇒ identity (zero hot-path cost).
+  @spec scrub_secret_values(Event.t(), State.t()) :: Event.t()
+  defp scrub_secret_values(event, %State{secret_values: []}), do: event
+
+  defp scrub_secret_values(event, %State{secret_values: values}),
+    do: Redact.scrub_values(event, values)
 
   # Fold a usage event's prompt-side occupancy into State so the worker-terminal broadcast
   # carries the latest occupancy (issue graceful-agent-handover). Non-usage events pass
@@ -574,7 +631,22 @@ defmodule RepoBuilder.Session.Server do
     }
   end
 
-  @spec persist_target(State.t()) :: {:agent | :orchestrator, map()} | nil
+  @spec persist_target(State.t()) ::
+          {:agent,
+           %{
+             agent_id: Ecto.UUID.t(),
+             session_id: String.t(),
+             provider: String.t() | nil,
+             model: String.t() | nil
+           }}
+          | {:orchestrator,
+             %{
+               orchestrator_id: Ecto.UUID.t(),
+               session_id: String.t(),
+               provider: String.t() | nil,
+               model: String.t() | nil
+             }}
+          | nil
   defp persist_target(%State{agent_db_id: id} = state) when is_binary(id) do
     {:agent,
      %{agent_id: id, session_id: state.session_id, provider: state.provider, model: state.model}}
@@ -592,6 +664,48 @@ defmodule RepoBuilder.Session.Server do
 
   defp persist_target(_state), do: nil
 
+  # Reclassify a WORKER session's clean terminal `Done` as a HOLDING stop when its final
+  # text carries a holding signal/phrase (issue holding-status-for-blocked-agents): the
+  # worker stopped because it is blocked on an external/human action, NOT because it
+  # completed. Scoped to worker sessions (`agent_db_id` present) and to a `Done{ok: true}`
+  # not already classified holding; every other event (and orchestrator/ephemeral sessions)
+  # passes through untouched. The reason is folded into `final_text` for display so the
+  # console + Queue see why it is held. Fail-soft: any error returns the event unchanged.
+  @spec classify_holding(Event.t(), State.t()) :: Event.t()
+  defp classify_holding(
+         %Event.Done{ok: true, reason: reason} = event,
+         %State{agent_db_id: id}
+       )
+       when is_binary(id) and reason != :held_pending_input do
+    case Holding.classify(event.final_text) do
+      {:ok, holding_reason} ->
+        %{
+          event
+          | reason: :held_pending_input,
+            final_text: held_text(event.final_text, holding_reason)
+        }
+
+      :none ->
+        event
+    end
+  rescue
+    _error -> event
+  catch
+    _kind, _reason -> event
+  end
+
+  defp classify_holding(event, _state), do: event
+
+  # Annotate the terminal text with the holding reason for display (idempotent-ish: a
+  # already-annotated or signal-bearing text keeps the reason visible). nil text becomes
+  # the bare reason so the Queue/console always have something to show.
+  @spec held_text(String.t() | nil, String.t()) :: String.t()
+  defp held_text(nil, reason), do: ":holding #{reason}"
+
+  defp held_text(text, reason) do
+    if String.contains?(text, ":holding"), do: text, else: text <> "\n:holding #{reason}"
+  end
+
   # Holding pattern (issue message-queue): when a WORKER session (one tied to a durable
   # agent row) reaches a terminal event, signal the owning orchestrator's Queue on
   # `orchestrator:<id>:workers` so it can auto-resume if idle. Scoped to workers that
@@ -602,7 +716,10 @@ defmodule RepoBuilder.Session.Server do
     if terminal?(event) do
       case Agents.get_agent(agent_id) do
         %{orchestrator_id: orchestrator_id, name: name} when is_binary(orchestrator_id) ->
+          # A held Done is still ok: true (a clean stop); the Queue keys the holding branch
+          # off `holding?`, not `ok?` (issue holding-status-for-blocked-agents).
           ok? = match?(%Event.Done{ok: true}, event)
+          holding? = match?(%Event.Done{reason: :held_pending_input}, event)
 
           RepoBuilder.Dashboard.broadcast_worker_terminal(orchestrator_id, %{
             worker_id: agent_id,
@@ -612,7 +729,11 @@ defmodule RepoBuilder.Session.Server do
             # terminal message text, so the Queue can detect a wind-down / parse a handover
             # signal without the terminating session starting a new turn.
             context_tokens: state.context_tokens,
-            final_text: terminal_text(event)
+            final_text: terminal_text(event),
+            # Holding terminal (issue holding-status-for-blocked-agents): the Queue routes a
+            # holding-aware resume (no reap) when `holding?` is true.
+            holding?: holding?,
+            holding_reason: holding_reason(event)
           })
 
         _ ->
@@ -634,6 +755,11 @@ defmodule RepoBuilder.Session.Server do
   defp maybe_broadcast_lane(%Event.SessionStarted{session_id: id}, state),
     do: lane(state, :running, id)
 
+  # A held worker shows a distinct :holding lane (not :succeeded) — must precede the
+  # generic ok: true clause (issue holding-status-for-blocked-agents).
+  defp maybe_broadcast_lane(%Event.Done{reason: :held_pending_input}, state),
+    do: lane(state, :holding, state.session_id)
+
   defp maybe_broadcast_lane(%Event.Done{ok: true}, state),
     do: lane(state, :succeeded, state.session_id)
 
@@ -643,7 +769,7 @@ defmodule RepoBuilder.Session.Server do
   defp maybe_broadcast_lane(%Event.Error{}, state), do: lane(state, :failed, state.session_id)
   defp maybe_broadcast_lane(_event, _state), do: :ok
 
-  @spec lane(State.t(), :running | :succeeded | :failed, String.t()) :: :ok
+  @spec lane(State.t(), :running | :succeeded | :failed | :holding, String.t()) :: :ok
   defp lane(state, status, label) do
     RepoBuilder.Dashboard.broadcast_lane(%{
       id: "agent:#{state.agent_id}",
@@ -664,6 +790,18 @@ defmodule RepoBuilder.Session.Server do
   @spec terminal_text(Event.t()) :: String.t() | nil
   defp terminal_text(%Event.Done{final_text: text}) when is_binary(text), do: text
   defp terminal_text(_event), do: nil
+
+  # The holding reason for a held terminal (issue holding-status-for-blocked-agents),
+  # parsed from the (already-annotated) final text. nil for non-holding terminals.
+  @spec holding_reason(Event.t()) :: String.t() | nil
+  defp holding_reason(%Event.Done{reason: :held_pending_input, final_text: text}) do
+    case Holding.classify(text) do
+      {:ok, reason} -> reason
+      :none -> nil
+    end
+  end
+
+  defp holding_reason(_event), do: nil
 
   @spec maybe_synthesize_terminal(term(), State.t()) :: State.t()
   defp maybe_synthesize_terminal(reason, %State{saw_terminal?: true} = state) do

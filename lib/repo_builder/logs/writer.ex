@@ -171,6 +171,10 @@ defmodule RepoBuilder.Logs.Writer do
     status =
       case event do
         %Event.SessionStarted{} -> :running
+        # A worker HELD pending external input is a clean, resumable stop — its persistent
+        # status is :holding (not :idle), so it stays visible/resumable and is never reaped
+        # (issue holding-status-for-blocked-agents). Must precede the generic ok: true clause.
+        %Event.Done{reason: :held_pending_input} -> :holding
         %Event.Done{ok: true} -> :idle
         %Event.Done{ok: false} -> :error
         %Event.Error{} -> :error

@@ -1590,12 +1590,15 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
     # New: derive clearable agent_key set from event_buffer + statuses (@swimlanes is a
     # render-time derived assign computed in render/1 — not in socket.assigns directly).
-    # Any key whose current status is not :running is clearable.
+    # Any key whose current status is not :running (nor :holding — a held worker is blocked
+    # and resumable, not finished) is clearable (issue holding-status-for-blocked-agents).
     clearable_keys =
       socket.assigns.event_buffer
       |> Enum.map(& &1.agent_key)
       |> Enum.uniq()
-      |> Enum.reject(fn k -> Map.get(socket.assigns.statuses, k, :idle) == :running end)
+      |> Enum.reject(fn k ->
+        Map.get(socket.assigns.statuses, k, :idle) in [:running, :holding]
+      end)
       |> MapSet.new()
 
     # Trim event_buffer; @swimlanes auto-recomputes from it in render/1 (line 2847).
@@ -2332,7 +2335,15 @@ defmodule RepoBuilderWeb.ConsoleLive do
   end
 
   def handle_info({:agent_event, agent_id, %Event.Done{} = event, log_no}, socket) do
-    status = if event.ok, do: :succeeded, else: :failed
+    # A worker HELD pending external input is neither succeeded nor failed — render a
+    # distinct :holding status so it is not mislabeled "Succeeded" and stays resumable
+    # (issue holding-status-for-blocked-agents).
+    status =
+      cond do
+        event.reason == :held_pending_input -> :holding
+        event.ok -> :succeeded
+        true -> :failed
+      end
 
     {:noreply,
      socket
@@ -3537,7 +3548,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   @spec any_clearable_swimlanes?([map()]) :: boolean()
   defp any_clearable_swimlanes?(swimlanes) do
-    Enum.any?(swimlanes, fn lane -> lane.status != :running end)
+    # A :holding worker is active (blocked, resumable), not finished — never treat its
+    # swimlane as clearable, so it stays visible (issue holding-status-for-blocked-agents).
+    Enum.any?(swimlanes, fn lane -> lane.status not in [:running, :holding] end)
   end
 
   # The workflow stage of one event row: the envelope's `adw_step` when present, else the

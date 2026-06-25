@@ -214,17 +214,22 @@ defmodule RepoBuilder.Dashboard do
   return). Subscribers receive `{:worker_terminal, info}` where `info` carries at least
   `%{worker_id, name, ok?}` plus the OPTIONAL handover fields `context_tokens` (the
   worker's latest-turn occupancy) and `final_text` (the terminal message text the
-  `:handover <path>` signal would ride in). The optional fields are absent for callers
-  that don't track them (e.g. `WorkflowEngine.emit_orchestrator_resume/2`), and the Queue
-  treats them as `context_tokens: 0` / `final_text: nil` — so those paths are unchanged.
-  Additive seam (issue message-queue; enriched in issue graceful-agent-handover).
+  `:handover <path>` signal would ride in), and the OPTIONAL holding fields `holding?`
+  (the worker stopped HELD pending external input) and `holding_reason` (why). The optional
+  fields are absent for callers that don't track them (e.g.
+  `WorkflowEngine.emit_orchestrator_resume/2`), and the Queue treats them as
+  `context_tokens: 0` / `final_text: nil` / `holding?: false` — so those paths are
+  unchanged. Additive seam (issue message-queue; enriched in issue graceful-agent-handover
+  and issue holding-status-for-blocked-agents).
   """
   @spec broadcast_worker_terminal(Ecto.UUID.t(), %{
           required(:worker_id) => Ecto.UUID.t(),
           required(:name) => String.t(),
           required(:ok?) => boolean(),
           optional(:context_tokens) => non_neg_integer(),
-          optional(:final_text) => String.t() | nil
+          optional(:final_text) => String.t() | nil,
+          optional(:holding?) => boolean(),
+          optional(:holding_reason) => String.t() | nil
         }) :: :ok
   def broadcast_worker_terminal(orchestrator_id, info) do
     _ =

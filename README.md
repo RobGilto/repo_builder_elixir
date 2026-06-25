@@ -358,6 +358,7 @@ See `ai_docs/plugin-authoring.md` for the full authoring reference.
 | `PORT` | all | HTTP port (default `4000`). |
 | `PHX_SERVER` | release | Starts the endpoint when running a release. |
 | `WEBHOOK_SECRET` | all | HMAC secret for webhook signature verification. When unset, signed triggers are rejected. |
+| `SECRETS_KEY` | all | AES-256-GCM master key for the per-project secrets vault. Base64 of 32 random bytes (`openssl rand -base64 32`). Encrypts operator-deposited per-project secret values at rest; decrypted just-in-time into a worker's child env (never argv, never the orchestrator's LLM context, never persisted plaintext). Unset = the vault is disabled (fail-closed). |
 | `ANTHROPIC_API_KEY` | all | Passed to the `claude` and `pi` harnesses. |
 | `OPENAI_API_KEY` | all | Passed to the `pi` harness. |
 | `FIRECRAWL_API_KEY` | all | One app-wide key for the firecrawl web-research MCP tool. Injected into the child env of workers the orchestrator grants `tools: ["firecrawl"]`; never persisted, never in argv. Requires `npx`/Node on PATH (`npx -y firecrawl-mcp`); the pi path also needs the operator's `pi-mcp-adapter` extension. |

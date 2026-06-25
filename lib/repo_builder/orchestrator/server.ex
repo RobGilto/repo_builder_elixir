@@ -208,6 +208,10 @@ defmodule RepoBuilder.Orchestrator.Server do
       # stalled and surfaced/recovered via the session's idle-timeout → Event.Error path.
       idle_ms: orchestrator_idle_ms(),
       config: %{orchestrator: true},
+      # Threaded for completeness; the session gates project secrets OUT for the
+      # orchestrator brain (config[:orchestrator] == true), so plaintext lives only in
+      # worker children (issue-per-project-encrypted-secrets-vault).
+      project_id: orchestrator.project_id,
       orchestrator_ctx: tool_ctx(orchestrator, token),
       orchestrator_db_id: orchestrator.id
     ]

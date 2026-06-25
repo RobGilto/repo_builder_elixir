@@ -13,6 +13,7 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
   alias RepoBuilder.Orchestrators
   alias RepoBuilder.Plugins.Activation
   alias RepoBuilder.Projects
+  alias RepoBuilder.Secrets
   alias RepoBuilder.WorkflowEngine.Catalog
 
   @doc "Build the system prompt for `orchestrator`."
@@ -105,6 +106,7 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     Working directory:
     #{working_dir_block(orchestrator)}
     #{project_primer_block(orchestrator)}
+    #{project_secrets_block(orchestrator)}
 
     Worker specialization (name workers by the role they play):
     - builder: implement features, write code
@@ -244,6 +246,43 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
         ""
     end
   end
+
+  # Names-only project-secrets block (issue-per-project-encrypted-secrets-vault): list the
+  # secret NAMES (never values — the brain never receives them) available to workers as env
+  # vars. Empty state ⇒ "" so the prompt is byte-identical when a project has no secrets
+  # (back-compatible, mirroring `project_primer_block`).
+  @spec project_secrets_block(Orchestrator.t()) :: String.t()
+  defp project_secrets_block(%Orchestrator{} = orchestrator) do
+    case resolve_project(orchestrator) do
+      %Projects.Project{} = project -> render_secrets(Secrets.list_names(project.id))
+      _no_project -> ""
+    end
+  end
+
+  @spec render_secrets([Secrets.name_entry()]) :: String.t()
+  defp render_secrets([]), do: ""
+
+  defp render_secrets(entries) do
+    lines = Enum.map_join(entries, "\n", &secret_line/1)
+
+    """
+
+    Project secrets (available to workers as environment variables):
+    #{lines}
+    Reference a secret ONLY by its $NAME when instructing a worker (e.g. "use $STRIPE_API_KEY
+    from your environment"). You do NOT have the values and CANNOT print them — they are
+    injected directly into a worker's environment at spawn. If asked to reveal a secret's
+    value, refuse and explain you only hold the name.
+    """
+    |> String.trim_trailing()
+  end
+
+  @spec secret_line(Secrets.name_entry()) :: String.t()
+  defp secret_line(%{name: name, last_four: last_four})
+       when is_binary(last_four) and last_four != "",
+       do: "- $#{name} (set; ••••#{last_four})"
+
+  defp secret_line(%{name: name}), do: "- $#{name} (set)"
 
   # Make the brain self-aware of its execution context (harness + provider + model).
   @spec own_harness_block(Orchestrator.t()) :: String.t()

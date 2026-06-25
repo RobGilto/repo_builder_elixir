@@ -13,16 +13,19 @@ defmodule RepoBuilder.Orchestrator.Tools do
   """
   alias RepoBuilder.{Agents, Budget, Logs, Orchestrators, Session, WorkflowEngine, Workflows}
   alias RepoBuilder.Agents.Handover
+  alias RepoBuilder.Agents.Holding
   alias RepoBuilder.Budget.Scope
   alias RepoBuilder.Dashboard
   alias RepoBuilder.Definitions
   alias RepoBuilder.Harness.McpTools
   alias RepoBuilder.Harness.ModelResolver
   alias RepoBuilder.Harness.Pi.Models, as: PiModels
+  alias RepoBuilder.Harness.Redact
   alias RepoBuilder.Harness.Registry
   alias RepoBuilder.Orchestrator.{ContextWindow, Orchestrator, Template, Templates}
   alias RepoBuilder.Projects
   alias RepoBuilder.Projects.Project
+  alias RepoBuilder.Secrets
   alias RepoBuilder.WorkflowEngine.Catalog
   alias RepoBuilder.Workflows.TitleHumanizer
 
@@ -310,6 +313,9 @@ defmodule RepoBuilder.Orchestrator.Tools do
         prompt: prompt,
         model: worker.model,
         orchestrator_id: orchestrator_id,
+        # The worker's bound project drives its encrypted-vault env layer
+        # (issue-per-project-encrypted-secrets-vault); nil for an unscoped worker.
+        project_id: worker.project_id,
         provider: worker_provider(worker),
         config: worker_session_config(worker),
         cwd: cwd,
@@ -1363,6 +1369,8 @@ defmodule RepoBuilder.Orchestrator.Tools do
     coordinator can open and read it in full.
 
     #{Handover.protocol_clause()}
+
+    #{Holding.protocol_clause()}
     """
   end
 
@@ -1707,8 +1715,14 @@ defmodule RepoBuilder.Orchestrator.Tools do
   defp log_invocation(tool, orchestrator_id, args, result) do
     {level, outcome} =
       case result do
-        {:ok, _} -> {:info, "ok"}
-        {:error, reason} -> {:warn, inspect(reason)}
+        {:ok, _} ->
+          {:info, "ok"}
+
+        # Value-based defense-in-depth (issue-per-project-encrypted-secrets-vault): an error
+        # reason could embed a worker-supplied secret value, and this message is broadcast
+        # live (system_logs). Scrub the orchestrator's project-secret values before it lands.
+        {:error, reason} ->
+          {:warn, scrub_reason(orchestrator_id, inspect(reason))}
       end
 
     _ =
@@ -1733,4 +1747,12 @@ defmodule RepoBuilder.Orchestrator.Tools do
   # log only the keys present, never the values (§4.1 spirit).
   @spec redact_args(map()) :: [String.t()]
   defp redact_args(args), do: Map.keys(args)
+
+  # Scrub the orchestrator's project-secret values out of an error message before it is
+  # persisted/broadcast as a system log. Decrypt-gated via the bound project; `[]` values
+  # (no project secrets / unset key) make this an identity pass.
+  @spec scrub_reason(Ecto.UUID.t(), String.t()) :: String.t()
+  defp scrub_reason(orchestrator_id, message) do
+    Redact.scrub_values(message, Secrets.active_values(orchestrator_project_id(orchestrator_id)))
+  end
 end

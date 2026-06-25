@@ -71,4 +71,36 @@ defmodule RepoBuilderWeb.ProjectsLiveTest do
     {:ok, _view, html} = live(conn, ~p"/projects")
     assert html =~ "listed"
   end
+
+  describe "secrets panel (issue-per-project-encrypted-secrets-vault)" do
+    test "adds a secret showing the masked row, never the raw value", %{conn: conn} do
+      root = fixture_repo()
+      {:ok, project} = Projects.create_and_profile(%{"name" => "sek", "root_path" => root})
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}")
+
+      html =
+        view
+        |> form("#project-secret-form", %{"name" => "STRIPE_API_KEY", "value" => "sk_live_4242"})
+        |> render_submit()
+
+      assert html =~ "$STRIPE_API_KEY"
+      assert html =~ "••••4242"
+      # The raw value never round-trips back to the client.
+      refute html =~ "sk_live_4242"
+      assert [%{name: "STRIPE_API_KEY"}] = RepoBuilder.Secrets.list_names(project.id)
+    end
+
+    test "deletes a secret", %{conn: conn} do
+      root = fixture_repo()
+      {:ok, project} = Projects.create_and_profile(%{"name" => "sdel", "root_path" => root})
+      {:ok, _} = RepoBuilder.Secrets.put_secret(project.id, "TOKEN", "value-1234")
+      {:ok, view, html} = live(conn, ~p"/projects/#{project.id}")
+      assert html =~ "$TOKEN"
+
+      html = view |> element("#secret-TOKEN button", "Delete") |> render_click()
+
+      refute html =~ "$TOKEN"
+      assert RepoBuilder.Secrets.list_names(project.id) == []
+    end
+  end
 end

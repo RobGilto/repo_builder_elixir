@@ -13,7 +13,7 @@ defmodule RepoBuilder.Agents.Agent do
   alias RepoBuilder.Harness.Registry
 
   @type provider :: :anthropic | :openai | :local
-  @type status :: :idle | :running | :error
+  @type status :: :idle | :running | :error | :holding
 
   @type t :: %__MODULE__{
           id: Ecto.UUID.t() | nil,
@@ -36,7 +36,7 @@ defmodule RepoBuilder.Agents.Agent do
     field :name, :string
     field :harness, :string
     field :provider, Ecto.Enum, values: [:anthropic, :openai, :local]
-    field :status, Ecto.Enum, values: [:idle, :running, :error], default: :idle
+    field :status, Ecto.Enum, values: [:idle, :running, :error, :holding], default: :idle
     field :config, :map, default: %{}
     # Additive worker-ownership/resume fields (§8). `orchestrator_id` ties a worker
     # to the orchestrator that spawned it; `session_id` resumes its CLI session.
