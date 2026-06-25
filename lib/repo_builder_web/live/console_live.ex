@@ -588,11 +588,14 @@ defmodule RepoBuilderWeb.ConsoleLive do
     |> assign(:project_agent_keys, project_agent_keys(socket))
   end
 
-  # The set of "owned" agent keys for the active project's scoped log stream: the
-  # project's bound orchestrator id ∪ every worker agent id under it
-  # (`Agents.list_for_project/1`). Normalized to strings because `record_event/4`
-  # stores `agent_key: agent_id` and ids are stringified for color keys — the predicate
-  # must compare like-for-like. A `nil` active project ⇒ empty set (predicate no-ops).
+  # The set of "owned" agent keys for the active project's scoped log stream: every
+  # worker agent id under the project (`Agents.list_for_project/1`), plus the bare
+  # orchestrator UUID (kept harmlessly — orchestrator rows never use the bare form). The
+  # bound orchestrator's live/backfill keys are `"orch-<id>…"` and so don't appear here;
+  # `project_pass?/2` matches them by the `"orch-<orchestrator_id>"` prefix instead.
+  # Normalized to strings because `record_event/4` stores `agent_key: agent_id` and ids
+  # are stringified for color keys — the predicate must compare like-for-like. A `nil`
+  # active project ⇒ empty set (predicate no-ops).
   @spec project_agent_keys(Phoenix.LiveView.Socket.t()) :: MapSet.t(String.t())
   defp project_agent_keys(socket) do
     case socket.assigns[:active_project_id] do
@@ -2840,15 +2843,38 @@ defmodule RepoBuilderWeb.ConsoleLive do
   # project is active, and the owned-key set is non-empty, require the row's `agent_key`
   # to belong to the active project's orchestrator + workers. Otherwise no-op — scope
   # off, no active project, or an empty (unresolved) set all fail-open to the global feed.
+  #
+  # Worker rows carry a bare worker UUID `agent_key`, which matches `project_agent_keys`
+  # exactly. The bound orchestrator, however, broadcasts its identity in three formats
+  # that all share the `"orch-<orchestrator_id>"` prefix but never equal the bare UUID:
+  # live turn keys `"orch-<id>-<int>"` (server.ex), live op keys `"orch-<id>-op-<int>"`
+  # (logs.ex), and backfill keys `"orch-<id>"` (log_to_row). An exact-string membership
+  # test therefore drops every orchestrator row. Match orchestrator ownership by the
+  # `"orch-<orchestrator_id>"` prefix off the single active `orchestrator_id` so all three
+  # formats — live and backfill — are accepted at this one site.
   @spec project_pass?(map(), map()) :: boolean()
   defp project_pass?(row, assigns) do
     if assigns.project_scoped? and assigns.active_project_id != nil and
          MapSet.size(assigns.project_agent_keys) > 0 do
-      MapSet.member?(assigns.project_agent_keys, to_string(row.agent_key))
+      key = to_string(row.agent_key)
+
+      MapSet.member?(assigns.project_agent_keys, key) or
+        orchestrator_owned?(key, assigns[:orchestrator_id])
     else
       true
     end
   end
+
+  # Orchestrator-ownership check for project scope: all of the bound orchestrator's
+  # `agent_key` formats share the `"orch-<orchestrator_id>"` prefix, and worker UUIDs
+  # (Ecto `binary_id`/UUIDv4, hex+hyphen) can never carry an `"orch-"` prefix, so a prefix
+  # test against the single active `orchestrator_id` is correct and cannot misclassify a
+  # worker row. A nil active orchestrator owns nothing.
+  @spec orchestrator_owned?(String.t(), String.t() | nil) :: boolean()
+  defp orchestrator_owned?(_key, nil), do: false
+
+  defp orchestrator_owned?(key, orchestrator_id),
+    do: String.starts_with?(key, "orch-#{orchestrator_id}")
 
   @spec category_pass?(map(), MapSet.t()) :: boolean()
   defp category_pass?(%{category: :system}, _active), do: true
