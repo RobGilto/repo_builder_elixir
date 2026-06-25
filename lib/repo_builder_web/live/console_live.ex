@@ -206,6 +206,14 @@ defmodule RepoBuilderWeb.ConsoleLive do
         # scopes the rail roster; nil = the unscoped "all / platform" view (current behaviour).
         projects: [],
         active_project_id: nil,
+        # Project-scoped log stream (issue-scope-logs-to-active-project): when on AND a
+        # project is active, the event stream shows only rows whose `agent_key` is in
+        # `project_agent_keys` (the active project's bound orchestrator id ∪ its worker
+        # agent ids). Presentation-only — rows always stay in `event_buffer`, so toggling
+        # scope off re-reveals the unscoped feed with no reload. Default on; the
+        # `PROJECT ONLY` chip is the explicit opt-out. Empty key set ⇒ fail-open (no-op).
+        project_scoped?: true,
+        project_agent_keys: MapSet.new(),
         # Budget guardrails (issue-budget-guardrails): live breaker snapshot + caps + form.
         # Safe disconnected defaults; reseeded from Budget.Guard.snapshot/0 on connect and
         # updated live over the "budget:events" topic.
@@ -571,11 +579,32 @@ defmodule RepoBuilderWeb.ConsoleLive do
     # project is the unscoped, back-compatible view — every non-archived agent.
     agents = Agents.list_for_project(socket.assigns[:active_project_id])
 
-    assign(socket,
+    socket
+    |> assign(
       agents: agents,
       agent_names: Map.new(agents, &{&1.id, &1.name}),
       statuses: Map.new(agents, &{&1.id, &1.status})
     )
+    |> assign(:project_agent_keys, project_agent_keys(socket))
+  end
+
+  # The set of "owned" agent keys for the active project's scoped log stream: the
+  # project's bound orchestrator id ∪ every worker agent id under it
+  # (`Agents.list_for_project/1`). Normalized to strings because `record_event/4`
+  # stores `agent_key: agent_id` and ids are stringified for color keys — the predicate
+  # must compare like-for-like. A `nil` active project ⇒ empty set (predicate no-ops).
+  @spec project_agent_keys(Phoenix.LiveView.Socket.t()) :: MapSet.t(String.t())
+  defp project_agent_keys(socket) do
+    case socket.assigns[:active_project_id] do
+      nil ->
+        MapSet.new()
+
+      project_id ->
+        worker_ids = Enum.map(Agents.list_for_project(project_id), & &1.id)
+        orchestrator_id = socket.assigns[:orchestrator_id]
+        ids = if is_binary(orchestrator_id), do: [orchestrator_id | worker_ids], else: worker_ids
+        MapSet.new(ids, &to_string/1)
+    end
   end
 
   @spec seed_agent_costs(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
@@ -929,7 +958,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
      socket
      |> assign(:active_project_id, active)
      |> switch_orchestrator(previous_id)
-     |> load_agents()}
+     |> load_agents()
+     |> restream()}
   end
 
   # Switch the orchestrator's harness (Claude ⇄ pi ⇄ …). Applies that harness's
@@ -1381,6 +1411,14 @@ defmodule RepoBuilderWeb.ConsoleLive do
   def handle_event("toggle_regex", _params, socket),
     do: {:noreply, socket |> assign(:regex?, not socket.assigns.regex?) |> restream()}
 
+  # Flip the project scope (issue-scope-logs-to-active-project) and re-filter the buffer.
+  # Scope off re-reveals other projects' buffered rows; on re-hides them (rows are never
+  # dropped from `event_buffer`, so this is a pure view toggle).
+  def handle_event("toggle_project_scope", _params, socket),
+    do:
+      {:noreply,
+       socket |> assign(:project_scoped?, not socket.assigns.project_scoped?) |> restream()}
+
   def handle_event("toggle_auto_follow", _params, socket),
     do: {:noreply, assign(socket, :auto_follow?, not socket.assigns.auto_follow?)}
 
@@ -1566,6 +1604,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
        active_agents: [],
        search: "",
        regex?: false,
+       # Return to the documented default scope-on; `project_agent_keys` is the roster
+       # set (rebuilt by `load_agents`), not a filter, so it survives a CLEAR.
+       project_scoped?: true,
        event_buffer: [],
        expanded_ids: MapSet.new(),
        selected_ids: MapSet.new(),
@@ -2396,12 +2437,16 @@ defmodule RepoBuilderWeb.ConsoleLive do
         harness: agent.harness
       }
 
-      {:noreply,
-       socket
-       |> assign(:agents, socket.assigns.agents ++ [agent])
-       |> assign(:agent_names, Map.put(socket.assigns.agent_names, agent.id, agent.name))
-       |> assign(:statuses, Map.put(socket.assigns.statuses, agent.id, agent.status))
-       |> stream_insert(:lanes, lane)}
+      socket =
+        socket
+        |> assign(:agents, socket.assigns.agents ++ [agent])
+        |> assign(:agent_names, Map.put(socket.assigns.agent_names, agent.id, agent.name))
+        |> assign(:statuses, Map.put(socket.assigns.statuses, agent.id, agent.status))
+        |> stream_insert(:lanes, lane)
+
+      # A worker spawned under the active project must enter the scoped stream: recompute
+      # the owned-key set off the updated roster and re-filter the buffer.
+      {:noreply, socket |> assign(:project_agent_keys, project_agent_keys(socket)) |> restream()}
     end
   end
 
@@ -2461,14 +2506,17 @@ defmodule RepoBuilderWeb.ConsoleLive do
       harness: agent.harness
     }
 
-    {:noreply,
-     socket
-     |> assign(
-       :agents,
-       Enum.map(socket.assigns.agents, fn a -> if a.id == agent.id, do: agent, else: a end)
-     )
-     |> assign(:statuses, Map.put(socket.assigns.statuses, agent.id, agent.status))
-     |> stream_insert(:lanes, lane)}
+    socket =
+      socket
+      |> assign(
+        :agents,
+        Enum.map(socket.assigns.agents, fn a -> if a.id == agent.id, do: agent, else: a end)
+      )
+      |> assign(:statuses, Map.put(socket.assigns.statuses, agent.id, agent.status))
+      |> stream_insert(:lanes, lane)
+
+    # A worker reassigned to/from the active project must enter/leave the scoped stream.
+    {:noreply, socket |> assign(:project_agent_keys, project_agent_keys(socket)) |> restream()}
   end
 
   # A worker the orchestrator just deleted (issue agent-CRUD): drop it from the
@@ -2482,16 +2530,19 @@ defmodule RepoBuilderWeb.ConsoleLive do
     removed = Map.get(socket.assigns.agent_costs, agent.id)
     removed_est = Map.get(socket.assigns.agent_est_costs, agent.id)
 
-    {:noreply,
-     socket
-     |> assign(:agents, Enum.reject(socket.assigns.agents, &(&1.id == agent.id)))
-     |> assign(:agent_names, Map.delete(socket.assigns.agent_names, agent.id))
-     |> assign(:statuses, Map.delete(socket.assigns.statuses, agent.id))
-     |> assign(:cost, subtract_cost(socket.assigns.cost, removed))
-     |> assign(:cost_estimate, subtract_cost(socket.assigns.cost_estimate, removed_est))
-     |> assign(:agent_costs, Map.delete(socket.assigns.agent_costs, agent.id))
-     |> assign(:agent_est_costs, Map.delete(socket.assigns.agent_est_costs, agent.id))
-     |> stream_delete(:lanes, %{id: "agent:#{agent.id}"})}
+    socket =
+      socket
+      |> assign(:agents, Enum.reject(socket.assigns.agents, &(&1.id == agent.id)))
+      |> assign(:agent_names, Map.delete(socket.assigns.agent_names, agent.id))
+      |> assign(:statuses, Map.delete(socket.assigns.statuses, agent.id))
+      |> assign(:cost, subtract_cost(socket.assigns.cost, removed))
+      |> assign(:cost_estimate, subtract_cost(socket.assigns.cost_estimate, removed_est))
+      |> assign(:agent_costs, Map.delete(socket.assigns.agent_costs, agent.id))
+      |> assign(:agent_est_costs, Map.delete(socket.assigns.agent_est_costs, agent.id))
+      |> stream_delete(:lanes, %{id: "agent:#{agent.id}"})
+
+    # A worker removed from the active project must leave the scoped stream.
+    {:noreply, socket |> assign(:project_agent_keys, project_agent_keys(socket)) |> restream()}
   end
 
   # Workflow lanes drive the per-step swimlane (status/current step), not the flat
@@ -2781,7 +2832,22 @@ defmodule RepoBuilderWeb.ConsoleLive do
   defp passes?(row, assigns) do
     category_pass?(row, assigns.active_categories) and
       agent_pass?(row, assigns.active_agents) and
+      project_pass?(row, assigns) and
       search_pass?(row.body, assigns.search, assigns.regex?)
+  end
+
+  # Project-scope predicate (issue-scope-logs-to-active-project): when scope is on, a
+  # project is active, and the owned-key set is non-empty, require the row's `agent_key`
+  # to belong to the active project's orchestrator + workers. Otherwise no-op — scope
+  # off, no active project, or an empty (unresolved) set all fail-open to the global feed.
+  @spec project_pass?(map(), map()) :: boolean()
+  defp project_pass?(row, assigns) do
+    if assigns.project_scoped? and assigns.active_project_id != nil and
+         MapSet.size(assigns.project_agent_keys) > 0 do
+      MapSet.member?(assigns.project_agent_keys, to_string(row.agent_key))
+    else
+      true
+    end
   end
 
   @spec category_pass?(map(), MapSet.t()) :: boolean()
@@ -3099,6 +3165,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
               search={@search}
               regex?={@regex?}
               auto_follow?={@auto_follow?}
+              project_scoped?={@project_scoped?}
+              project_active?={@active_project_id != nil}
             />
             <.selection_bar
               selected_count={MapSet.size(@selected_ids)}

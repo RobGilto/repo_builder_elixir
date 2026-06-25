@@ -371,6 +371,12 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   attr :regex?, :boolean, default: false
   attr :auto_follow?, :boolean, default: true
 
+  attr :project_scoped?, :boolean,
+    default: true,
+    doc: "whether the stream is scoped to the project"
+
+  attr :project_active?, :boolean, default: false, doc: "whether a project is active (chip shown)"
+
   @doc "The center filter bar: category chips, agent-name pills, regex search, auto-follow, clear-all."
   @spec filter_bar(map()) :: Phoenix.LiveView.Rendered.t()
   def filter_bar(assigns) do
@@ -435,6 +441,16 @@ defmodule RepoBuilderWeb.ConsoleComponents do
         class={["cns-chip", @auto_follow? && "cns-chip--active cns-chip--hook"]}
       >
         AUTO-FOLLOW
+      </button>
+      <button
+        :if={@project_active?}
+        id="project-scope"
+        type="button"
+        phx-click="toggle_project_scope"
+        class={["cns-chip", @project_scoped? && "cns-chip--active cns-chip--hook"]}
+        title="Scope the log stream to the active project's orchestrator and its worker agents"
+      >
+        PROJECT ONLY
       </button>
       <button
         id="clear-filters"
