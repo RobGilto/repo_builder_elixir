@@ -143,6 +143,85 @@ PostgreSQL must be running **before** the database steps. The dev and test datab
    mix ecto.setup
    ```
 
+### macOS notes
+
+**PostgreSQL via Homebrew (recommended on Mac)**
+
+The mise `postgres@16.14` tool fails to build on macOS ARM (missing ICU libraries). Use Homebrew instead:
+
+```bash
+brew install postgresql@16
+brew services start postgresql@16
+```
+
+Remove `postgres = "16.14"` from `mise.toml` so mise doesn't try to build it:
+
+```toml
+[tools]
+elixir = "1.20.1-otp-28"
+erlang = "28.4"
+# postgres line removed — managed by Homebrew
+```
+
+Then create the expected superuser role (Homebrew ships with no `postgres` role):
+
+```bash
+psql postgres -c "CREATE ROLE postgres WITH SUPERUSER LOGIN PASSWORD 'postgres';"
+```
+
+Skip `scripts/pg.sh` entirely — use `brew services start postgresql@16` instead of `scripts/pg.sh start`. The `mix ecto.*` commands connect to the brew-managed server directly.
+
+**Activating mise in your shell**
+
+After `mise install`, add activation to your shell profile so `mix`, `elixir`, and `iex` are on PATH:
+
+```bash
+echo 'eval "$(mise activate zsh)"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+**Corporate TLS / SSL inspection**
+
+If `mix deps.get` fails with `Unknown CA` errors (common on corporate networks using SSL inspection), point Hex at your CA bundle:
+
+```bash
+export HEX_CACERTS_PATH="/path/to/your/combined-ca.pem"
+mix deps.get
+```
+
+Add the export to `~/.zshrc` to make it permanent.
+
+**`sed` compatibility (`scripts/patch_deps.sh`)**
+
+macOS `sed` requires an explicit backup extension with `-i`. If you see `sed: -I or -i may not be used with stdin`, the script needs `sed -i ''` instead of `sed -i`. The repo version is already patched for this, but note it if you maintain a fork.
+
+**Upgrading to the latest from GitHub**
+
+Pulling a new revision can land new dependencies and new migrations, so a clean upgrade is more than `git pull`. On a Mac checkout the README/`mise.toml`/`scripts/patch_deps.sh` carry local setup tweaks (Homebrew Postgres, the `sed -i ''` fix); stash them first so the fast-forward stays clean, then restore:
+
+```bash
+# 1. Protect local setup tweaks and fast-forward to the remote tip
+git stash push -m "mac-setup-tweaks"      # only if `git status` shows local edits
+git fetch origin
+git pull --ff-only origin dev
+git stash pop                             # re-applies the tweaks (resolve README if it conflicts)
+
+# 2. Re-sync deps, re-patch type_check, recompile
+export HEX_CACERTS_PATH="/path/to/your/combined-ca.pem"   # only on corporate TLS networks
+mix deps.get
+scripts/patch_deps.sh
+mix deps.compile type_check && mix compile
+
+# 3. Apply any new migrations (Homebrew Postgres must be running)
+brew services start postgresql@16         # no-op if already up
+mix ecto.migrate
+
+# 4. Verify the green gate before working
+mix test --warnings-as-errors
+```
+
+If `git stash pop` reports a README conflict, it is because the remote also edited the README; resolve the markers, then `git add README.md`. Steps 2–3 are mandatory whenever a pull changes `mix.exs`/`mix.lock` or adds files under `priv/repo/migrations/`.
+
 The `setup` alias chains `deps.get`, `ecto.setup`, `assets.setup`, and `assets.build`:
 
 ```bash
