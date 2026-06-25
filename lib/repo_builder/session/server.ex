@@ -256,6 +256,20 @@ defmodule RepoBuilder.Session.Server do
       abs_exe ->
         spawn_child(abs_exe, args, env, ctx, state)
     end
+  rescue
+    # Turn a silent crash in the spawn prelude (File.mkdir_p!, adapter.command/1,
+    # maybe_orchestrator_spawn/4) into a loud, persisted terminal Error — mirroring the
+    # "executable not found" / "spawn failed" branches above. Without this the GenServer
+    # would die with no event dispatched, leaving a worker stuck `:running` (issue-log-16249).
+    e ->
+      message = "spawn preparation failed: #{Exception.message(e)}"
+      state = dispatch(error_event(state, message, :spawn_failed), state)
+      {:stop, :normal, state}
+  catch
+    kind, reason ->
+      message = "spawn preparation failed: #{inspect({kind, reason})}"
+      state = dispatch(error_event(state, message, :spawn_failed), state)
+      {:stop, :normal, state}
   end
 
   # When this is an orchestrator session AND the adapter implements the optional
@@ -429,13 +443,41 @@ defmodule RepoBuilder.Session.Server do
   def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true
-  def terminate(_reason, %State{} = state) do
+  def terminate(reason, %State{} = state) do
+    reconcile_status_quietly(reason, state)
     _ = if is_integer(state.os_pid), do: :exec.stop(state.os_pid)
     delete_ledger_quietly(state.marker)
     cleanup_workspace(state)
     Admission.release()
     :ok
   end
+
+  # Durable backstop (issue-log-16249): a WORKER Session.Server that exits WITHOUT ever
+  # dispatching a terminal event leaves `agents.status` stuck `:running` forever — the
+  # optimistic `command_agent` :running write (orchestrator/tools.ex) has no terminal to
+  # undo it, and nothing else monitors the worker's status. Synthesize and dispatch a
+  # terminal Error here so the normal machinery (a) persists a terminal `agent_logs` row,
+  # (b) reconciles status to :error via Logs.Writer.update_status_quietly/2, and (c) fires
+  # the worker-terminal broadcast the orchestrator Queue's force_retire/3 recovery awaits.
+  # dispatch/2 from terminate/2 is safe: the PubSub broadcast and the Logs.Writer cast
+  # target other processes that outlive this one. Fail-soft (mirrors delete_ledger_quietly/1)
+  # so a DB/PubSub hiccup during shutdown never turns terminate/2 into a second crash.
+  # KNOWN GAP (out of scope): a hard Process.exit(pid, :kill) / brutal supervisor shutdown
+  # bypasses terminate/2 entirely, so it cannot reconcile that path — a boot/periodic sweep
+  # (sibling to OrphanReaper) would be needed to close it.
+  @spec reconcile_status_quietly(term(), State.t()) :: :ok
+  defp reconcile_status_quietly(reason, %State{agent_db_id: id, saw_terminal?: false} = state)
+       when is_binary(id) do
+    message = "session ended without a terminal event: #{inspect(reason)}"
+    _ = dispatch(error_event(state, message, :spawn_failed), state)
+    :ok
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
+
+  defp reconcile_status_quietly(_reason, _state), do: :ok
 
   # The ledger delete must not crash terminate/2 if the DB is momentarily
   # unavailable during shutdown — any undeleted row is reclaimed by the boot-time
