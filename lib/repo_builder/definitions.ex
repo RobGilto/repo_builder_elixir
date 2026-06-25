@@ -72,13 +72,7 @@ defmodule RepoBuilder.Definitions do
 
   @doc "All three categories for the merged (app + `working_dir`) root, freshly scanned."
   @spec all(working_dir :: String.t() | nil) :: listing()
-  def all(working_dir) do
-    %{
-      slash_command: merge(SlashCommand.scan(app_root(), :app), working_slash(working_dir)),
-      agent: Agent.scan(working_dir),
-      adw: merge(Adw.scan(app_root(), :app), working_adw(working_dir))
-    }
-  end
+  def all(working_dir), do: resolve(app_root(), working_dir)
 
   @doc "A single category for the merged root."
   @spec list(category(), working_dir :: String.t() | nil) :: [entry()]
@@ -169,11 +163,25 @@ defmodule RepoBuilder.Definitions do
   @doc false
   @spec resolve(String.t(), String.t() | nil) :: listing()
   def resolve(app_root, working_dir) do
+    overlay = overlay_dir(app_root, working_dir)
+
     %{
-      slash_command: merge(SlashCommand.scan(app_root, :app), working_slash(working_dir)),
-      agent: Agent.scan(working_dir),
-      adw: merge(Adw.scan(app_root, :app), working_adw(working_dir))
+      slash_command: merge(SlashCommand.scan(app_root, :app), working_slash(overlay)),
+      agent: Agent.scan(overlay),
+      adw: merge(Adw.scan(app_root, :app), working_adw(overlay))
     }
+  end
+
+  # Resolve the working-dir overlay, treating "the app root itself" as NO overlay. When the
+  # active brain's working dir IS the platform repo (the default brain, or a project pinned to
+  # this repo), scanning the same `.claude/` again as `:working_dir` would shadow every base
+  # entry into a duplicate and mis-attribute platform artifacts to "the project". nil ⇒
+  # base-only, so the BASE/PROJECT source split stays meaningful.
+  @spec overlay_dir(String.t(), String.t() | nil) :: String.t() | nil
+  defp overlay_dir(_app_root, working_dir) when working_dir in [nil, ""], do: nil
+
+  defp overlay_dir(app_root, working_dir) when is_binary(working_dir) do
+    if Path.expand(app_root) == Path.expand(working_dir), do: nil, else: working_dir
   end
 
   @spec rescan_and_broadcast(State.t()) :: State.t()

@@ -10,7 +10,9 @@ defmodule RepoBuilderWeb.ProjectComponents do
 
   @doc """
   The global project switcher chip. Emits `select_project` (`phx-change`) with the
-  chosen `project_id` (blank = the unscoped "all / platform" view).
+  chosen `project_id`. Always lists concrete projects only — the active project defaults
+  to the platform project (`Projects.default_project/0`) at mount, so there is no blank
+  "all / platform" entry.
   """
   attr :projects, :list, required: true
   attr :active_project_id, :string, default: nil
@@ -36,7 +38,6 @@ defmodule RepoBuilderWeb.ProjectComponents do
         name="project_id"
         class="rounded border border-zinc-600 bg-zinc-800 px-2 py-1 text-sm"
       >
-        <option value="" selected={is_nil(@active_project_id)}>All / platform</option>
         <option
           :for={project <- @projects}
           value={project.id}

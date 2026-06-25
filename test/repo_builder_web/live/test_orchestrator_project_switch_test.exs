@@ -2,8 +2,9 @@ defmodule RepoBuilderWeb.TestOrchestratorProjectSwitchTest do
   @moduledoc """
   Orchestrator↔project binding, Phase 3: selecting a project in the console switches the
   ACTIVE orchestrator (not just the rail roster) — a different brain with its own
-  working_dir and context window — and selecting "All / platform" returns to the
-  `project_id: nil` default. References stable DOM ids, not raw HTML.
+  working_dir and context window. The console opens scoped to the platform/home project
+  (`Projects.default_project/0`, the earliest project in the sandbox); there is no blank
+  "all / platform" option. References stable DOM ids, not raw HTML.
 
   `async: false` so the shared Ecto sandbox reaches the LiveView process.
   """
@@ -24,9 +25,10 @@ defmodule RepoBuilderWeb.TestOrchestratorProjectSwitchTest do
     project
   end
 
-  test "selecting a project swaps the active orchestrator; blank restores the default", %{
-    conn: conn
-  } do
+  test "selecting a project swaps the active orchestrator; selecting the home project restores it",
+       %{conn: conn} do
+    # The earliest project is the mount default (`Projects.default_project/0`).
+    home = project_fixture()
     project = project_fixture()
 
     {:ok, _scoped} =
@@ -39,23 +41,23 @@ defmodule RepoBuilderWeb.TestOrchestratorProjectSwitchTest do
 
     {:ok, view, _html} = live(conn, ~p"/")
 
-    # Default brain: the platform "default" orchestrator is live.
-    assert {:ok, default} = Orchestrators.get_or_create_default()
-    assert has_element?(view, "#active-orchestrator", default.name)
+    # Mount defaults to the home (platform) project's bound orchestrator.
+    assert {:ok, home_orch} = Orchestrators.get_or_create_for_project(home.id)
+    assert has_element?(view, "#active-orchestrator", home_orch.name)
 
-    # Switch to the project: a DIFFERENT orchestrator becomes active (bound to the project,
-    # named after it) and the rail re-scopes to the project's agent.
+    # Switch to the other project: a DIFFERENT orchestrator becomes active (bound to the
+    # project, named after it) and the rail re-scopes to the project's agent.
     render_change(view, "select_project", %{"project_id" => project.id})
 
     assert {:ok, bound} = Orchestrators.get_or_create_for_project(project.id)
-    assert bound.id != default.id
+    assert bound.id != home_orch.id
     assert bound.project_id == project.id
     assert bound.working_dir == project.root_path
     assert has_element?(view, "#active-orchestrator", bound.name)
-    refute has_element?(view, "#active-orchestrator", default.name)
+    refute has_element?(view, "#active-orchestrator", home_orch.name)
 
-    # Back to platform/all: the default orchestrator is live again.
-    render_change(view, "select_project", %{"project_id" => ""})
-    assert has_element?(view, "#active-orchestrator", default.name)
+    # Back to the home project (by id — there is no blank "all/platform" option anymore).
+    render_change(view, "select_project", %{"project_id" => home.id})
+    assert has_element?(view, "#active-orchestrator", home_orch.name)
   end
 end

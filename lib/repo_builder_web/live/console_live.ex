@@ -199,6 +199,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
         slash_commands: [],
         agent_defs: [],
         adws: [],
+        # Active source tab for the file-derived palette (issue palette-source-tabs):
+        # :base = platform-repo artifacts; :project = the active working-dir overlay.
+        palette_source_tab: :base,
         # Agentic-layer adaptor (Phase 5): the global project switcher. `active_project_id`
         # scopes the rail roster; nil = the unscoped "all / platform" view (current behaviour).
         projects: [],
@@ -243,6 +246,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
       if connected?(socket) do
         socket
         |> assign(:projects, Projects.list_projects())
+        |> assign_default_project()
         |> load_agents()
         |> seed_agent_costs()
         |> seed_context_tokens()
@@ -274,6 +278,18 @@ defmodule RepoBuilderWeb.ConsoleLive do
   # one is selected, else the platform default. Runs AFTER `active_project_id` is assigned
   # so a deep-linked project starts on the right brain. A failure leaves orchestrator_id nil
   # (the manual path still works).
+  # Default the global project scope to the platform project (repo_builder_elixir — the
+  # seeded row whose root_path is the BEAM cwd) on connect, so the console opens on a
+  # concrete project instead of the (now removed) "All / platform" view. A nil result
+  # (before seeding / no projects) leaves the scope unset.
+  @spec assign_default_project(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp assign_default_project(socket) do
+    case Projects.default_project() do
+      nil -> socket
+      project -> assign(socket, :active_project_id, project.id)
+    end
+  end
+
   @spec assign_orchestrator(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp assign_orchestrator(socket) do
     case Orchestrators.get_or_create_for_project(socket.assigns[:active_project_id]) do
@@ -293,6 +309,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
       {:ok, orchestrator} ->
         socket
         |> assign_orchestrator_selection(orchestrator)
+        |> refresh_definitions_for()
         |> resubscribe_orchestrator_queue(previous_id, orchestrator.id)
         |> seed_cost()
         |> seed_orchestrator_cost()
@@ -301,6 +318,18 @@ defmodule RepoBuilderWeb.ConsoleLive do
       {:error, _reason} ->
         socket
     end
+  end
+
+  # Repoint the global Definitions watcher at the newly-active project's dir and re-seed
+  # this console's palette assigns. Mirrors `save_working_dir/2`: refresh/1 updates the
+  # watcher's tracked dir + broadcasts to every console; the local re-seed makes this
+  # console's chips update without waiting on the round-trip. Must run after
+  # `assign_orchestrator_selection/2` (which sets `orchestrator_working_dir`).
+  @spec refresh_definitions_for(Phoenix.LiveView.Socket.t()) ::
+          Phoenix.LiveView.Socket.t()
+  defp refresh_definitions_for(socket) do
+    :ok = Definitions.refresh(nilify_blank(socket.assigns.orchestrator_working_dir))
+    seed_definitions(socket)
   end
 
   # Move the per-orchestrator queue subscription from the previous brain to the new one when
@@ -1219,6 +1248,12 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   def handle_event("toggle_adw_builder", _params, socket) do
     {:noreply, assign(socket, adw_builder?: !socket.assigns.adw_builder?)}
+  end
+
+  # Switch the prompt palette's BASE/PROJECT source tab (issue palette-source-tabs).
+  def handle_event("set_palette_tab", %{"tab" => tab}, socket) do
+    tab = if tab == "project", do: :project, else: :base
+    {:noreply, assign(socket, :palette_source_tab, tab)}
   end
 
   def handle_event("adw_add_step", %{"step" => step}, socket) do
@@ -3272,6 +3307,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
         slash_commands={@slash_commands}
         agent_defs={@agent_defs}
         adws={@adws}
+        palette_source_tab={@palette_source_tab}
         working_dir={@orchestrator_working_dir}
         uploads={@uploads}
         adw_builder?={@adw_builder?}

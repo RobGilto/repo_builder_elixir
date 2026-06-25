@@ -75,6 +75,52 @@ defmodule RepoBuilderWeb.TestPromptPaletteTest do
       {:definitions_changed, :slash_command, new_list}
     )
 
+    # The broadcast command is :working_dir, so it lives under the PROJECT tab (the BASE tab
+    # is active by default and the inactive tab is not in the DOM). Switch tabs to see it.
+    refute render(view) =~ "/brandnewcmd"
+    view |> element("#palette-tab-project") |> render_click()
     assert render(view) =~ "/brandnewcmd"
+  end
+
+  test "base and project source tabs separate artifacts by provenance", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    # An :app slash command and a :working_dir one share the row data but split across tabs.
+    list = [
+      %Definitions.SlashCommand{
+        name: "basecmd",
+        namespace: [],
+        path: "/tmp/basecmd.md",
+        source: :app,
+        description: "from the platform repo",
+        argument_hint: nil,
+        mtime: 0
+      },
+      %Definitions.SlashCommand{
+        name: "projcmd",
+        namespace: [],
+        path: "/tmp/projcmd.md",
+        source: :working_dir,
+        description: "from the project overlay",
+        argument_hint: nil,
+        mtime: 0
+      }
+    ]
+
+    Phoenix.PubSub.broadcast(
+      RepoBuilder.PubSub,
+      Definitions.topic(),
+      {:definitions_changed, :slash_command, list}
+    )
+
+    # BASE tab (default): the :app command shows, the :working_dir one does not.
+    base = render(view)
+    assert base =~ "/basecmd"
+    refute base =~ "/projcmd"
+
+    # PROJECT tab: the reverse.
+    project = view |> element("#palette-tab-project") |> render_click()
+    assert project =~ "/projcmd"
+    refute project =~ "/basecmd"
   end
 end

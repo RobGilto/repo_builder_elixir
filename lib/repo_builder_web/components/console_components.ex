@@ -2794,6 +2794,12 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   attr :agents, :list, default: [], doc: "live %Agent{} workers shown in the left rail"
   attr :statuses, :map, default: %{}, doc: "agent id => live runtime status"
 
+  attr :palette_source_tab, :atom,
+    default: :base,
+    values: [:base, :project],
+    doc:
+      "active source tab for the file-derived palette: :base (platform repo) | :project (overlay)"
+
   @doc "Bottom-anchored ⌘K command-input modal with a system-info panel (harnesses/agents/example ADW)."
   @spec global_command_input(map()) :: Phoenix.LiveView.Rendered.t()
   def global_command_input(assigns) do
@@ -2912,31 +2918,94 @@ defmodule RepoBuilderWeb.ConsoleComponents do
             </div>
           </form>
 
-          <div class="mt-3 flex flex-col gap-2 text-[0.625rem]">
-            <.palette_row
-              id="slash"
-              label="SLASH"
-              chips={palette_chips(:slash_command, @slash_commands)}
-              empty_hint="none — add `.claude/commands/<name>.md`"
-            />
-            <.palette_row
-              id="agents"
-              label="AGENTS"
-              chips={palette_chips(:agent, @agent_defs)}
-              empty_hint="none — add `priv/orchestrator/agents/<name>/NNNN.md`"
-            />
-            <.palette_row
-              id="adws"
-              label="ADWS"
-              chips={palette_chips(:adw, @adws)}
-              empty_hint="none — add `adws/adw_*.py`"
-            />
-            <.palette_row
-              id="live"
-              label="LIVE AGENTS"
-              chips={live_agent_chips(@agents, @statuses)}
-              empty_hint="no live agents — create one, then click to reference it"
-            />
+          <%!-- Source-scoped palette (issue palette-source-tabs): vertical BASE / PROJECT tabs.
+                BASE = artifacts from the platform repo's `.claude/` (source :app); PROJECT =
+                artifacts from the active working dir's `.claude/` overlay (source :working_dir).
+                Live workers are runtime state, not a repo artifact, so they stay below the tabs. --%>
+          <div class="mt-3 text-[0.625rem]">
+            <div class="flex gap-3">
+              <div class="flex shrink-0 flex-col gap-1">
+                <button
+                  type="button"
+                  id="palette-tab-base"
+                  phx-click="set_palette_tab"
+                  phx-value-tab="base"
+                  class={[
+                    "cns-cmd-chip w-full text-left",
+                    @palette_source_tab == :base && "cns-chip--active"
+                  ]}
+                  title="Artifacts from the platform repo (.claude/, priv, adws)"
+                >
+                  base ({palette_source_count(@slash_commands, @agent_defs, @adws, :app)})
+                </button>
+                <button
+                  type="button"
+                  id="palette-tab-project"
+                  phx-click="set_palette_tab"
+                  phx-value-tab="project"
+                  class={[
+                    "cns-cmd-chip w-full text-left",
+                    @palette_source_tab == :project && "cns-chip--active"
+                  ]}
+                  title="Artifacts from the active project's working directory (.claude/)"
+                >
+                  project ({palette_source_count(@slash_commands, @agent_defs, @adws, :working_dir)})
+                </button>
+              </div>
+
+              <div class="flex min-w-0 flex-1 flex-col gap-2">
+                <div :if={@palette_source_tab == :base} class="flex flex-col gap-2">
+                  <.palette_row
+                    id="slash-base"
+                    label="SLASH"
+                    chips={source_chips(:slash_command, @slash_commands, :app)}
+                    empty_hint="none — add `.claude/commands/<name>.md` in the platform repo"
+                  />
+                  <.palette_row
+                    id="agents-base"
+                    label="AGENTS"
+                    chips={source_chips(:agent, @agent_defs, :app)}
+                    empty_hint="none — add `priv/orchestrator/agents/<name>/NNNN.md`"
+                  />
+                  <.palette_row
+                    id="adws-base"
+                    label="ADWS"
+                    chips={source_chips(:adw, @adws, :app)}
+                    empty_hint="none — add `adws/adw_*.py`"
+                  />
+                </div>
+
+                <div :if={@palette_source_tab == :project} class="flex flex-col gap-2">
+                  <.palette_row
+                    id="slash-project"
+                    label="SLASH"
+                    chips={source_chips(:slash_command, @slash_commands, :working_dir)}
+                    empty_hint="none — select a project, or add `.claude/commands/<name>.md` in its repo"
+                  />
+                  <.palette_row
+                    id="agents-project"
+                    label="AGENTS"
+                    chips={source_chips(:agent, @agent_defs, :working_dir)}
+                    empty_hint="none — add `.claude/agents/<name>.md` in the project repo"
+                  />
+                  <.palette_row
+                    id="adws-project"
+                    label="ADWS"
+                    chips={source_chips(:adw, @adws, :working_dir)}
+                    empty_hint="none — add `adws/adw_*.py` in the project repo"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div class="mt-2">
+              <.palette_row
+                id="live"
+                label="LIVE AGENTS"
+                chips={live_agent_chips(@agents, @statuses)}
+                empty_hint="no live agents — create one, then click to reference it"
+              />
+            </div>
           </div>
         </div>
 
@@ -3162,6 +3231,26 @@ defmodule RepoBuilderWeb.ConsoleComponents do
         source: adw.source,
         description: adw.description
       }
+    end)
+  end
+
+  # Chips for one category, filtered to a single provenance (`:app` for the BASE tab,
+  # `:working_dir` for the PROJECT tab) so the two source tabs each render only their own
+  # artifacts. Filtering BEFORE normalization keeps each entry's `source` authoritative.
+  @spec source_chips(:slash_command | :agent | :adw, [struct()], :app | :working_dir) :: [chip()]
+  defp source_chips(category, list, source) do
+    list
+    |> Enum.filter(&(&1.source == source))
+    |> then(&palette_chips(category, &1))
+  end
+
+  # Total count of file-derived definitions (slash + agents + adws) carrying `source`, for the
+  # `base (N)` / `project (N)` tab labels.
+  @spec palette_source_count([struct()], [struct()], [struct()], :app | :working_dir) ::
+          non_neg_integer()
+  defp palette_source_count(slash, agents, adws, source) do
+    Enum.reduce([slash, agents, adws], 0, fn list, acc ->
+      acc + Enum.count(list, &(&1.source == source))
     end)
   end
 

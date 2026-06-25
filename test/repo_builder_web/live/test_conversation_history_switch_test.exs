@@ -15,6 +15,10 @@ defmodule RepoBuilderWeb.TestConversationHistorySwitchTest do
   alias RepoBuilder.{Dashboard, Logs, Orchestrators, Projects}
   alias RepoBuilder.Harness.Event
 
+  # The console opens scoped to the platform/home project (`Projects.default_project/0`,
+  # the earliest project in the sandbox); there is no blank "all / platform" option, so
+  # switching is always between concrete projects by id.
+
   defp uniq, do: System.unique_integer([:positive])
 
   defp project_fixture do
@@ -42,35 +46,26 @@ defmodule RepoBuilderWeb.TestConversationHistorySwitchTest do
 
   defp chat_pane(view), do: view |> element("#chat-log") |> render()
 
-  test "switching projects swaps the visible conversation; blank restores the platform brain", %{
+  test "switching projects swaps the visible conversation; the home project restores it", %{
     conn: conn
   } do
+    # The earliest project is the mount default (`Projects.default_project/0`).
     project_a = project_fixture()
     project_b = project_fixture()
 
     {:ok, orch_a} = Orchestrators.get_or_create_for_project(project_a.id)
     {:ok, orch_b} = Orchestrators.get_or_create_for_project(project_b.id)
-    {:ok, default} = Orchestrators.get_or_create_default()
 
     seed_conversation(orch_a.id, "hello A", "reply A")
     seed_conversation(orch_b.id, "hello B", "reply B")
-    seed_conversation(default.id, "hello platform", "reply platform")
 
     {:ok, view, _html} = live(conn, ~p"/")
 
-    # Mount with no project selected: the platform default orchestrator's conversation.
-    pane = chat_pane(view)
-    assert pane =~ "reply platform"
-    refute pane =~ "reply A"
-    refute pane =~ "reply B"
-
-    # Select project A: the pane reloads A's conversation only.
-    render_change(view, "select_project", %{"project_id" => project_a.id})
+    # Mount defaults to project A (the home/earliest project): its conversation only.
     pane = chat_pane(view)
     assert pane =~ "hello A"
     assert pane =~ "reply A"
     refute pane =~ "reply B"
-    refute pane =~ "reply platform"
 
     # Switch to project B: the inverse — B's conversation, none of A's.
     render_change(view, "select_project", %{"project_id" => project_b.id})
@@ -79,11 +74,10 @@ defmodule RepoBuilderWeb.TestConversationHistorySwitchTest do
     assert pane =~ "reply B"
     refute pane =~ "reply A"
 
-    # Back to platform/all (blank): the default orchestrator's conversation returns.
-    render_change(view, "select_project", %{"project_id" => ""})
+    # Back to the home project A (by id): A's conversation returns.
+    render_change(view, "select_project", %{"project_id" => project_a.id})
     pane = chat_pane(view)
-    assert pane =~ "reply platform"
-    refute pane =~ "reply A"
+    assert pane =~ "reply A"
     refute pane =~ "reply B"
   end
 
