@@ -31,7 +31,6 @@ defmodule RepoBuilder.Projects.Project do
           command_pack: String.t(),
           command_pack_version: String.t(),
           default_harness: String.t() | nil,
-          default_model_tier: String.t() | nil,
           budget_cap_usd: Decimal.t() | nil,
           isolation_mode: isolation_mode(),
           context_primer: String.t() | nil,
@@ -57,7 +56,6 @@ defmodule RepoBuilder.Projects.Project do
     field :command_pack_version, :string, default: "latest"
     # Open harness identity, validated vs the registry at the changeset boundary.
     field :default_harness, :string
-    field :default_model_tier, :string
     field :budget_cap_usd, :decimal
     field :isolation_mode, Ecto.Enum, values: @isolation_modes, default: :direct
     field :context_primer, :string
@@ -83,7 +81,6 @@ defmodule RepoBuilder.Projects.Project do
       :command_pack,
       :command_pack_version,
       :default_harness,
-      :default_model_tier,
       :budget_cap_usd,
       :isolation_mode,
       :context_primer,

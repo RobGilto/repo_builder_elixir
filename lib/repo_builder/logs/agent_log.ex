@@ -26,6 +26,7 @@ defmodule RepoBuilder.Logs.AgentLog do
           id: Ecto.UUID.t() | nil,
           agent_id: Ecto.UUID.t() | nil,
           orchestrator_id: Ecto.UUID.t() | nil,
+          project_id: Ecto.UUID.t() | nil,
           session_id: String.t() | nil,
           event_type: event_type() | nil,
           harness: String.t() | nil,
@@ -46,6 +47,10 @@ defmodule RepoBuilder.Logs.AgentLog do
     # Orchestrator-scoped persistence (issue-d): set instead of agent_id for an
     # orchestrator turn's events. Exactly one of the two is present (app-enforced).
     field :orchestrator_id, :binary_id
+    # Project attribution (issue per-project-cost-tracking): the project this row's spend
+    # belongs to, resolved from the bound session/orchestrator at write time. Nullable —
+    # NULL = unscoped (the platform / pre-feature rows), excluded from any project total.
+    field :project_id, :binary_id
     field :session_id, :string
     field :event_type, Ecto.Enum, values: @event_types
     field :harness, :string
@@ -73,6 +78,7 @@ defmodule RepoBuilder.Logs.AgentLog do
     |> cast(params, [
       :agent_id,
       :orchestrator_id,
+      :project_id,
       :session_id,
       :event_type,
       :harness,
@@ -85,6 +91,7 @@ defmodule RepoBuilder.Logs.AgentLog do
     |> validate_owner()
     |> foreign_key_constraint(:agent_id)
     |> foreign_key_constraint(:orchestrator_id)
+    |> foreign_key_constraint(:project_id)
   end
 
   # A log row belongs to EXACTLY ONE owner: a worker (agent_id) or an orchestrator

@@ -32,6 +32,14 @@ defmodule RepoBuilder.Orchestrator.ToolsTest do
     orch
   end
 
+  # Clear the global default roster for this test's scope (this module is async: false),
+  # so an unset tier has no inherited model to read through to.
+  defp without_global_default do
+    prior = Application.get_env(:repo_builder, :default_agent_models)
+    Application.put_env(:repo_builder, :default_agent_models, %{})
+    on_exit(fn -> Application.put_env(:repo_builder, :default_agent_models, prior) end)
+  end
+
   describe "create_agent" do
     test "creates a worker scoped to the orchestrator and broadcasts agent_created" do
       :ok = RepoBuilder.Dashboard.subscribe_events()
@@ -87,6 +95,9 @@ defmodule RepoBuilder.Orchestrator.ToolsTest do
 
     test "a category with no assigned model is rejected" do
       orch = orchestrator("fake")
+      # With no global default configured, the read-through fallback is exhausted, so an
+      # unassigned tier still surfaces the clear "no model selected" error (not a crash).
+      without_global_default()
 
       {:ok, _} =
         Orchestrators.set_agent_model(orch.id, "fast", %{"harness" => "fake", "model" => ""})
@@ -98,6 +109,16 @@ defmodule RepoBuilder.Orchestrator.ToolsTest do
                })
 
       assert reason =~ "no model selected for category fast"
+    end
+
+    test "a category with no per-project model inherits the global default and spawns" do
+      orch = orchestrator("fake")
+
+      assert {:ok, %{"model" => "fake-main"}} =
+               Tools.call("create_agent", orch.id, %{
+                 "name" => "x-#{uniq()}",
+                 "category" => "main"
+               })
     end
 
     test "duplicate name within one orchestrator is rejected" do
@@ -495,6 +516,8 @@ defmodule RepoBuilder.Orchestrator.ToolsTest do
   describe "get_config" do
     test "returns the orchestrator config, tier roster, and registered harnesses" do
       orch = orchestrator()
+      # No global default → tiers are genuinely unassigned (no inherited model).
+      without_global_default()
 
       assert {:ok, cfg} = Tools.call("get_config", orch.id, %{})
       assert %{"harness" => "fake"} = cfg["orchestrator"]
@@ -504,6 +527,15 @@ defmodule RepoBuilder.Orchestrator.ToolsTest do
       # Every tier is unassigned before any model is set.
       assert cfg["tiers"]["heavy"]["assigned"] == false
       assert cfg["tiers"]["fast"]["assigned"] == false
+    end
+
+    test "an unset tier reports the inherited global default with inherited? true" do
+      orch = orchestrator()
+
+      assert {:ok, cfg} = Tools.call("get_config", orch.id, %{})
+      assert cfg["tiers"]["main"]["assigned"] == true
+      assert cfg["tiers"]["main"]["model"] == "fake-main"
+      assert cfg["tiers"]["main"]["inherited?"] == true
     end
 
     test "a tier flips to assigned: true after set_agent_model/3" do

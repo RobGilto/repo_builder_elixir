@@ -17,7 +17,7 @@ defmodule RepoBuilder.CostCenter do
   import Ecto.Query, only: [from: 2, where: 3]
 
   alias RepoBuilder.Agents.Agent
-  alias RepoBuilder.CostCenter.{ModelPrice, Rollup, SpendRow, SpendSummary}
+  alias RepoBuilder.CostCenter.{ModelPrice, ProjectReport, Rollup, SpendRow, SpendSummary}
   alias RepoBuilder.Harness.Pricing
   alias RepoBuilder.Logs.AgentLog
   alias RepoBuilder.Repo
@@ -332,6 +332,120 @@ defmodule RepoBuilder.CostCenter do
     Decimal.add(actual, estimated || Decimal.new(0))
   end
 
+  # --- per-project spend (issue per-project-cost-tracking) ---
+
+  @doc """
+  A project's lifetime cost report (issue per-project-cost-tracking): total actual +
+  estimated spend, a per-model breakdown, the event count, and first/last activity. The
+  nil-vs-0 convention is preserved (an unpriced harness contributes its estimate).
+
+  `:include_hidden?` (default `false`) controls whether soft-hidden (cleared) rows are
+  counted — the panel shows a *display* total (hidden excluded) and can request the
+  *true-money* total (`include_hidden?: true`). The `hidden?` flag is always computed so
+  the UI can surface a "N cleared (restorable)" marker regardless.
+  """
+  @spec project_spend(Ecto.UUID.t(), keyword()) :: ProjectReport.t()
+  def project_spend(project_id, opts \\ []) do
+    include_hidden? = Keyword.get(opts, :include_hidden?, false)
+    rows = project_rows(project_id, nil, include_hidden?)
+
+    by_model =
+      rows
+      |> Enum.group_by(&(&1.model || "unknown"))
+      |> Enum.map(fn {model, group} ->
+        fold_bucket(model, Enum.map(group, &derive_spend_row/1))
+      end)
+      |> Enum.sort_by(&spend_total/1, {:desc, Decimal})
+
+    total =
+      Enum.reduce(by_model, Decimal.new(0), fn row, acc -> Decimal.add(acc, spend_total(row)) end)
+
+    %ProjectReport{
+      project_id: project_id,
+      total_usd: total,
+      estimated?: Enum.any?(by_model, &(&1.estimated_cost_usd != nil)),
+      by_model: by_model,
+      event_count: Enum.reduce(rows, 0, fn r, acc -> acc + to_int(r.event_count) end),
+      first_used: rows |> Enum.map(& &1.first_used_at) |> fold_datetime(:min),
+      last_used: rows |> Enum.map(& &1.last_used_at) |> fold_datetime(:max),
+      hidden?: project_has_hidden?(project_id)
+    }
+  end
+
+  @doc """
+  A project's spend across short windows — `:session` (since the caller-supplied
+  `:session_start`, all-time when `nil`), `:today`, `:week`, `:month` — each an actual +
+  estimated `Decimal` (hidden rows INCLUDED: real money, like `period_spend/1`). Windows
+  resolve in the operator display `:timezone`.
+  """
+  @spec project_period_spend(Ecto.UUID.t(), keyword()) :: %{
+          session: Decimal.t(),
+          today: Decimal.t(),
+          week: Decimal.t(),
+          month: Decimal.t()
+        }
+  def project_period_spend(project_id, opts \\ []) do
+    zone = resolve_zone(opts)
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+    starts = Timezones.period_starts(now, zone)
+
+    %{
+      session: scope_spend(:project, project_id, Keyword.get(opts, :session_start)),
+      today: scope_spend(:project, project_id, starts.today),
+      week: scope_spend(:project, project_id, starts.week),
+      month: scope_spend(:project, project_id, starts.month)
+    }
+  end
+
+  # Windowed (harness, provider, model) rollup for ONE project, carrying first/last
+  # activity. `include_hidden?` controls the soft-hide filter (display vs true-money).
+  @spec project_rows(Ecto.UUID.t(), DateTime.t() | nil, boolean()) :: [map()]
+  defp project_rows(project_id, since, include_hidden?) do
+    base =
+      from l in AgentLog,
+        where: not is_nil(l.usage) and l.project_id == ^project_id,
+        group_by: [l.harness, l.provider, l.model],
+        select: %{
+          harness: l.harness,
+          provider: l.provider,
+          model: l.model,
+          actual_cost_usd: sum(fragment("(?->>'cost_usd')::numeric", l.usage)),
+          input_tokens: fragment("COALESCE(SUM((?->>'input_tokens')::bigint), 0)", l.usage),
+          output_tokens: fragment("COALESCE(SUM((?->>'output_tokens')::bigint), 0)", l.usage),
+          cache_read: fragment("COALESCE(SUM((?->>'cache_read')::bigint), 0)", l.usage),
+          cache_creation: fragment("COALESCE(SUM((?->>'cache_creation')::bigint), 0)", l.usage),
+          event_count: count(l.id),
+          first_used_at: min(l.inserted_at),
+          last_used_at: max(l.inserted_at)
+        }
+
+    base
+    |> filter_hidden(include_hidden?)
+    |> since_filter(since)
+    |> Repo.all()
+  end
+
+  @spec project_has_hidden?(Ecto.UUID.t()) :: boolean()
+  defp project_has_hidden?(project_id) do
+    Repo.exists?(
+      from l in AgentLog,
+        where: l.project_id == ^project_id and l.hidden == true and not is_nil(l.usage)
+    )
+  end
+
+  # Fold a list of (maybe-nil) DateTimes to the min/max, or nil when all are nil.
+  @spec fold_datetime([DateTime.t() | nil], :min | :max) :: DateTime.t() | nil
+  defp fold_datetime(times, which) do
+    case Enum.reject(times, &is_nil/1) do
+      [] -> nil
+      present -> Enum.reduce(present, &pick_datetime(which, &1, &2))
+    end
+  end
+
+  @spec pick_datetime(:min | :max, DateTime.t(), DateTime.t()) :: DateTime.t()
+  defp pick_datetime(:min, a, b), do: if(DateTime.compare(a, b) == :lt, do: a, else: b)
+  defp pick_datetime(:max, a, b), do: if(DateTime.compare(a, b) == :gt, do: a, else: b)
+
   # --- scope spend (issue-budget-guardrails: Budget.Guard reconciliation source) ---
 
   @doc """
@@ -342,15 +456,21 @@ defmodule RepoBuilder.CostCenter do
     * `:global`       — all spend platform-wide.
     * `:orchestrator` — the orchestrator's own turns plus every worker it owns.
     * `:workflow`     — the run's `total_cost_usd` (no agent_logs link; `since` ignored).
+    * `:project`      — every `agent_logs` row stamped with that `project_id`
+      (issue per-project-cost-tracking); unscoped (NULL) rows are excluded.
 
   Unpriced (NULL-cost) rows contribute their *estimated* cost (so a runaway on an
   unpriced harness is still capped), preserving the nil-vs-0 convention via `derive_costs/5`.
   """
-  @spec scope_spend(:global | :orchestrator | :workflow, String.t(), DateTime.t() | nil) ::
+  @spec scope_spend(
+          :global | :orchestrator | :workflow | :project,
+          String.t(),
+          DateTime.t() | nil
+        ) ::
           Decimal.t()
   def scope_spend(:workflow, run_id, _since), do: Workflows.run_cost(run_id)
 
-  def scope_spend(scope, scope_id, since) when scope in [:global, :orchestrator] do
+  def scope_spend(scope, scope_id, since) when scope in [:global, :orchestrator, :project] do
     scope
     |> scope_window_rows(scope_id, since)
     |> Enum.map(&derive_spend_row/1)
@@ -361,7 +481,8 @@ defmodule RepoBuilder.CostCenter do
 
   # Windowed (harness, provider, model) rollup filtered to a scope (NO hidden filter —
   # real money), mirroring `window_rows/1` so `derive_spend_row/1` applies unchanged.
-  @spec scope_window_rows(:global | :orchestrator, String.t(), DateTime.t() | nil) :: [map()]
+  @spec scope_window_rows(:global | :orchestrator | :project, String.t(), DateTime.t() | nil) ::
+          [map()]
   defp scope_window_rows(scope, scope_id, since) do
     base =
       from l in AgentLog,
@@ -385,7 +506,7 @@ defmodule RepoBuilder.CostCenter do
     |> Repo.all()
   end
 
-  @spec scope_filter(Ecto.Queryable.t(), :global | :orchestrator, String.t()) ::
+  @spec scope_filter(Ecto.Queryable.t(), :global | :orchestrator | :project, String.t()) ::
           Ecto.Queryable.t()
   defp scope_filter(query, :global, _scope_id), do: query
 
@@ -393,6 +514,11 @@ defmodule RepoBuilder.CostCenter do
     worker_ids = from(a in Agent, where: a.orchestrator_id == ^id, select: a.id)
     where(query, [l], l.orchestrator_id == ^id or l.agent_id in subquery(worker_ids))
   end
+
+  # Project scope (issue per-project-cost-tracking): the `project_id` is stamped directly
+  # on each cost row at write time, so the filter is a plain column predicate (unscoped
+  # NULL rows never match a specific project).
+  defp scope_filter(query, :project, id), do: where(query, [l], l.project_id == ^id)
 
   @spec since_filter(Ecto.Queryable.t(), DateTime.t() | nil) :: Ecto.Queryable.t()
   defp since_filter(query, nil), do: query

@@ -92,6 +92,9 @@ defmodule RepoBuilder.Session.Server do
       # When set (issue-c), this session is an ORCHESTRATOR: the adapter's optional
       # `orchestrator_spawn/2` merges extra argv/env onto the base command. nil for
       # every worker session (the worker spawn path is untouched).
+      # The project this session belongs to (issue per-project-cost-tracking) — stamped
+      # onto each persisted `agent_logs` row so cost is attributable to the project.
+      field :project_id, Ecto.UUID.t(), enforce: false
       field :orchestrator_ctx, map(), enforce: false
       # When set (issue-d), canonical events also persist to `agent_logs` keyed by
       # this orchestrator id (parallel to the worker `agent_db_id` gate). nil for
@@ -175,6 +178,7 @@ defmodule RepoBuilder.Session.Server do
       marker: generate_token(),
       idle_ms: cfg_value(opts, cfg, :idle_ms, 300_000),
       max_line_bytes: cfg_value(opts, cfg, :max_line_bytes, 1_048_576),
+      project_id: opts[:project_id],
       orchestrator_ctx: opts[:orchestrator_ctx],
       orchestrator_db_id: opts[:orchestrator_db_id],
       broadcast_feed?: opts[:broadcast_feed?] != false
@@ -637,19 +641,27 @@ defmodule RepoBuilder.Session.Server do
              agent_id: Ecto.UUID.t(),
              session_id: String.t(),
              provider: String.t() | nil,
-             model: String.t() | nil
+             model: String.t() | nil,
+             project_id: Ecto.UUID.t() | nil
            }}
           | {:orchestrator,
              %{
                orchestrator_id: Ecto.UUID.t(),
                session_id: String.t(),
                provider: String.t() | nil,
-               model: String.t() | nil
+               model: String.t() | nil,
+               project_id: Ecto.UUID.t() | nil
              }}
           | nil
   defp persist_target(%State{agent_db_id: id} = state) when is_binary(id) do
     {:agent,
-     %{agent_id: id, session_id: state.session_id, provider: state.provider, model: state.model}}
+     %{
+       agent_id: id,
+       session_id: state.session_id,
+       provider: state.provider,
+       model: state.model,
+       project_id: state.project_id
+     }}
   end
 
   defp persist_target(%State{orchestrator_db_id: id} = state) when is_binary(id) do
@@ -658,7 +670,8 @@ defmodule RepoBuilder.Session.Server do
        orchestrator_id: id,
        session_id: state.session_id,
        provider: state.provider,
-       model: state.model
+       model: state.model,
+       project_id: state.project_id
      }}
   end
 

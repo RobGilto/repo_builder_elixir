@@ -104,6 +104,17 @@ config :repo_builder, :harnesses, %{
   }
 }
 
+# Deterministic global default worker-model roster (issue per-project-agent-models) so
+# category-based spawning resolves without a DB row or manual config. All four tiers map
+# to the keyless `fake` harness; per-project overrides still win. Tests that assert the
+# "no global default → no model selected" path clear this via app-env within their scope.
+config :repo_builder, :default_agent_models, %{
+  "fast" => %{"harness" => "fake", "provider" => nil, "model" => "fake-fast"},
+  "main" => %{"harness" => "fake", "provider" => nil, "model" => "fake-main"},
+  "heavy" => %{"harness" => "fake", "provider" => nil, "model" => "fake-heavy"},
+  "leader" => %{"harness" => "fake", "provider" => nil, "model" => "fake-leader"}
+}
+
 # The default orchestrator runs on the keyless Fake harness in tests; the MCP base
 # url points at the (server: false) test endpoint for controller/contract tests.
 config :repo_builder, :orchestrator,

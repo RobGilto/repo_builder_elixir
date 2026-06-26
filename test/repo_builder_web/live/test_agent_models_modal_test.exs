@@ -12,6 +12,16 @@ defmodule RepoBuilderWeb.AgentModelsModalTest do
 
   alias RepoBuilder.Orchestrators
 
+  # These tests assert the count/state of EXPLICITLY-set tiers. Clear the global default
+  # roster (this module is async: false) so inherited defaults don't inflate the count;
+  # per-project/orchestrator overrides are what's under test here.
+  setup do
+    prior = Application.get_env(:repo_builder, :default_agent_models)
+    Application.put_env(:repo_builder, :default_agent_models, %{})
+    on_exit(fn -> Application.put_env(:repo_builder, :default_agent_models, prior) end)
+    :ok
+  end
+
   describe "agent_models_modal live-state" do
     test "LiveView updates agent_model_rows when it receives {:orchestrator_updated}", %{
       conn: conn

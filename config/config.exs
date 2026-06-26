@@ -273,6 +273,12 @@ config :repo_builder, :alerting, cost_threshold_usd: 10.0
 # `:alerting` and reconciles spent-so-far from CostCenter on start (runtime-overridable).
 config :repo_builder, :budget, refresh_ms: 60_000, reconcile_on_boot?: true
 
+# Global default worker-model roster (issue per-project-agent-models). Compile-time
+# fallback for `RepoBuilder.Settings.default_agent_models/0` when no `app_settings` row
+# exists yet (first boot). Empty by default — the operator sets it in Settings → Default
+# Models. Shape: `%{category => %{"harness" => h, "provider" => p | nil, "model" => m}}`.
+config :repo_builder, :default_agent_models, %{}
+
 # Context-window sizes (tokens) for orchestrator/worker usage-% reporting. This map is
 # the operator OVERRIDE layer only — `RepoBuilder.Orchestrator.ContextWindow` resolves a
 # `{harness, model}` window as: this config override → derived/live source (pi's

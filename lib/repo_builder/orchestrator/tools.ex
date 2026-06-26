@@ -194,9 +194,13 @@ defmodule RepoBuilder.Orchestrator.Tools do
           | {:error, reason()}
   defp resolve_category(orchestrator_id, category) do
     with {:ok, orchestrator} <- Orchestrators.fetch(orchestrator_id) do
-      entry = Map.get(Orchestrators.agent_models(orchestrator), category, %{})
+      # Read through to the global default: an unset (or blank-model) per-project tier
+      # inherits `Settings.default_agent_models()`, so a freshly registered project can
+      # spawn category workers without manual configuration. Only an exhausted fallback
+      # (no project entry AND no default) returns the clear "no model selected" error.
+      {entry, _source} = Orchestrators.effective_agent_model(orchestrator, category)
 
-      case blank_to_nil(entry["model"]) do
+      case blank_to_nil(entry && entry["model"]) do
         nil ->
           {:error, "no model selected for category #{category}"}
 
@@ -937,11 +941,9 @@ defmodule RepoBuilder.Orchestrator.Tools do
   # :underspecs (mirrors `provider_config/1`).
   defp get_config(orchestrator_id) do
     with {:ok, orch} <- fetch_orchestrator(orchestrator_id) do
-      roster = Orchestrators.agent_models(orch)
-
       tiers =
         Map.new(Orchestrators.agent_categories(), fn category ->
-          {category, tier_view(category, roster)}
+          {category, tier_view(category, orch)}
         end)
 
       {:ok,
@@ -1192,16 +1194,25 @@ defmodule RepoBuilder.Orchestrator.Tools do
     end
   end
 
-  @spec tier_view(String.t(), %{optional(String.t()) => map()}) :: map()
-  defp tier_view(category, roster) do
-    entry = Map.get(roster, category, %{})
+  # The EFFECTIVE view of one worker tier: the per-project assignment when set, else the
+  # inherited global default. `inherited?` is true when the model came from the default
+  # (so the console/MCP caller can show an "inherited" indicator); `assigned` stays true
+  # whenever a model resolves at all (project or default), since that is what `create_agent`
+  # can spawn into.
+  # Inference-only spec — the concrete tier map (with boolean `assigned`/`inherited?`)
+  # narrows below a hand-written `map()` spec, which Dialyzer rejects as a supertype under
+  # :underspecs (mirrors `provider_config/1`/`available_models/1`).
+  defp tier_view(category, orchestrator) do
+    {entry, source} = Orchestrators.effective_agent_model(orchestrator, category)
+    entry = entry || %{}
     model = blank_to_nil(entry["model"])
 
     %{
       "harness" => entry["harness"],
       "provider" => entry["provider"],
       "model" => model,
-      "assigned" => not is_nil(model)
+      "assigned" => not is_nil(model),
+      "inherited?" => not is_nil(model) and source == :default
     }
   end
 

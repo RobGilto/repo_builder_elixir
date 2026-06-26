@@ -110,12 +110,13 @@ defmodule RepoBuilder.Workflows do
 
   def add_run_cost(%WorkflowRun{} = run, %Decimal{} = cost) do
     # Metadata carries the scope keys so Budget.Guard (issue-budget-guardrails) can
-    # attribute this spend to the {:global} and {:workflow, run_id} scopes; the
-    # alert-only Telemetry.Alerting consumer still reads `run_id` unchanged.
+    # attribute this spend to the {:global}, {:workflow, run_id} and {:project, project_id}
+    # scopes; the alert-only Telemetry.Alerting consumer still reads `run_id` unchanged.
     :telemetry.execute([:repo_builder, :cost, :recorded], %{amount: Decimal.to_float(cost)}, %{
       run_id: run.id,
       workflow_run_id: run.id,
       workflow_id: run.workflow_id,
+      project_id: run.project_id,
       orchestrator_id: nil
     })
 

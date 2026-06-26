@@ -47,6 +47,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
     Orchestrators,
     Projects,
     Session,
+    Settings,
     WorkflowEngine,
     Workflows
   }
@@ -107,6 +108,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
         configured_tier_count: 0,
         agent_models_updated_at: nil,
         agent_model_saved: false,
+        # Settings → Default Models tab (issue per-project-agent-models): the operator's
+        # global default worker roster new projects inherit. Loaded when the tab opens.
+        default_model_rows: [],
+        default_model_saved: false,
         # System-prompt settings: safe defaults for the disconnected render (mount
         # runs twice); the connected socket reflects the orchestrator's real values.
         orchestrator_system_prompt: "",
@@ -136,6 +141,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
         template_rows: [],
         selected_template: nil,
         template_versions: [],
+        # Active project's cost report for the Cost Center tab (issue per-project-cost-
+        # tracking): %{report, periods} when a project is selected, else nil. Lazily loaded.
+        project_report: nil,
         # Cost Center settings tab (issue-cost-center). Lazily loaded when the tab is
         # selected so an ordinary mount never runs the rollup aggregation.
         cost_rollups: [],
@@ -404,11 +412,13 @@ defmodule RepoBuilderWeb.ConsoleLive do
   # current {harness, provider, model} plus the option lists derived from them.
   @spec agent_model_rows(RepoBuilder.Orchestrator.Orchestrator.t()) :: [map()]
   def agent_model_rows(orchestrator) do
-    roster = Orchestrators.agent_models(orchestrator)
     harnesses = orchestrator_harness_options()
 
     Enum.map(Orchestrators.agent_categories(), fn category ->
-      entry = Map.get(roster, category, %{})
+      # Show the EFFECTIVE tier: the per-project assignment when set, else the inherited
+      # global default. `inherited?` drives the "inherited" badge + "reset" affordance.
+      {entry, source} = Orchestrators.effective_agent_model(orchestrator, category)
+      entry = entry || %{}
       harness = entry["harness"]
       provider = entry["provider"]
       model = entry["model"]
@@ -425,6 +435,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
         harness: harness,
         provider: provider,
         model: model,
+        inherited?: not is_nil(model) and source == :default,
         harness_options: harnesses,
         provider_options: if(harness, do: provider_options_for(harness), else: []),
         model_options: model_options
@@ -436,6 +447,38 @@ defmodule RepoBuilderWeb.ConsoleLive do
   @spec configured_tier_count([map()]) :: non_neg_integer()
   def configured_tier_count(rows) do
     Enum.count(rows, fn row -> not is_nil(row.model) and row.model != "" end)
+  end
+
+  @doc """
+  Rows for the Settings → Default Models tab: one per worker category, reading the
+  operator's GLOBAL default roster (`RepoBuilder.Settings.default_agent_models/0`) — not
+  any orchestrator. Same `{harness, provider, model}` + option-list shape as
+  `agent_model_rows/1` so the same row component renders it.
+  """
+  @spec default_model_rows() :: [map()]
+  def default_model_rows do
+    roster = Settings.default_agent_models()
+    harnesses = orchestrator_harness_options()
+
+    Enum.map(Orchestrators.agent_categories(), fn category ->
+      entry = Map.get(roster, category, %{})
+      harness = entry["harness"]
+      provider = entry["provider"]
+      model = entry["model"]
+
+      base = if(harness, do: model_options_for(harness, provider), else: [])
+      model_options = if(model in [nil, "" | base], do: base, else: [model | base])
+
+      %{
+        category: category,
+        harness: harness,
+        provider: provider,
+        model: model,
+        harness_options: harnesses,
+        provider_options: if(harness, do: provider_options_for(harness), else: []),
+        model_options: model_options
+      }
+    end)
   end
 
   @spec provider_options_for(String.t()) :: [String.t()]
@@ -531,7 +574,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
         {"#{run.current_step || "run"} · #{String.slice(run.id, 0, 8)} (#{run.status})", run.id}
       end
 
-    %{"orchestrator" => orchestrators, "workflow" => workflows}
+    projects = for project <- Projects.list_projects(), do: {project.name, project.id}
+
+    %{"orchestrator" => orchestrators, "workflow" => workflows, "project" => projects}
   end
 
   # Re-read the live snapshot + durable caps after a breaker event or operator action.
@@ -1062,6 +1107,88 @@ defmodule RepoBuilderWeb.ConsoleLive do
     end
   end
 
+  # Clear a worker category's per-project override so the tier re-inherits the global
+  # default (the "reset to default" affordance in the agent-models modal).
+  def handle_event("clear_agent_model", %{"category" => category}, socket) do
+    case socket.assigns.orchestrator_id do
+      nil ->
+        {:noreply, put_flash(socket, :error, "No orchestrator available")}
+
+      id ->
+        case Orchestrators.clear_agent_model(id, category) do
+          {:ok, orchestrator} ->
+            {:noreply, assign_orchestrator_selection(socket, orchestrator)}
+
+          {:error, _reason} ->
+            {:noreply, put_flash(socket, :error, "Could not reset agent model")}
+        end
+    end
+  end
+
+  # Save one tier of the GLOBAL default roster (Settings → Default Models tab). Same
+  # cascade as `set_agent_model` (harness change clears provider+model). Persists via the
+  # Settings context; new projects inherit this default.
+  def handle_event("set_default_agent_model", %{"category" => category} = params, socket) do
+    stored = Enum.find(socket.assigns.default_model_rows, %{}, &(&1.category == category))
+    attrs = agent_model_attrs(params, stored)
+
+    case Settings.set_default_agent_model(
+           category,
+           attrs["harness"],
+           attrs["provider"],
+           attrs["model"]
+         ) do
+      {:ok, _roster} ->
+        Process.send_after(self(), :clear_default_model_saved, 2_000)
+
+        {:noreply,
+         socket
+         |> assign(:default_model_rows, default_model_rows())
+         |> assign(:default_model_saved, true)}
+
+      {:error, :invalid_category} ->
+        {:noreply, put_flash(socket, :error, "Unknown worker category")}
+
+      {:error, :unknown_harness} ->
+        {:noreply, put_flash(socket, :error, "Pick a registered harness first")}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "Could not save default model")}
+    end
+  end
+
+  # Clear (soft-hide) the active project's cost rows — recoverable via "Restore".
+  def handle_event("clear_project_costs", _params, socket) do
+    case socket.assigns[:active_project_id] do
+      id when is_binary(id) ->
+        count = Logs.hide_logs_for_project(id)
+
+        {:noreply,
+         socket
+         |> load_cost_center()
+         |> put_flash(:info, "Cleared #{count} cost row(s) (restorable)")}
+
+      _ ->
+        {:noreply, put_flash(socket, :error, "Select a project first")}
+    end
+  end
+
+  # Restore (reveal) the active project's previously-cleared cost rows.
+  def handle_event("restore_project_costs", _params, socket) do
+    case socket.assigns[:active_project_id] do
+      id when is_binary(id) ->
+        count = Logs.release_hidden_logs_for_project(id)
+
+        {:noreply,
+         socket
+         |> load_cost_center()
+         |> put_flash(:info, "Restored #{count} cost row(s)")}
+
+      _ ->
+        {:noreply, put_flash(socket, :error, "Select a project first")}
+    end
+  end
+
   # Save the custom system prompt + mode. Blank text persists as nil (spawn falls
   # back to the generated default). The mode comes from the hidden field (current
   # toggle state); never `String.to_atom/1` on operator input.
@@ -1454,6 +1581,12 @@ defmodule RepoBuilderWeb.ConsoleLive do
     selected = settings_tab(tab)
     socket = assign(socket, :settings_tab, selected)
     socket = if selected == :cost_center, do: load_cost_center(socket), else: socket
+
+    socket =
+      if selected == :default_models,
+        do: assign(socket, :default_model_rows, default_model_rows()),
+        else: socket
+
     {:noreply, socket}
   end
 
@@ -2455,6 +2588,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   def handle_info(:clear_agent_model_saved, socket) do
     {:noreply, assign(socket, :agent_model_saved, false)}
+  end
+
+  def handle_info(:clear_default_model_saved, socket) do
+    {:noreply, assign(socket, :default_model_saved, false)}
   end
 
   def handle_info(:clear_release_notice, socket) do
@@ -3479,9 +3616,12 @@ defmodule RepoBuilderWeb.ConsoleLive do
         template_versions={@template_versions}
         cost_rollups={@cost_rollups}
         period_spend={@period_spend}
+        project_report={@project_report}
         price_rows={@price_rows}
         price_form={@price_form}
         editing_price_id={@editing_price_id}
+        default_model_rows={@default_model_rows}
+        default_model_saved={@default_model_saved}
       />
     </div>
     """
@@ -3891,12 +4031,20 @@ defmodule RepoBuilderWeb.ConsoleLive do
   defp to_chat_width(_other), do: :sm
 
   @spec settings_tab(String.t()) ::
-          :general | :appearance | :about | :prompt | :templates | :cost_center | :logs
+          :general
+          | :appearance
+          | :about
+          | :prompt
+          | :templates
+          | :cost_center
+          | :default_models
+          | :logs
   defp settings_tab("appearance"), do: :appearance
   defp settings_tab("about"), do: :about
   defp settings_tab("prompt"), do: :prompt
   defp settings_tab("templates"), do: :templates
   defp settings_tab("cost_center"), do: :cost_center
+  defp settings_tab("default_models"), do: :default_models
   defp settings_tab("logs"), do: :logs
   defp settings_tab(_other), do: :general
 
@@ -3915,8 +4063,26 @@ defmodule RepoBuilderWeb.ConsoleLive do
     assign(socket,
       cost_rollups: CostCenter.rollup(include_hidden?: socket.assigns.show_hidden?),
       period_spend: CostCenter.period_spend(timezone: socket.assigns.timezone),
-      price_rows: CostCenter.list_prices()
+      price_rows: CostCenter.list_prices(),
+      project_report: project_report_for(socket)
     )
+  end
+
+  # The active project's lifetime cost report + period strip for the Cost Center tab
+  # (issue per-project-cost-tracking). `nil` when no project is selected (platform view).
+  @spec project_report_for(Phoenix.LiveView.Socket.t()) ::
+          %{report: CostCenter.ProjectReport.t(), periods: map()} | nil
+  defp project_report_for(socket) do
+    case socket.assigns[:active_project_id] do
+      id when is_binary(id) ->
+        %{
+          report: CostCenter.project_spend(id),
+          periods: CostCenter.project_period_spend(id, timezone: socket.assigns.timezone)
+        }
+
+      _ ->
+        nil
+    end
   end
 
   @spec reset_price_form(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()

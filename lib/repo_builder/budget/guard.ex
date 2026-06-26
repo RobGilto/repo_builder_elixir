@@ -497,7 +497,8 @@ defmodule RepoBuilder.Budget.Guard do
     scope_refs =
       Scope.scopes_for(%{
         orchestrator_id: Map.get(metadata, :orchestrator_id),
-        workflow_run_id: Map.get(metadata, :workflow_run_id)
+        workflow_run_id: Map.get(metadata, :workflow_run_id),
+        project_id: Map.get(metadata, :project_id)
       })
 
     note_spend(amount, scope_refs, server)
@@ -535,6 +536,10 @@ defmodule RepoBuilder.Budget.Guard do
     now = DateTime.utc_now()
     %{now | day: 1, hour: 0, minute: 0, second: 0, microsecond: {0, 6}}
   end
+
+  # A :session window has no calendar boundary — it counts purely from the operator's
+  # `reset_at` (via window_start/1's `later/2`). With no reset it spans the cap's lifetime.
+  defp since_for(:session), do: nil
 
   defp since_for(_total), do: nil
 

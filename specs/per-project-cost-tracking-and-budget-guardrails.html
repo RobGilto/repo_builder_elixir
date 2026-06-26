@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan: Per-Project Cost Tracking &amp; Budget Guardrails</title>
+<style>
+  :root {
+    /* Ledger / finance identity — focused, minimal, professional */
+    --ink:        #0e1a17;
+    --paper:      #f6f8f7;
+    --panel:      #ffffff;
+    --muted:      #5d6b66;
+    --line:       #d8e0dc;
+    --accent:     #0f8a6a;   /* money / actuals */
+    --accent-2:   #126e8c;   /* attribution / data */
+    --warn:       #c9881f;   /* warn ratio */
+    --stop:       #b23b3b;   /* hard-stop / over-cap */
+    --code-bg:    #0e1a17;
+    --code-fg:    #d6efe6;
+    --radius:     12px;
+    --shadow:     0 1px 2px rgba(14,26,23,.06), 0 8px 24px rgba(14,26,23,.06);
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Inter", "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); line-height: 1.6; font-size: 16px;
+  }
+  main { max-width: 980px; margin: 0 auto; padding: 3rem 1.5rem 6rem; }
+  header h1 { font-size: 2.1rem; line-height: 1.15; margin: 0 0 .75rem; letter-spacing: -.02em; }
+  h2 { font-size: 1.5rem; margin: 2.6rem 0 .9rem; letter-spacing: -.01em; padding-bottom: .4rem; border-bottom: 2px solid var(--line); }
+  h3 { font-size: 1.18rem; margin: 1.6rem 0 .6rem; }
+  h4 { font-size: 1.02rem; margin: 1.2rem 0 .4rem; color: var(--accent-2); }
+  p { margin: .5rem 0; }
+  a { color: var(--accent-2); }
+  code { font-family: var(--mono); font-size: .88em; background: #e9efec; color: #0b3b30; padding: .1em .38em; border-radius: 5px; }
+  pre { background: var(--code-bg); color: var(--code-fg); padding: 1rem 1.1rem; border-radius: var(--radius); overflow-x: auto; font-size: .82rem; line-height: 1.55; }
+  pre code { background: none; color: inherit; padding: 0; }
+  section { scroll-margin-top: 1rem; }
+
+  /* metadata */
+  details.meta { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: .5rem 1rem; margin: 1rem 0 0; box-shadow: var(--shadow); }
+  details.meta summary { cursor: pointer; font-weight: 600; color: var(--muted); }
+  details.meta dl { display: grid; grid-template-columns: max-content 1fr; gap: .3rem 1.2rem; margin: .8rem 0 .3rem; font-size: .85rem; }
+  details.meta dt { color: var(--muted); font-variant: small-caps; letter-spacing: .03em; }
+  details.meta dd { margin: 0; font-family: var(--mono); font-size: .8rem; word-break: break-word; }
+
+  /* figures / images */
+  figure { margin: 1.6rem 0; text-align: center; }
+  figure img { max-width: 100%; height: auto; border-radius: var(--radius); border: 1px solid var(--line); box-shadow: var(--shadow); }
+  figcaption { color: var(--muted); font-size: .85rem; margin-top: .6rem; font-style: italic; }
+  .img-todo { border: 1px dashed var(--line); border-radius: var(--radius); padding: 2.2rem 1rem; color: var(--muted); background: repeating-linear-gradient(45deg, #fff, #fff 12px, #f1f5f3 12px, #f1f5f3 24px); font-size: .85rem; }
+
+  /* hero */
+  .hero { margin-top: 1.6rem; }
+
+  /* callouts */
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem 1.2rem; box-shadow: var(--shadow); }
+  .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 720px) { .twocol { grid-template-columns: 1fr; } }
+
+  /* files */
+  .files ul { list-style: none; padding: 0; }
+  .files li { padding: .35rem 0; border-bottom: 1px dashed var(--line); }
+  .tag { display: inline-block; font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: .12em .5em; border-radius: 999px; vertical-align: middle; margin-right: .35rem; }
+  .tag.existing { background: #e2eef4; color: var(--accent-2); }
+  .tag.new { background: #e3f3ec; color: var(--accent); }
+
+  /* phases */
+  .phase { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--accent-2); border-radius: var(--radius); padding: 1.2rem 1.4rem; margin: 1.4rem 0; box-shadow: var(--shadow); }
+  .phase h3 { margin-top: .2rem; }
+  code.status { background: var(--ink); color: #fff; font-weight: 700; padding: .05em .45em; border-radius: 5px; }
+  ul.checklist { list-style: none; padding-left: 0; }
+  ul.checklist li { padding: .28rem 0 .28rem 0; }
+  ul.checklist li code.status { margin-right: .5rem; }
+  .loop { margin-top: .9rem; padding: .7rem .9rem; background: #fff7e8; border: 1px solid #f0dcae; border-radius: 8px; font-size: .9rem; }
+
+  /* axes table */
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .9rem; }
+  th, td { text-align: left; padding: .55rem .7rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: #eef3f1; font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+
+  /* questionables / amendments */
+  #questionables details, #amendments details { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: .6rem 1rem; margin: .6rem 0; box-shadow: var(--shadow); }
+  #questionables summary, #amendments summary { cursor: pointer; font-weight: 600; }
+  .qa-answer { color: var(--muted); margin-top: .6rem; }
+  .badge { font-size: .72rem; font-weight: 700; padding: .1em .5em; border-radius: 999px; margin-left: .4rem; }
+  .badge.A { background: #e3f3ec; color: var(--accent); }
+  .badge.B { background: #fcf0d9; color: var(--warn); }
+</style>
+</head>
+<body>
+<main>
+
+  <!-- ===== HEADER + UPDATABLE METADATA ===== -->
+  <header>
+    <h1>Per-Project Cost Tracking &amp; Budget Guardrails</h1>
+    <p class="panel">Make cost a <strong>first-class property of a project</strong>: attribute every dollar to the project that spent it, give the operator a full per-project spend history they can clear and restore, and replace the single global alert threshold with <strong>session &amp; daily guardrails</strong> that stop a build before it runs away.</p>
+    <details class="meta">
+      <summary>Metadata</summary>
+      <dl>
+        <dt>created</dt>      <dd>2026-06-26</dd>
+        <dt>modified</dt>     <dd>2026-06-26</dd>
+        <dt>commits</dt>      <dd>—</dd>
+        <dt>agent name</dt>   <dd>claude-opus-4-8</dd>
+        <dt>session id</dt>   <dd>229d0d74-81a2-407f-9c03-eda995be618f</dd>
+        <dt>back refs</dt>    <dd>specs/orchestrator-project-binding-and-pinned-workers.html, specs/agentic-plugin-system-foundation.html</dd>
+        <dt>forward refs</dt> <dd>—</dd>
+      </dl>
+    </details>
+  </header>
+
+  <!-- Hero image — synced to the :root visual identity. -->
+  <figure class="hero">
+    <img src="per-project-cost-tracking-and-budget-guardrails/hero.png" alt="Per-project ledger panel beside a session/daily guardrail gauge">
+
+    <figcaption>Two axes: a durable per-project spend ledger (left) and short-window session/daily guardrails (right).</figcaption>
+  </figure>
+
+  <!-- ===== PURPOSE / PROBLEM / SOLUTION ===== -->
+  <section id="purpose">
+    <h2>Purpose</h2>
+    <p>When a repository is built with AI, the spend belongs to <em>that project</em> — there is a complete cost history for the work, from first plan to last commit. Today the platform records cost by harness/provider/model and by global/orchestrator/workflow scope, but <strong>not by project</strong>, and the only ceiling is one global dollar threshold that merely logs a warning. This plan reframes cost around the project: per-project history (with clear/restore), genuinely useful reporting, and session/daily budget guardrails so the operator cannot accidentally go overboard in a sitting or a day.</p>
+  </section>
+
+  <section id="problem">
+    <h2>Problem</h2>
+    <p>The cost subsystem is well-factored but project-blind, and its only guardrail is the wrong shape:</p>
+    <ul>
+      <li><strong>No project attribution.</strong> Cost lives in <code>agent_logs.usage.cost_usd</code>, but <code>agent_logs</code> has <em>no</em> <code>project_id</code>. <code>CostCenter.scope_spend/3</code> and <code>Budget.Scope</code> only know <code>:global</code>, <code>:orchestrator</code>, <code>:workflow</code> — there is no <code>:project</code> scope. So "what did this project cost?" is unanswerable from the ledger.</li>
+      <li><strong>Clear is global, not per-project.</strong> The console CLEAR action soft-hides rows via <code>agent_logs.hidden</code> across the board (or by agent); there is no way to clear or restore the pricing for <em>one</em> project.</li>
+      <li><strong>Reporting is vendor-shaped, not project-shaped.</strong> <code>spend_summary_table</code> shows today/week/month folded by harness/provider; useful for vendor accounting, useless for "how much has Project X consumed over its lifetime."</li>
+      <li><strong>The "overall alerting" doesn't make sense.</strong> <code>Telemetry.Alerting</code> logs a warning when a single recorded amount exceeds one global <code>:cost_threshold_usd</code>. A platform-wide threshold can't protect a single project's budget and can't stop a runaway sitting. <code>Project.budget_cap_usd</code> already exists but is only checked at <em>plan time</em> in <code>PlanningLive</code> — never enforced live by <code>Budget.Guard</code>.</li>
+    </ul>
+    <figure>
+      <img src="per-project-cost-tracking-and-budget-guardrails/problem.png" alt="Cost rows funnel into one global bucket; the project dimension is missing">
+
+      <figcaption>Every dollar funnels through one telemetry event into global/vendor buckets — the project dimension and live caps are missing.</figcaption>
+    </figure>
+  </section>
+
+  <section id="solution">
+    <h2>Solution</h2>
+    <p>Split the redesign along the two axes the user actually described, and reuse the existing seams rather than rebuild them. All cost already funnels through one telemetry event <code>[:repo_builder, :cost, :recorded]</code> and one durable ledger (<code>agent_logs</code>) — we add a project dimension to both, then layer reporting and guardrails on top.</p>
+
+    <table>
+      <thead><tr><th>Axis</th><th>What it answers</th><th>Lifetime</th><th>Mechanism</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>A — Attribution &amp; History</strong> <span class="badge A">durable</span></td>
+          <td>"How much has this project cost, all-time, by model?"</td>
+          <td>Never resets; full project history. Clear = soft-hide; Restore = reveal.</td>
+          <td><code>project_id</code> on <code>agent_logs</code> + <code>CostCenter.project_spend/2</code> + per-project clear/restore.</td>
+        </tr>
+        <tr>
+          <td><strong>B — Guardrails</strong> <span class="badge B">windowed</span></td>
+          <td>"Am I about to overspend in this sitting / today?"</td>
+          <td>Resets per session and per day; warn → pause → hard-stop.</td>
+          <td>New <code>:project</code> scope + <code>:session</code>/<code>:daily</code> periods enforced live by <code>Budget.Guard</code>, seeded from <code>Project.budget_cap_usd</code>. Retire the legacy global alert.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>Concretely:</p>
+    <ol>
+      <li><strong>Stamp the project onto cost.</strong> Add a nullable <code>project_id</code> to <code>agent_logs</code> (and into the cost telemetry metadata), resolved from the bound orchestrator/agent at write time. Add <code>:project</code> to <code>Budget.Scope</code> and a <code>scope_spend(:project, id, …)</code> clause.</li>
+      <li><strong>Report per project.</strong> <code>CostCenter.project_spend/2</code> returns lifetime total + by-model rollup + first/last activity; <code>project_period_spend/2</code> returns session/today/week windows. Surface both in a per-project Cost panel.</li>
+      <li><strong>Clear &amp; restore per project.</strong> <code>Logs.hide_logs_for_project/1</code> and <code>release_hidden_logs_for_project/1</code> with explicit UI buttons; the display total honors the hidden flag while the true-money total remains recoverable.</li>
+      <li><strong>Guardrails replace the global alert.</strong> Wire <code>Project.budget_cap_usd</code> into <code>Budget.Guard</code> as a live <code>:project</code>/<code>:total</code> cap; add operator-set <code>:session</code> and <code>:daily</code> caps; retire <code>Telemetry.Alerting</code>'s global threshold (fold it into a seeded Budget cap).</li>
+    </ol>
+
+    <figure>
+      <img src="per-project-cost-tracking-and-budget-guardrails/solution.png" alt="One cost event feeds two lanes: durable history and windowed guardrails">
+
+      <figcaption>One shared cost event feeds two lanes: a durable per-project history and short-window session/daily guardrails.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== RELEVANT FILES ===== -->
+  <section id="files" class="files">
+    <h2>Relevant Files</h2>
+
+    <h3>Existing Files</h3>
+    <ul>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/logs/agent_log.ex</code> — durable cost ledger row (has <code>usage</code>, <code>hidden</code>; needs <code>project_id</code>).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/logs.ex</code> — persistence + hide/reveal API (<code>hide_all_logs</code>, <code>release_hidden_logs</code>, <code>hide_logs_for_agents</code>); add project-scoped variants and project stamping in <code>persist_event/2</code>/<code>persist_orchestrator_event/2</code>.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/cost_center.ex</code> — rates + actuals rollup; add <code>:project</code> to <code>scope_spend/3</code> and new <code>project_spend/2</code> / <code>project_period_spend/2</code>.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/cost_center/spend_summary.ex</code> — <code>SpendRow</code>/<code>SpendSummary</code> structs; add a project report struct (or reuse).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/budget/scope.ex</code> — scope vocabulary; add <code>:project</code> member.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/budget/cap.ex</code> — <code>budgets</code> schema; add <code>:session</code> period and allow <code>:project</code> scope.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/budget/guard.ex</code> — live circuit breaker; enforce <code>:project</code> caps + session/daily windows; resolve project from cost metadata.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/budget.ex</code> — caps CRUD + <code>seed_default_cap/0</code>; add session-reset + project-cap seeding from <code>Project.budget_cap_usd</code>.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/telemetry/alerting.ex</code> — legacy global threshold to retire/fold into Budget.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator.ex</code> &amp; <code>lib/repo_builder/orchestrator/server.ex</code> — emit the cost event; add <code>project_id</code> to metadata.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/workflows.ex</code> — <code>add_run_cost/2</code> emits the cost event for ADW runs; add <code>project_id</code> to metadata.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/projects/project.ex</code> — has <code>budget_cap_usd</code>; the source of the live project cap.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/live/console_live.ex</code> — Cost Center + Budget assigns/handlers; add per-project panel + clear/restore + session controls.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/components/console_components.ex</code> — cost/budget markup; add project cost panel + session/daily gauges.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/live/planning_live.ex</code> — already reads <code>project.budget_cap_usd</code> at plan time; align with the now-live cap.</li>
+      <li><span class="tag existing">existing</span> <code>config/config.exs</code> — <code>:alerting</code> + <code>:budget</code> config to reconcile.</li>
+    </ul>
+
+    <h3>New Files</h3>
+    <ul>
+      <li><span class="tag new">new</span> <code>priv/repo/migrations/&lt;ts&gt;_add_project_id_to_agent_logs.exs</code> — nullable <code>project_id</code> FK (<code>nilify_all</code>) + index on <code>agent_logs</code>.</li>
+      <li><span class="tag new">new</span> <code>priv/repo/migrations/&lt;ts&gt;_add_session_period_and_project_scope_to_budgets.exs</code> — extend cap enum guards if DB-enforced; add any session-window columns needed.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/cost_center/project_report.ex</code> — TypedStruct for a per-project cost report (lifetime total, by-model rows, session/today/week, first/last used, hidden total).</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/cost_center_project_spend_test.exs</code> — attribution + project rollup + clear/restore accounting.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/budget/guard_project_guardrails_test.exs</code> — session/daily/project cap warn→pause→hard-stop.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder_web/live/console_project_cost_test.exs</code> — LiveView: panel renders, CLEAR/RESTORE, session reset.</li>
+    </ul>
+  </section>
+
+  <!-- ===== IMPLEMENTATION PHASES ===== -->
+  <section id="phases">
+    <h2>Implementation Phases</h2>
+    <p><strong>IMPORTANT:</strong> Execute every phase and task step by step, in order, top to bottom.</p>
+    <p>Status markers: <code>[]</code> idle · <code>[wip]</code> in progress · <code>[x]</code> complete · <code>[f]</code> failed. All start as <code>[]</code>; the Build Plan workflow updates them as it works.</p>
+
+    <!-- PHASE 1 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 1: Project Cost Attribution (data foundation)</h3>
+      <p>Make cost attributable to a project. Add <code>project_id</code> to the durable ledger and to the cost telemetry metadata, resolved from the bound orchestrator/agent at write time, and teach the existing scope machinery about <code>:project</code>. Nothing user-visible yet — this is the seam everything else stands on.</p>
+
+      <figure>
+        <img src="per-project-cost-tracking-and-budget-guardrails/phase1.png" alt="A cost event stamped with project_id, written to the ledger and broadcast on the telemetry seam">
+
+        <figcaption>Each cost-bearing log row and cost event carries the project it belongs to.</figcaption>
+      </figure>
+
+      <h4>1. Migration: project_id on agent_logs</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add migration adding nullable <code>project_id</code> (<code>references(:projects, type: :binary_id, on_delete: :nilify_all)</code>) + index, mirroring the <code>agents</code>/<code>workflow_runs</code> pattern in <code>20260623000001_create_projects_and_scope.exs</code>.</li>
+        <li><code class="status">[]</code> Decide on historical backfill: leave pre-existing rows <code>NULL</code> (unscoped) — document this; do NOT block on a heavy backfill.</li>
+      </ul>
+
+      <h4>2. Schema + persistence stamping</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add <code>field :project_id, :binary_id</code> to <code>Logs.AgentLog</code> schema, typespec, and changeset cast.</li>
+        <li><code class="status">[]</code> Resolve the active project at write time in <code>Logs.persist_event/2</code> and <code>persist_orchestrator_event/2</code> (from the agent's / orchestrator's bound <code>project_id</code>); stamp it onto the row.</li>
+        <li><code class="status">[]</code> Add <code>project_id</code> to the <code>[:repo_builder, :cost, :recorded]</code> metadata in <code>Orchestrator.emit_cost_recorded/2</code> and <code>Workflows.add_run_cost/2</code>.</li>
+      </ul>
+
+      <h4>3. Scope vocabulary</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add <code>:project</code> to <code>Budget.Scope</code> (<code>scopes_for/1</code>, validation) without breaking existing <code>:global</code>/<code>:orchestrator</code>/<code>:workflow</code>.</li>
+        <li><code class="status">[]</code> Add a <code>scope_spend(:project, project_id, opts)</code> clause to <code>CostCenter</code> that filters the rollup by <code>agent_logs.project_id</code>.</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>ExUnit with the existing DataCase/sandbox. Prove a persisted cost row carries the bound project, that <code>scope_spend(:project, …)</code> isolates one project's spend from another's, and that unscoped (NULL) rows are excluded from a project total but still counted globally.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix ecto.migrate &amp;&amp; mix ecto.rollback &amp;&amp; mix ecto.migrate</code> — migration is reversible.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/cost_center_project_spend_test.exs</code> — attribution + project isolation pass.</li>
+        <li><code class="status">[]</code> <code>mix compile --warnings-as-errors</code> — typespecs/changeset clean.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <!-- PHASE 2 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 2: Per-Project Reporting &amp; Lifetime History</h3>
+      <p>Turn the new attribution into the reporting the operator actually wants: a project's full-lifetime spend, broken down by model, plus session/today/week windows — surfaced in a per-project Cost panel.</p>
+
+      <h4>1. Context API</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add <code>CostCenter.project_spend/2</code> → lifetime total (actual + estimated, est? flagged), by-(harness,provider,model) rows, event count, first/last used.</li>
+        <li><code class="status">[]</code> Add <code>CostCenter.project_period_spend/2</code> → session/today/week/month windows for one project (reuse <code>Timezones.period_starts/2</code>; add a session-start input).</li>
+        <li><code class="status">[]</code> Add <code>CostCenter.ProjectReport</code> TypedStruct and have the context return it (keep nil-vs-0 cost discipline).</li>
+      </ul>
+
+      <h4>2. UI: per-project Cost panel</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add a <code>project_cost_panel/1</code> component (lifetime total headline, by-model table, period strip) in <code>console_components.ex</code>, styled to the existing Cost Center identity.</li>
+        <li><code class="status">[]</code> Wire assigns in <code>console_live.ex</code>: load the active project's report on project switch (reuse the existing project-switch refresh seam) and on the Cost Center tab.</li>
+        <li><code class="status">[]</code> Show the active project's lifetime total in the header cost pill context (so the operator always sees "this project so far").</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>LiveViewTest for rendering + context tests for the math. Cover the empty-project case (no spend yet), an estimated-only project (unpriced harness → <code>~$</code> band, never $0), and by-model ordering.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/cost_center_project_spend_test.exs</code> — lifetime + period math correct.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder_web/live/console_project_cost_test.exs</code> — panel renders totals + by-model rows.</li>
+        <li><code class="status">[]</code> <code>mix format --check-formatted &amp;&amp; mix credo --strict</code> — style + @spec gate clean.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <!-- PHASE 3 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 3: Clear &amp; Restore Pricing Per Project</h3>
+      <p>Give the operator a per-project CLEAR (soft-hide this project's cost rows) and RESTORE (reveal them), reusing the existing <code>agent_logs.hidden</code> soft-delete so cleared money is never destroyed — only hidden from the project's display total and recoverable.</p>
+
+      <h4>1. Context API</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add <code>Logs.hide_logs_for_project/1</code> and <code>Logs.release_hidden_logs_for_project/1</code> (mirror <code>hide_logs_for_agents/1</code> / <code>release_hidden_logs/0</code>, filtered by <code>project_id</code>).</li>
+        <li><code class="status">[]</code> Make <code>project_spend/2</code> honor an <code>:include_hidden?</code> option so the panel can show both a <em>display</em> total (hidden excluded) and a <em>true-money</em> total (hidden included) — see Questionables.</li>
+      </ul>
+
+      <h4>2. UI: clear / restore controls</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add "Clear project costs" + "Restore" buttons to the project cost panel with a confirm step; wire <code>clear_project_costs</code> / <code>restore_project_costs</code> events in <code>console_live.ex</code>.</li>
+        <li><code class="status">[]</code> After clear/restore, refresh the report and flash the count of rows affected; show a subtle "N cleared (restorable)" marker when hidden rows exist.</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>Context + LiveViewTest. Prove clear hides only the target project's rows (not other projects'), the display total drops while the true-money total is unchanged, and restore is exact and idempotent.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/cost_center_project_spend_test.exs</code> — clear/restore accounting + project isolation.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder_web/live/console_project_cost_test.exs</code> — buttons clear/restore and refresh the panel.</li>
+        <li><code class="status">[]</code> <code>mix compile --warnings-as-errors</code> — clean.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <!-- PHASE 4 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 4: Session &amp; Daily Budget Guardrails (retire the global alert)</h3>
+      <p>Replace the single global log-only threshold with guardrails that actually stop overspend: a live per-project total cap (from <code>Project.budget_cap_usd</code>), plus operator-set <strong>session</strong> and <strong>daily</strong> caps with warn → pause → hard-stop. Fold the legacy alert into a seeded Budget cap and retire <code>Telemetry.Alerting</code>'s global path.</p>
+
+      <figure>
+        <img src="per-project-cost-tracking-and-budget-guardrails/phase4.png" alt="Session and daily budget gauges with warn, pause, and hard-stop zones">
+
+        <figcaption>Session and daily caps trip warn → pause → hard-stop before a build runs away.</figcaption>
+      </figure>
+
+      <h4>1. Cap model: project scope + session period</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Allow <code>scope: :project</code> with <code>scope_id = project_id</code> in <code>Budget.Cap</code>; add a <code>:session</code> period alongside <code>:daily</code>/<code>:monthly</code>/<code>:total</code>.</li>
+        <li><code class="status">[]</code> Define "session" explicitly: an operator-controlled window keyed off a <code>reset_at</code> the operator sets via a "Start session" / "Reset session" control (see Questionables). Add <code>window_start/1</code> handling for <code>:session</code> in <code>Budget.Guard</code>.</li>
+        <li><code class="status">[]</code> Migration for any new column/enum value if the period/scope is DB-constrained.</li>
+      </ul>
+
+      <h4>2. Live enforcement in Budget.Guard</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> In <code>Budget.Guard.handle_cost_event/4</code>, resolve <code>project_id</code> from the cost metadata and accumulate against project/session/daily caps (in addition to existing scopes).</li>
+        <li><code class="status">[]</code> Seed a live project cap from <code>Project.budget_cap_usd</code> (replace the plan-time-only check in <code>PlanningLive</code> with the live cap; keep a plan-time pre-check that reads the same cap).</li>
+        <li><code class="status">[]</code> Honor <code>action</code> (<code>:alert</code>/<code>:pause</code>/<code>:hard_stop</code>) for project/session/daily caps, broadcasting <code>:budget_warning</code>/<code>:budget_tripped</code> on <code>"budget:events"</code> with project context; <code>:hard_stop</code> interrupts in-scope sessions.</li>
+      </ul>
+
+      <h4>3. Retire / reconcile legacy alerting</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Replace <code>Telemetry.Alerting</code>'s global <code>:cost_threshold_usd</code> path: either remove the cost-threshold handler (keep the Oban exception handler) or convert it to a seeded global <code>:alert</code> cap so there's one alerting mechanism (Budget), not two.</li>
+        <li><code class="status">[]</code> Update <code>config/config.exs</code> (<code>:alerting</code>/<code>:budget</code>) and <code>Budget.seed_default_cap/0</code> accordingly; document the migration of the old threshold.</li>
+      </ul>
+
+      <h4>4. UI: session/daily controls + gauges</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add session + daily cap inputs and a "Reset session" button to the budget panel (scoped to the active project); render warn/pause/stop gauges reusing the existing budget bar styling.</li>
+        <li><code class="status">[]</code> Surface a banner/badge when a session or daily cap is in warning or tripped, distinct from the global kill switch.</li>
+      </ul>
+
+      <h4>5. Testing Strategy</h4>
+      <p>Guard-focused ExUnit (drive synthetic cost events) + LiveViewTest. Cover: project cap from <code>budget_cap_usd</code> trips at limit; session cap resets on "Reset session"; daily cap rolls at midnight; <code>warn_ratio</code> fires warning before the cap; <code>:hard_stop</code> interrupts; Guard <em>fails open</em> if unavailable.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/budget/guard_project_guardrails_test.exs</code> — warn→pause→hard-stop across project/session/daily.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder_web/live/console_project_cost_test.exs</code> — session reset + gauge + banner.</li>
+        <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — full suite green (no regressions in existing budget tests).</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== GLOBAL VALIDATION ===== -->
+  <section id="validation">
+    <h2>Validation Commands</h2>
+    <p>Execute these commands to validate the entire plan is complete:</p>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>mix ecto.migrate</code> — all new migrations apply cleanly.</li>
+      <li><code class="status">[]</code> <code>mix compile --warnings-as-errors</code> — zero warnings.</li>
+      <li><code class="status">[]</code> <code>mix format --check-formatted</code> — formatted.</li>
+      <li><code class="status">[]</code> <code>mix credo --strict</code> — @spec gate + style clean.</li>
+      <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — full suite green (incl. new attribution, clear/restore, guardrail tests).</li>
+      <li><code class="status">[]</code> <code>mix dialyzer</code> — no new typing errors (pre-existing skips unchanged).</li>
+      <li><code class="status">[]</code> Manual: build a project, watch its lifetime total climb, CLEAR then RESTORE it, set a tiny session cap and confirm warn→pause→hard-stop fires before overspend.</li>
+    </ul>
+    <div class="loop">
+      🔁 <strong>The plan is not complete until every box is checked and every command passes. If for some reason a step is not possible to complete, mark it with [f] and move on if possible.</strong>
+    </div>
+  </section>
+
+  <!-- ===== QUESTIONABLES ===== -->
+  <section id="questionables">
+    <h2>Questionables</h2>
+    <figure>
+      <img src="per-project-cost-tracking-and-budget-guardrails/questionables.png" alt="A balance scale weighing display total against true-money total, with a session clock question mark">
+
+      <figcaption>The two decisions most worth confirming before build: clear semantics, and what "session" means.</figcaption>
+    </figure>
+
+    <details>
+      <summary>What exactly is a "session" budget window?</summary>
+      <p class="qa-answer"><strong>Assumption:</strong> a session is an <em>operator-controlled</em> window, not a tech session. It starts at a <code>reset_at</code> the operator sets with a "Start/Reset session" button (one sitting). This is simpler and more useful than tying it to a LiveView connection (which churns on reconnect) or an orchestrator run (too granular). Daily handles the calendar-day guardrail; session handles "this sitting." Open to instead define session as "since app/console connect," if the operator prefers zero-click.</p>
+    </details>
+    <details>
+      <summary>Should per-project CLEAR change the real-money total, or only the display?</summary>
+      <p class="qa-answer"><strong>Assumption:</strong> CLEAR only hides rows (soft-delete), exactly like the existing console CLEAR — real money is never destroyed. The panel shows a <em>display total</em> (hidden excluded) for a clean slate, plus an unobtrusive "N cleared (restorable)" marker and an <code>:include_hidden?</code> true-money total available on demand. Note the existing <code>period_spend</code> deliberately <em>includes</em> hidden rows ("real money"); we keep that for vendor accounting and only diverge for the project display total. Confirm this dual-total is acceptable vs. a single number.</p>
+    </details>
+    <details>
+      <summary>Project cap vs. session/daily cap precedence?</summary>
+      <p class="qa-answer"><strong>Assumption:</strong> all applicable caps are evaluated; the <em>most restrictive</em> wins for the action taken (hard-stop &gt; pause &gt; alert). A project's lifetime <code>budget_cap_usd</code> (period <code>:total</code>) and its session/daily caps coexist. Confirm whether session/daily caps are per-project or global-per-operator (plan assumes per-active-project, with an optional global fallback).</p>
+    </details>
+    <details>
+      <summary>Backfill historical agent_logs with project_id?</summary>
+      <p class="qa-answer"><strong>Assumption:</strong> no heavy backfill. Pre-existing rows stay <code>NULL</code> (unscoped) and simply don't appear in any project's history — they remain in global/vendor totals. If recovering historical project attribution matters, a best-effort backfill via <code>agents.project_id</code>/<code>workflow_runs.project_id</code> join could be a follow-up, but it's lossy for orchestrator rows predating binding.</p>
+    </details>
+    <details>
+      <summary>Fully remove Telemetry.Alerting's cost path, or convert it?</summary>
+      <p class="qa-answer"><strong>Assumption:</strong> convert, don't delete. Fold the global <code>:cost_threshold_usd</code> into a seeded global <code>:alert</code> Budget cap so there is exactly one alerting mechanism. Keep <code>Telemetry.Alerting</code>'s Oban-exception handler (unrelated to cost). This avoids a behavior gap on upgrade while removing the "doesn't make sense" duplicate.</p>
+    </details>
+  </section>
+
+  <!-- ===== NOTES ===== -->
+  <section id="notes">
+    <h2>Notes</h2>
+
+    <h3>Why this is mostly additive</h3>
+    <p>The cost subsystem is already cleanly factored into <strong>CostCenter</strong> (rates + actuals), <strong>Budget</strong> (caps + live <code>Budget.Guard</code> breaker), and the legacy <strong>Telemetry.Alerting</strong>. Everything funnels through one telemetry event <code>[:repo_builder, :cost, :recorded]</code> and one durable ledger (<code>agent_logs</code>). The two structural gaps are narrow: (1) <code>agent_logs</code> lacks <code>project_id</code>; (2) <code>Budget.Scope</code> lacks <code>:project</code>. Almost everything else is new query clauses, a struct, UI, and one cap-period addition — low blast radius.</p>
+
+    <h3>The single seam to get right</h3>
+    <p>Resolving <code>project_id</code> at cost-write time. Orchestrators are project-bound (see <code>specs/orchestrator-project-binding-and-pinned-workers.html</code>) and agents already carry <code>project_id</code>. The persist path (<code>Logs.persist_event/2</code> / <code>persist_orchestrator_event/2</code>) is the one place to resolve and stamp it; the telemetry metadata is the one place <code>Budget.Guard</code> reads it for live enforcement. Get both stamped in Phase 1 and the rest is layering.</p>
+
+    <h3>Two totals, one truth</h3>
+    <div class="twocol">
+      <div class="panel"><strong>Display total</strong> (hidden excluded) — what the operator sees per project; CLEAR resets it for a clean slate without losing data.</div>
+      <div class="panel"><strong>True-money total</strong> (hidden included) — real spend for vendor accounting and the global period summary; always recoverable via RESTORE.</div>
+    </div>
+
+    <h3>Cost discipline to preserve</h3>
+    <p>Keep the existing <strong>nil-vs-0</strong> rule: unpriced models report <code>cost_usd = NULL</code> (estimated band <code>~$…</code>), never <code>$0</code>. <code>CostCenter</code> and the <code>cost_badge</code> already encode this; project reports and gauges must too, so an unpriced harness (e.g. <code>pi</code>) never looks free.</p>
+
+    <h3>Dependencies / risks</h3>
+    <ul>
+      <li>No new libraries — TypedStruct, Ecto, Phoenix LiveView are already in use.</li>
+      <li><code>Budget.Guard</code> is a singleton GenServer on the hot path; keep accumulation O(caps) and continue to <strong>fail open</strong> if it's down so cost recording never blocks a build.</li>
+      <li>Timezone consistency: the display summary uses operator-tz windows while the Guard uses UTC windows — align session/daily project windows to one convention (plan favors operator-tz for display, UTC for enforcement, documented).</li>
+    </ul>
+
+  </section>
+
+  <!-- ===== AMENDMENTS ===== -->
+  <section id="amendments">
+    <h2>Amendments</h2>
+    <p class="qa-answer">No amendments yet — populated by the Update Plan / Update References workflows after first execution.</p>
+  </section>
+
+</main>
+</body>
+</html>

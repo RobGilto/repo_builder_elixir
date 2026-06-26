@@ -250,13 +250,13 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       %{
         name: "get_config",
         description:
-          "Read this orchestrator's current configuration: its own harness/provider/model, the worker-tier roster (fast/main/heavy/leader with each tier's harness/provider/model or 'unassigned'), the registered harnesses, and the available models per harness/provider. Use this first when a spawn fails with 'no model selected' to see what needs configuring.",
+          "Read this orchestrator's current configuration: its own harness/provider/model, the per-project worker-tier roster (fast/main/heavy/leader with each tier's effective harness/provider/model, plus `inherited?` — true when the tier inherits the operator's global default rather than being set on this project), the registered harnesses, and the available models per harness/provider. Use this first when a spawn fails with 'no model selected' to see what needs configuring.",
         input_schema: %{"type" => "object", "properties" => %{}, "required" => []}
       },
       %{
         name: "configure_tier",
         description:
-          "Assign a harness/provider/model to a worker tier (fast/main/heavy/leader) so `create_agent` with that `category` can spawn. `model` is required; `harness` defaults to the orchestrator's harness; `provider` is optional (open identity). Use this to self-unblock when a tier is unassigned.",
+          "Assign a harness/provider/model to a worker tier (fast/main/heavy/leader) for THIS project so `create_agent` with that `category` can spawn. The roster is per-project (scoped to this orchestrator's bound project); any tier left unset inherits the operator's global default, and the override you set here changes only this project. `model` is required; `harness` defaults to the orchestrator's harness; `provider` is optional (open identity). Use this to self-unblock when a tier is unassigned.",
         input_schema: %{
           "type" => "object",
           "properties" => %{

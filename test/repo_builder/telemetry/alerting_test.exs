@@ -5,27 +5,9 @@ defmodule RepoBuilder.Telemetry.AlertingTest do
 
   alias RepoBuilder.Telemetry.Alerting
 
-  test "alerts when a recorded cost exceeds the threshold" do
-    log =
-      capture_log(fn ->
-        Alerting.handle_event([:repo_builder, :cost, :recorded], %{amount: 99.0}, %{run_id: "r"},
-          cost_threshold_usd: 10.0
-        )
-      end)
-
-    assert log =~ "ALERT cost threshold exceeded"
-  end
-
-  test "does not alert for a cost under the threshold" do
-    log =
-      capture_log(fn ->
-        Alerting.handle_event([:repo_builder, :cost, :recorded], %{amount: 1.0}, %{run_id: "r"},
-          cost_threshold_usd: 10.0
-        )
-      end)
-
-    refute log =~ "ALERT"
-  end
+  # The legacy global cost-threshold handler was RETIRED (issue per-project-cost-tracking)
+  # and folded into a seeded global :alert Budget cap (Budget.seed_default_cap/0). Alerting
+  # now only handles Oban exceptions; per-cost guardrails live in Budget.Guard.
 
   test "alerts on an Oban job exception" do
     log =
@@ -34,7 +16,7 @@ defmodule RepoBuilder.Telemetry.AlertingTest do
           [:oban, :job, :exception],
           %{duration: 1},
           %{worker: "RepoBuilder.Workers.StepWorker"},
-          []
+          %{}
         )
       end)
 

@@ -1213,7 +1213,16 @@ defmodule RepoBuilderWeb.ConsoleComponents do
 
   attr :settings_tab, :atom,
     default: :general,
-    values: [:general, :appearance, :about, :prompt, :templates, :cost_center, :logs]
+    values: [
+      :general,
+      :appearance,
+      :about,
+      :prompt,
+      :templates,
+      :cost_center,
+      :default_models,
+      :logs
+    ]
 
   attr :view_mode, :atom, default: :logs
   attr :chat_width, :atom, default: :sm
@@ -1238,9 +1247,12 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   attr :template_versions, :list, default: []
   attr :cost_rollups, :list, default: []
   attr :period_spend, :any, default: nil
+  attr :project_report, :any, default: nil
   attr :price_rows, :list, default: []
   attr :price_form, :any, default: nil
   attr :editing_price_id, :any, default: nil
+  attr :default_model_rows, :list, default: []
+  attr :default_model_saved, :boolean, default: false
 
   @doc """
   Settings modal with a vertical tab rail (General / Appearance / About). Shown and
@@ -1277,6 +1289,11 @@ defmodule RepoBuilderWeb.ConsoleComponents do
             <.settings_tab_button tab={:prompt} active={@settings_tab} label="System Prompt" />
             <.settings_tab_button tab={:templates} active={@settings_tab} label="Agent Templates" />
             <.settings_tab_button tab={:cost_center} active={@settings_tab} label="Cost Center" />
+            <.settings_tab_button
+              tab={:default_models}
+              active={@settings_tab}
+              label="Default Models"
+            />
             <.settings_tab_button tab={:logs} active={@settings_tab} label="Log Database" />
             <.settings_tab_button tab={:about} active={@settings_tab} label="About" />
           </nav>
@@ -1663,6 +1680,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
             </div>
 
             <div :if={@settings_tab == :cost_center} class="flex flex-col gap-4">
+              <.project_cost_panel :if={@project_report} report={@project_report} />
               <.spend_summary_table :if={@period_spend} summary={@period_spend} />
               <.cost_rollup_table rollups={@cost_rollups} />
               <.price_catalog_table
@@ -1670,6 +1688,73 @@ defmodule RepoBuilderWeb.ConsoleComponents do
                 form={@price_form}
                 editing_price_id={@editing_price_id}
               />
+            </div>
+
+            <div :if={@settings_tab == :default_models} class="flex flex-col gap-3">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-semibold" style="color: var(--cns-cyan)">
+                  DEFAULT MODELS — what new projects inherit
+                </span>
+                <span
+                  :if={@default_model_saved}
+                  class="cns-chip"
+                  style="color: var(--cns-green, #4ade80)"
+                >
+                  Saved ✓
+                </span>
+              </div>
+
+              <p class="text-[0.625rem]" style="color: var(--cns-text-2)">
+                Set the global default harness/provider/model per worker tier. A newly
+                registered project's orchestrator is seeded from this roster, and any tier a
+                project leaves unset inherits it. Per-project overrides always win.
+              </p>
+
+              <form
+                :for={row <- @default_model_rows}
+                id={"default-model-#{row.category}"}
+                phx-change="set_default_agent_model"
+                class="flex items-center gap-2"
+              >
+                <input type="hidden" name="category" value={row.category} />
+                <span
+                  class="w-16 text-xs font-semibold uppercase"
+                  style="color: var(--cns-text-1)"
+                >
+                  {row.category}
+                </span>
+
+                <select name="harness" class="cns-chip" style="width: 8rem">
+                  <option value="" selected={row.harness in [nil, ""]}>harness…</option>
+                  <option :for={h <- row.harness_options} value={h} selected={row.harness == h}>
+                    {h}
+                  </option>
+                </select>
+
+                <select
+                  name="provider"
+                  class="cns-chip"
+                  style="width: 9rem"
+                  disabled={row.harness in [nil, ""]}
+                >
+                  <option value="" selected={row.provider in [nil, ""]}>provider…</option>
+                  <option :for={p <- row.provider_options} value={p} selected={row.provider == p}>
+                    {p}
+                  </option>
+                </select>
+
+                <select
+                  name="model"
+                  class="cns-chip"
+                  style="width: 13rem"
+                  disabled={row.harness in [nil, ""]}
+                >
+                  <option value="" selected={row.model in [nil, ""]}>no default…</option>
+                  <option :for={m <- row.model_options} value={m} selected={row.model == m}>
+                    {m}
+                  </option>
+                </select>
+              </form>
             </div>
 
             <div :if={@settings_tab == :about} class="flex flex-col gap-2 text-xs">
@@ -1725,6 +1810,104 @@ defmodule RepoBuilderWeb.ConsoleComponents do
         {@label}
       </div>
       {render_slot(@inner_block)}
+    </div>
+    """
+  end
+
+  attr :report, :any, required: true
+
+  @doc """
+  Per-project cost panel (issue per-project-cost-tracking): the active project's lifetime
+  total, a session/today/week/month period strip, a by-model breakdown, and Clear/Restore
+  controls. `@report` is `%{report: ProjectReport.t(), periods: map()}`. The lifetime total
+  is the *display* total (cleared rows excluded); a "N cleared (restorable)" marker shows
+  when soft-hidden rows exist.
+  """
+  @spec project_cost_panel(map()) :: Phoenix.LiveView.Rendered.t()
+  def project_cost_panel(assigns) do
+    ~H"""
+    <div
+      id="project-cost-panel"
+      class="flex flex-col gap-3 rounded border p-3"
+      style="border-color: var(--cns-border)"
+    >
+      <div class="flex items-center justify-between">
+        <div class="text-[0.625rem] font-semibold uppercase" style="color: var(--cns-text-2)">
+          This project — lifetime
+        </div>
+        <div class="flex items-center gap-2">
+          <button
+            type="button"
+            phx-click="clear_project_costs"
+            data-confirm="Clear this project's cost rows? They're hidden, not deleted (restorable)."
+            class="cns-chip text-[0.625rem]"
+          >
+            Clear
+          </button>
+          <button
+            :if={@report.report.hidden?}
+            type="button"
+            phx-click="restore_project_costs"
+            class="cns-chip text-[0.625rem]"
+          >
+            Restore
+          </button>
+        </div>
+      </div>
+
+      <div class="flex items-baseline gap-2">
+        <span id="project-cost-total" class="text-lg font-semibold" style="color: var(--cns-text-1)">
+          {cost_str(@report.report.total_usd)}
+        </span>
+        <span :if={@report.report.estimated?} class="cns-chip text-[0.625rem]">incl. est.</span>
+        <span
+          :if={@report.report.hidden?}
+          class="text-[0.625rem]"
+          style="color: var(--cns-text-2)"
+        >
+          some rows cleared (restorable)
+        </span>
+      </div>
+
+      <div class="flex flex-wrap gap-3 text-[0.6875rem]" style="color: var(--cns-text-2)">
+        <span>session {cost_str(@report.periods.session)}</span>
+        <span>today {cost_str(@report.periods.today)}</span>
+        <span>week {cost_str(@report.periods.week)}</span>
+        <span>month {cost_str(@report.periods.month)}</span>
+      </div>
+
+      <div
+        :if={@report.report.by_model == []}
+        class="text-[0.625rem]"
+        style="color: var(--cns-text-2)"
+      >
+        No spend recorded for this project yet.
+      </div>
+
+      <table
+        :if={@report.report.by_model != []}
+        id="project-cost-by-model"
+        class="w-full text-[0.6875rem]"
+      >
+        <thead>
+          <tr style="color: var(--cns-text-2)">
+            <th class="py-1 pr-2 text-left font-medium">Model</th>
+            <th class="py-1 pr-2 text-right font-medium">Cost</th>
+            <th class="py-1 pr-2 text-right font-medium">In</th>
+            <th class="py-1 pr-2 text-right font-medium">Out</th>
+            <th class="py-1 pr-2 text-right font-medium">Events</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr :for={r <- @report.report.by_model} style="border-top: 1px solid var(--cns-border)">
+            <td class="py-1 pr-2">{cost_dim(r.key)}</td>
+            <td class="py-1 pr-2 text-right"><.spend_cost row={r} /></td>
+            <td class="py-1 pr-2 text-right">{r.input_tokens}</td>
+            <td class="py-1 pr-2 text-right">{r.output_tokens}</td>
+            <td class="py-1 pr-2 text-right">{r.event_count}</td>
+          </tr>
+        </tbody>
+      </table>
     </div>
     """
   end
@@ -2457,7 +2640,12 @@ defmodule RepoBuilderWeb.ConsoleComponents do
           field={@form[:scope]}
           label="Scope"
           type="select"
-          options={[{"Global", "global"}, {"Orchestrator", "orchestrator"}, {"Workflow", "workflow"}]}
+          options={[
+            {"Global", "global"},
+            {"Project", "project"},
+            {"Orchestrator", "orchestrator"},
+            {"Workflow", "workflow"}
+          ]}
           class="cns-input w-28"
         />
         <%= if @scope != "global" do %>
@@ -2480,7 +2668,12 @@ defmodule RepoBuilderWeb.ConsoleComponents do
           field={@form[:period]}
           label="Period"
           type="select"
-          options={[{"Total", "total"}, {"Daily", "daily"}, {"Monthly", "monthly"}]}
+          options={[
+            {"Total", "total"},
+            {"Session", "session"},
+            {"Daily", "daily"},
+            {"Monthly", "monthly"}
+          ]}
           class="cns-input w-24"
         />
         <.input
@@ -2680,12 +2873,33 @@ defmodule RepoBuilderWeb.ConsoleComponents do
               <option value="" selected={row.model in [nil, ""]}>no model (won't spawn)…</option>
               <option :for={m <- row.model_options} value={m} selected={row.model == m}>{m}</option>
             </select>
+
+            <span
+              :if={Map.get(row, :inherited?, false)}
+              id={"agent-model-#{row.category}-inherited"}
+              class="cns-chip text-[0.625rem]"
+              style="color: var(--cns-text-2)"
+              title="This tier inherits the global default (Settings → Default Models)"
+            >
+              inherited
+            </span>
+
+            <button
+              :if={not Map.get(row, :inherited?, false) and row.model not in [nil, ""]}
+              type="button"
+              phx-click="clear_agent_model"
+              phx-value-category={row.category}
+              class="cns-chip text-[0.625rem]"
+              title="Clear this project's override so the tier re-inherits the global default"
+            >
+              reset
+            </button>
           </form>
         </div>
 
         <p class="mt-3 text-[0.625rem]" style="color: var(--cns-text-2)">
-          Leave a model blank to keep that category unassigned — the orchestrator will
-          error with "no model selected" if it tries to spawn into it.
+          This roster is per-project. A tier left blank inherits the global default
+          (Settings → Default Models); "reset" clears a project override so it re-inherits.
         </p>
         <p :if={@updated_at} class="mt-1 text-[0.625rem]" style="color: var(--cns-text-2)">
           Last changed {format_relative_time(@updated_at)}

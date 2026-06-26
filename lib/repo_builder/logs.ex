@@ -46,6 +46,7 @@ defmodule RepoBuilder.Logs do
 
     params = %{
       agent_id: attrs[:agent_id],
+      project_id: attrs[:project_id],
       session_id: attrs[:session_id],
       event_type: event_type(event),
       harness: to_string(event.harness),
@@ -74,13 +75,15 @@ defmodule RepoBuilder.Logs do
           required(:orchestrator_id) => Ecto.UUID.t(),
           required(:session_id) => String.t(),
           optional(:provider) => String.t() | nil,
-          optional(:model) => String.t() | nil
+          optional(:model) => String.t() | nil,
+          optional(:project_id) => Ecto.UUID.t() | nil
         }) :: {:ok, AgentLog.t()} | {:error, Ecto.Changeset.t()}
   def persist_orchestrator_event(event, attrs) do
     scrubbed = Redact.scrub(event)
 
     params = %{
       orchestrator_id: attrs[:orchestrator_id],
+      project_id: attrs[:project_id],
       session_id: attrs[:session_id],
       event_type: event_type(event),
       harness: to_string(event.harness),
@@ -344,6 +347,38 @@ defmodule RepoBuilder.Logs do
       AgentLog
       |> where([l], l.agent_id in ^agent_ids)
       |> Repo.update_all(set: [hidden: true])
+
+    count
+  end
+
+  @doc """
+  Soft-hide every visible `agent_logs` row stamped with `project_id` — the per-project
+  "Clear project costs" action (issue per-project-cost-tracking). Mirrors
+  `hide_logs_for_agents/1` but scoped to the `project_id` column, so it never touches
+  another project's (or unscoped) rows. Rows are kept (recoverable via
+  `release_hidden_logs_for_project/1`). Returns the count hidden.
+  """
+  @spec hide_logs_for_project(Ecto.UUID.t()) :: non_neg_integer()
+  def hide_logs_for_project(project_id) do
+    {count, _} =
+      AgentLog
+      |> where([l], l.project_id == ^project_id and l.hidden == false)
+      |> Repo.update_all(set: [hidden: true])
+
+    count
+  end
+
+  @doc """
+  Release (un-hide) every soft-hidden `agent_logs` row for `project_id` — the inverse of
+  `hide_logs_for_project/1` ("Restore"). Scoped to the project, so it never reveals
+  another project's cleared rows. Returns the count released.
+  """
+  @spec release_hidden_logs_for_project(Ecto.UUID.t()) :: non_neg_integer()
+  def release_hidden_logs_for_project(project_id) do
+    {count, _} =
+      AgentLog
+      |> where([l], l.project_id == ^project_id and l.hidden == true)
+      |> Repo.update_all(set: [hidden: false])
 
     count
   end

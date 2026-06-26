@@ -13,6 +13,7 @@ defmodule RepoBuilderWeb.PlanningLive do
 
   import RepoBuilderWeb.ProjectComponents, only: [plan_preview: 1]
 
+  alias RepoBuilder.Budget
   alias RepoBuilder.Harness.Registry
   alias RepoBuilder.Plans
   alias RepoBuilder.Plans.Planner
@@ -143,6 +144,11 @@ defmodule RepoBuilderWeb.PlanningLive do
     if over_cap?(cap, preview.estimate.estimated_cost_usd) do
       {:error, :over_cap}
     else
+      # Seed/refresh the LIVE project cap from the project's budget so Budget.Guard
+      # enforces it during the run (issue per-project-cost-tracking) — the same ceiling
+      # the plan-time `over_cap?/2` pre-check reads. Best-effort: never blocks a launch.
+      _ = Budget.seed_project_cap(project)
+
       # Resolve a REAL launch harness BEFORE persisting anything: refusing on a no-op
       # `fake` (or blank) harness so a "launched" run can never be a silent no-op that
       # never touches the target repo (fix planning-wizard target-repo launch).

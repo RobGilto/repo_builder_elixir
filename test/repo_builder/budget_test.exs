@@ -7,21 +7,51 @@ defmodule RepoBuilder.BudgetTest do
 
   alias RepoBuilder.Budget
   alias RepoBuilder.Budget.{Cap, Scope}
+  alias RepoBuilder.Projects
 
   describe "Scope.scopes_for/1" do
     test "always includes the global scope" do
       assert Scope.scopes_for(%{}) == [{:global, ""}]
     end
 
-    test "adds orchestrator and workflow scopes when present (string or atom keys)" do
-      refs = Scope.scopes_for(%{orchestrator_id: "o1", workflow_run_id: "w1"})
+    test "adds orchestrator, workflow, and project scopes when present (string or atom keys)" do
+      refs = Scope.scopes_for(%{orchestrator_id: "o1", workflow_run_id: "w1", project_id: "p1"})
       assert {:global, ""} in refs
       assert {:orchestrator, "o1"} in refs
       assert {:workflow, "w1"} in refs
+      assert {:project, "p1"} in refs
     end
 
     test "ignores blank/nil ids" do
       assert Scope.scopes_for(%{orchestrator_id: "", workflow_run_id: nil}) == [{:global, ""}]
+    end
+  end
+
+  describe "seed_project_cap/1" do
+    test "seeds a live :project/:total :pause cap from budget_cap_usd" do
+      {:ok, project} =
+        Projects.create_project(%{
+          "name" => "proj-#{System.unique_integer([:positive])}",
+          "root_path" => "/tmp/cap-proj",
+          "budget_cap_usd" => "12.50"
+        })
+
+      assert {:ok, %Cap{} = cap} = Budget.seed_project_cap(project)
+      assert cap.scope == :project
+      assert cap.scope_id == project.id
+      assert cap.period == :total
+      assert cap.action == :pause
+      assert Decimal.equal?(cap.limit_usd, Decimal.new("12.50"))
+    end
+
+    test "is a no-op when the project has no budget cap" do
+      {:ok, project} =
+        Projects.create_project(%{
+          "name" => "proj-#{System.unique_integer([:positive])}",
+          "root_path" => "/tmp/nocap-proj"
+        })
+
+      assert {:ok, :none} = Budget.seed_project_cap(project)
     end
   end
 

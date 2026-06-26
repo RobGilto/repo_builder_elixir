@@ -12,6 +12,8 @@ defmodule RepoBuilderWeb.ProjectsLive do
 
   alias RepoBuilder.Commands
   alias RepoBuilder.FileBrowser
+  alias RepoBuilder.Harness.Registry
+  alias RepoBuilder.Orchestrators
   alias RepoBuilder.Projects
   alias RepoBuilder.Secrets
   alias RepoBuilder.Workflows
@@ -33,6 +35,8 @@ defmodule RepoBuilderWeb.ProjectsLive do
   defp apply_action(socket, :show, %{"id" => id}) do
     case Projects.fetch_project(id) do
       {:ok, project} ->
+        orchestrator = elem(Orchestrators.get_or_create_for_project(project.id), 1)
+
         socket
         |> assign(page_title: project.name, project: project)
         |> assign(resolved: Commands.resolve_all(project))
@@ -40,6 +44,7 @@ defmodule RepoBuilderWeb.ProjectsLive do
         |> assign(cost: project_cost(project.id))
         |> assign(secrets: Secrets.list_names(project.id))
         |> assign(secret_form: %{"name" => "", "value" => ""})
+        |> assign(orchestrator: orchestrator, model_rows: model_rows(orchestrator))
 
       {:error, :not_found} ->
         socket
@@ -90,6 +95,37 @@ defmodule RepoBuilderWeb.ProjectsLive do
 
       {:error, _changeset} ->
         {:noreply, put_flash(socket, :error, "Could not update command pack")}
+    end
+  end
+
+  # Override one worker tier for THIS project (per-project roster card). Same cascade as
+  # the console modal: changing harness clears provider+model; changing provider clears
+  # model. Writes through the per-project seam (`set_agent_model/3`), so other projects
+  # are untouched.
+  def handle_event("set_project_model", %{"category" => category} = params, socket) do
+    orchestrator = socket.assigns.orchestrator
+    stored = Enum.find(socket.assigns.model_rows, %{}, &(&1.category == category))
+    attrs = project_model_attrs(params, stored)
+
+    case Orchestrators.set_agent_model(orchestrator.id, category, attrs) do
+      {:ok, updated} ->
+        {:noreply, assign(socket, orchestrator: updated, model_rows: model_rows(updated))}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "Could not update model")}
+    end
+  end
+
+  # Reset a tier to the global default (clears the per-project override so it re-inherits).
+  def handle_event("clear_project_model", %{"category" => category}, socket) do
+    orchestrator = socket.assigns.orchestrator
+
+    case Orchestrators.clear_agent_model(orchestrator.id, category) do
+      {:ok, updated} ->
+        {:noreply, assign(socket, orchestrator: updated, model_rows: model_rows(updated))}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "Could not reset model")}
     end
   end
 
@@ -238,6 +274,76 @@ defmodule RepoBuilderWeb.ProjectsLive do
 
         <div class="rounded border border-zinc-700 p-4 space-y-3">
           <div>
+            <h3 class="font-semibold">Worker models</h3>
+            <p class="text-xs text-zinc-500">
+              The model each worker tier spawns into for this project. A tier left blank
+              inherits the global default (Settings → Default Models); an override here
+              changes only this project. "Reset" re-inherits the default.
+            </p>
+          </div>
+
+          <form
+            :for={row <- @model_rows}
+            id={"project-model-#{row.category}"}
+            phx-change="set_project_model"
+            class="flex flex-wrap items-center gap-2 text-sm"
+          >
+            <input type="hidden" name="category" value={row.category} />
+            <span class="w-16 text-xs font-semibold uppercase text-zinc-300">{row.category}</span>
+
+            <select
+              name="harness"
+              class="rounded border border-zinc-600 bg-zinc-800 px-2 py-1"
+            >
+              <option value="" selected={row.harness in [nil, ""]}>harness…</option>
+              <option :for={h <- row.harness_options} value={h} selected={row.harness == h}>
+                {h}
+              </option>
+            </select>
+
+            <select
+              name="provider"
+              class="rounded border border-zinc-600 bg-zinc-800 px-2 py-1"
+              disabled={row.harness in [nil, ""]}
+            >
+              <option value="" selected={row.provider in [nil, ""]}>provider…</option>
+              <option :for={p <- row.provider_options} value={p} selected={row.provider == p}>
+                {p}
+              </option>
+            </select>
+
+            <select
+              name="model"
+              class="rounded border border-zinc-600 bg-zinc-800 px-2 py-1 font-mono"
+              disabled={row.harness in [nil, ""]}
+            >
+              <option value="" selected={row.model in [nil, ""]}>no model…</option>
+              <option :for={m <- row.model_options} value={m} selected={row.model == m}>{m}</option>
+            </select>
+
+            <span
+              :if={row.inherited?}
+              id={"project-model-#{row.category}-inherited"}
+              class="rounded bg-zinc-700 px-2 py-0.5 text-xs text-zinc-300"
+              title="Inherits the global default"
+            >
+              inherited
+            </span>
+
+            <button
+              :if={not row.inherited? and row.model not in [nil, ""]}
+              type="button"
+              phx-click="clear_project_model"
+              phx-value-category={row.category}
+              class="rounded bg-zinc-700 px-2 py-0.5 text-xs"
+            >
+              Reset
+            </button>
+          </form>
+        </div>
+
+        <div class="rounded border border-zinc-700 p-4 space-y-3">
+          <div>
             <h3 class="font-semibold">Secrets</h3>
             <p class="text-xs text-zinc-500">
               Deposited values are encrypted at rest and injected into a worker's environment
@@ -321,6 +427,85 @@ defmodule RepoBuilderWeb.ProjectsLive do
   defp pack_ids do
     packs = Commands.list_packs() |> Enum.map(& &1.id) |> Enum.uniq()
     Enum.uniq(["auto" | Enum.sort(packs)])
+  end
+
+  # The per-project worker roster card rows: the EFFECTIVE entry per tier (project
+  # override, else inherited global default) with registry-driven option lists.
+  @spec model_rows(RepoBuilder.Orchestrator.Orchestrator.t()) :: [map()]
+  defp model_rows(orchestrator) do
+    Enum.map(Orchestrators.agent_categories(), fn category ->
+      {entry, source} = Orchestrators.effective_agent_model(orchestrator, category)
+      entry = entry || %{}
+      harness = entry["harness"]
+      provider = entry["provider"]
+      model = entry["model"]
+
+      base = if(harness, do: Registry.orchestrator_models(harness, provider), else: [])
+      model_options = if(model in [nil, "" | base], do: base, else: [model | base])
+
+      %{
+        category: category,
+        harness: harness,
+        provider: provider,
+        model: model,
+        inherited?: not is_nil(model) and source == :default,
+        harness_options: Registry.known(),
+        provider_options: if(harness, do: provider_options(harness), else: []),
+        model_options: model_options
+      }
+    end)
+  end
+
+  @spec provider_options(String.t()) :: [String.t()]
+  defp provider_options(harness) do
+    defaults = Registry.orchestrator_defaults(harness)
+
+    case defaults[:providers] do
+      [_ | _] = providers -> providers
+      _ -> [defaults[:default_provider]] |> Enum.reject(&is_nil/1)
+    end
+  end
+
+  # Cascade an agent-models row change, driven by which input fired (`_target`) against
+  # the tier's currently-stored entry: harness change clears provider+model; provider
+  # change clears model; a no-op re-pick preserves downstream fields. Mirrors the console.
+  @spec project_model_attrs(map(), map()) :: %{optional(String.t()) => String.t() | nil}
+  defp project_model_attrs(%{"_target" => ["harness" | _]} = params, stored) do
+    submitted = nilify(params["harness"])
+
+    if submitted == stored[:harness] do
+      %{"harness" => stored[:harness], "provider" => stored[:provider], "model" => stored[:model]}
+    else
+      %{"harness" => submitted, "provider" => nil, "model" => nil}
+    end
+  end
+
+  defp project_model_attrs(%{"_target" => ["provider" | _]} = params, stored) do
+    submitted = nilify(params["provider"])
+
+    %{
+      "harness" => nilify(params["harness"]),
+      "provider" => submitted,
+      "model" => if(submitted == stored[:provider], do: stored[:model], else: nil)
+    }
+  end
+
+  defp project_model_attrs(params, _stored) do
+    %{
+      "harness" => nilify(params["harness"]),
+      "provider" => nilify(params["provider"]),
+      "model" => nilify(params["model"])
+    }
+  end
+
+  @spec nilify(String.t() | nil) :: String.t() | nil
+  defp nilify(nil), do: nil
+
+  defp nilify(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
   end
 
   @spec project_cost(Ecto.UUID.t()) :: Decimal.t()

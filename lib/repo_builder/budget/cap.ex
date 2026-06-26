@@ -3,8 +3,9 @@ defmodule RepoBuilder.Budget.Cap do
   One durable spend CAP (issue-budget-guardrails), keyed by `(scope, scope_id, period)`.
 
     * `scope`/`scope_id` — what the cap limits (`:global` uses the `""` sentinel for
-      `scope_id`; `:orchestrator`/`:workflow` carry the owning id).
-    * `period` — the spend window the cap measures (`:total` all-time, `:daily`, `:monthly`).
+      `scope_id`; `:orchestrator`/`:workflow`/`:project` carry the owning id).
+    * `period` — the spend window the cap measures (`:total` all-time, `:session` (since the
+      operator's last reset), `:daily`, `:monthly`).
     * `limit_usd` — the hard ceiling (`Decimal` — money never floats, §8).
     * `warn_ratio` — fraction of `limit_usd` at which the breaker broadcasts `:warning`.
     * `action` — what crossing the cap does: `:alert` (log/banner only, today's behaviour),
@@ -18,7 +19,7 @@ defmodule RepoBuilder.Budget.Cap do
   alias RepoBuilder.Budget.Scope
 
   @type scope :: Scope.scope()
-  @type period :: :total | :daily | :monthly
+  @type period :: :total | :session | :daily | :monthly
   @type action :: :alert | :pause | :hard_stop
 
   @type t :: %__MODULE__{
@@ -35,8 +36,8 @@ defmodule RepoBuilder.Budget.Cap do
           updated_at: DateTime.t() | nil
         }
 
-  @scopes [:global, :orchestrator, :workflow]
-  @periods [:total, :daily, :monthly]
+  @scopes [:global, :orchestrator, :workflow, :project]
+  @periods [:total, :session, :daily, :monthly]
   @actions [:alert, :pause, :hard_stop]
   @unique_index :budgets_scope_period_index
 
@@ -78,7 +79,7 @@ defmodule RepoBuilder.Budget.Cap do
       :global ->
         put_change(changeset, :scope_id, "")
 
-      scope when scope in [:orchestrator, :workflow] ->
+      scope when scope in [:orchestrator, :workflow, :project] ->
         case get_field(changeset, :scope_id) do
           id when is_binary(id) and id != "" -> changeset
           _ -> add_error(changeset, :scope_id, "is required for a #{scope} cap")

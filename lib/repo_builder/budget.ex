@@ -10,6 +10,7 @@ defmodule RepoBuilder.Budget do
   import Ecto.Query, only: [from: 2]
 
   alias RepoBuilder.Budget.{Cap, Scope}
+  alias RepoBuilder.Projects.Project
   alias RepoBuilder.Repo
 
   @doc "All caps, newest first."
@@ -126,6 +127,32 @@ defmodule RepoBuilder.Budget do
         {:ok, :exists}
     end
   end
+
+  @doc """
+  Seed (or update) a live `:project`/`:total` cap from a project's `budget_cap_usd`
+  (issue per-project-cost-tracking), so the per-project lifetime budget is enforced LIVE by
+  `Budget.Guard` — not merely pre-checked at plan time. A positive cap upserts a `:pause`
+  cap (refuse new spend in the project once the lifetime ceiling is hit); a nil/zero cap is
+  a no-op (the project stays uncapped). Returns the cap or `:none`. Never raises on a
+  changeset error — it surfaces it.
+  """
+  @spec seed_project_cap(Project.t()) :: {:ok, Cap.t()} | {:ok, :none} | {:error, term()}
+  def seed_project_cap(%Project{id: id, budget_cap_usd: %Decimal{} = limit}) do
+    if Decimal.gt?(limit, Decimal.new(0)) do
+      upsert_cap(%{
+        "scope" => "project",
+        "scope_id" => id,
+        "period" => "total",
+        "limit_usd" => limit,
+        "action" => "pause",
+        "enabled" => true
+      })
+    else
+      {:ok, :none}
+    end
+  end
+
+  def seed_project_cap(%Project{}), do: {:ok, :none}
 
   # --- private ---
 

@@ -20,6 +20,7 @@ defmodule RepoBuilder.Orchestrators do
   alias RepoBuilder.Orchestrator.{Orchestrator, SystemPrompt}
   alias RepoBuilder.Projects
   alias RepoBuilder.Repo
+  alias RepoBuilder.Settings
 
   @default_name "default"
 
@@ -149,7 +150,7 @@ defmodule RepoBuilder.Orchestrators do
   def get_or_create_for_project(project_id) do
     case Repo.get_by(Orchestrator, project_id: project_id) do
       %Orchestrator{} = orchestrator ->
-        {:ok, orchestrator}
+        {:ok, backfill_roster(orchestrator)}
 
       nil ->
         case Projects.get_project(project_id) do
@@ -167,12 +168,40 @@ defmodule RepoBuilder.Orchestrators do
     attrs =
       %{name: project_orchestrator_name(project), harness: harness}
       |> apply_harness_defaults(harness)
-      |> Map.merge(%{project_id: project.id, working_dir: project.root_path})
+      |> Map.merge(%{
+        project_id: project.id,
+        working_dir: project.root_path,
+        # Seed the per-project worker roster from the operator's global default so a
+        # freshly registered project can spawn category workers immediately (read-through
+        # in `effective_agent_model/2` still covers any tier left unset). String-keyed
+        # JSONB shape, matching `metadata["agent_models"]`.
+        metadata: %{"agent_models" => Settings.default_agent_models()}
+      })
 
     %Orchestrator{}
     |> Orchestrator.changeset(attrs)
     |> Repo.insert()
     |> handle_project_race(project.id)
+  end
+
+  # Backfill an existing orchestrator's empty roster from the global default (covers
+  # projects registered before a default was configured). Quietly persists once — never
+  # clobbers an explicit per-project roster — so the read path stays idempotent. A nil/
+  # empty default leaves the row untouched (read-through resolves at spawn time).
+  @spec backfill_roster(Orchestrator.t()) :: Orchestrator.t()
+  defp backfill_roster(%Orchestrator{} = orchestrator) do
+    default = Settings.default_agent_models()
+
+    if map_size(agent_models(orchestrator)) == 0 and map_size(default) > 0 do
+      metadata = Map.put(orchestrator.metadata, "agent_models", default)
+
+      case update_record(orchestrator, %{metadata: metadata}) do
+        {:ok, updated} -> updated
+        {:error, _} -> orchestrator
+      end
+    else
+      orchestrator
+    end
   end
 
   # The harness a per-project orchestrator is created with: the project's own
@@ -323,6 +352,61 @@ defmodule RepoBuilder.Orchestrators do
   def agent_models(%Orchestrator{metadata: metadata}), do: Map.get(metadata, "agent_models", %{})
 
   @doc """
+  The orchestrator's EFFECTIVE roster: the per-project roster merged over the global
+  default (`RepoBuilder.Settings.default_agent_models/0`). A per-project entry wins only
+  when it carries a non-blank model; any tier the project leaves unassigned reads through
+  to the default. Returns `%{category => entry}` (entries with no model anywhere dropped).
+  """
+  @spec effective_agent_models(Orchestrator.t()) :: %{optional(String.t()) => map()}
+  def effective_agent_models(%Orchestrator{} = orchestrator) do
+    roster = agent_models(orchestrator)
+    default = Settings.default_agent_models()
+
+    (Map.keys(default) ++ Map.keys(roster))
+    |> Enum.uniq()
+    |> Enum.flat_map(fn category ->
+      case effective_entry(roster, default, category) do
+        {nil, _source} -> []
+        {entry, _source} -> [{category, entry}]
+      end
+    end)
+    |> Map.new()
+  end
+
+  @doc """
+  The effective `{entry, source}` for one worker `category`: `{entry, :project}` when the
+  per-project roster assigns a non-blank model, else `{default_entry | nil, :default}`
+  (the inherited global default). Callers use the `:project | :default` tag to render an
+  "inherited" indicator.
+  """
+  @spec effective_agent_model(Orchestrator.t(), String.t()) ::
+          {map() | nil, :project | :default}
+  def effective_agent_model(%Orchestrator{} = orchestrator, category) do
+    effective_entry(agent_models(orchestrator), Settings.default_agent_models(), category)
+  end
+
+  # Per-category resolution shared by the two effective_* readers above.
+  @spec effective_entry(
+          %{optional(String.t()) => map()},
+          %{optional(String.t()) => map()},
+          String.t()
+        ) ::
+          {map() | nil, :project | :default}
+  defp effective_entry(roster, default, category) do
+    entry = Map.get(roster, category)
+
+    if entry_has_model?(entry) do
+      {entry, :project}
+    else
+      {Map.get(default, category), :default}
+    end
+  end
+
+  @spec entry_has_model?(map() | nil) :: boolean()
+  defp entry_has_model?(%{} = entry), do: not is_nil(blank_to_nil(entry["model"]))
+  defp entry_has_model?(_), do: false
+
+  @doc """
   The operator's chosen display timezone (IANA name) for rendering log timestamps.
   Stored in `metadata["timezone"]`; falls back to the default (`"UTC"`) when unset or
   no longer a curated/valid zone.
@@ -422,6 +506,46 @@ defmodule RepoBuilder.Orchestrators do
 
   def set_agent_model(_id, _category, _attrs), do: {:error, :invalid_category}
 
+  @doc """
+  Clear a worker `category`'s per-project override so the tier re-inherits the global
+  default (`effective_agent_model/2` then resolves to `:default`). Uses the same atomic
+  `FOR UPDATE` read-merge-write + post-transaction broadcast as `set_agent_model/3`.
+  """
+  @spec clear_agent_model(Ecto.UUID.t(), String.t()) ::
+          {:ok, Orchestrator.t()} | {:error, :not_found | :invalid_category}
+  def clear_agent_model(id, category) when category in @agent_categories do
+    result =
+      Repo.transaction(fn ->
+        case Repo.one(from(o in Orchestrator, where: o.id == ^id, lock: "FOR UPDATE")) do
+          nil -> Repo.rollback(:not_found)
+          %Orchestrator{} = orchestrator -> delete_agent_model!(orchestrator, category)
+        end
+      end)
+
+    case result do
+      {:ok, updated} ->
+        :ok = RepoBuilder.Dashboard.broadcast_orchestrator_updated(updated)
+        {:ok, updated}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  def clear_agent_model(_id, _category), do: {:error, :invalid_category}
+
+  # Drop `category` from the locked orchestrator's roster and persist. Runs inside the
+  # `clear_agent_model/2` transaction; rolls back on a write error so the caller's
+  # contract stays `{:error, :not_found}`. Returns the updated row.
+  defp delete_agent_model!(%Orchestrator{metadata: metadata} = orchestrator, category) do
+    roster = Map.delete(Map.get(metadata, "agent_models", %{}), category)
+
+    case update_record(orchestrator, %{metadata: Map.put(metadata, "agent_models", roster)}) do
+      {:ok, updated} -> updated
+      {:error, _} -> Repo.rollback(:not_found)
+    end
+  end
+
   # Merge `entry` into the locked orchestrator's `agent_models` roster and persist.
   # Runs inside the `set_agent_model/3` transaction; rolls back on a write error so
   # the caller's contract stays `{:error, :not_found}`. Returns the updated row.
@@ -518,17 +642,26 @@ defmodule RepoBuilder.Orchestrators do
   and returns `Decimal.new(0)`.
   """
   @spec emit_cost_recorded(Ecto.UUID.t(), float() | Decimal.t() | nil) :: Decimal.t()
-  def emit_cost_recorded(_id, nil), do: Decimal.new(0)
+  def emit_cost_recorded(id, amount), do: emit_cost_recorded(id, amount, nil)
 
-  def emit_cost_recorded(id, amount) do
+  @doc """
+  Like `emit_cost_recorded/2`, but also tags the cost event with `project_id` so
+  `Budget.Guard` can attribute the spend to the `{:project, project_id}` scope live.
+  """
+  @spec emit_cost_recorded(Ecto.UUID.t(), float() | Decimal.t() | nil, Ecto.UUID.t() | nil) ::
+          Decimal.t()
+  def emit_cost_recorded(_id, nil, _project_id), do: Decimal.new(0)
+
+  def emit_cost_recorded(id, amount, project_id) do
     delta = to_decimal(amount)
 
     # Emit on the shared cost event so Budget.Guard (issue-budget-guardrails) can
-    # attribute orchestrator spend to the {:global} and {:orchestrator, id} scopes.
+    # attribute orchestrator spend to the {:global}, {:orchestrator, id} and
+    # {:project, project_id} scopes.
     :telemetry.execute(
       [:repo_builder, :cost, :recorded],
       %{amount: Decimal.to_float(delta)},
-      %{orchestrator_id: id, run_id: nil}
+      %{orchestrator_id: id, project_id: project_id, run_id: nil}
     )
 
     delta

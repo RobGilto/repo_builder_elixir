@@ -37,6 +37,9 @@ defmodule RepoBuilder.Orchestrator.Server do
 
     typedstruct enforce: true do
       field :orchestrator_id, Ecto.UUID.t()
+      # The orchestrator's bound project (issue per-project-cost-tracking) — threaded into
+      # the cost telemetry metadata so Budget.Guard can attribute spend to the project.
+      field :project_id, Ecto.UUID.t(), enforce: false
       field :agent_id, String.t()
       field :prompt, String.t()
       field :harness, String.t()
@@ -112,6 +115,7 @@ defmodule RepoBuilder.Orchestrator.Server do
     log_no =
       case Logs.persist_orchestrator_event(event, %{
              orchestrator_id: orchestrator.id,
+             project_id: orchestrator.project_id,
              session_id: agent_id,
              provider: orchestrator.provider,
              model: orchestrator.model
@@ -173,6 +177,7 @@ defmodule RepoBuilder.Orchestrator.Server do
 
     state = %State{
       orchestrator_id: orchestrator.id,
+      project_id: orchestrator.project_id,
       agent_id: Keyword.fetch!(opts, :agent_id),
       prompt: Keyword.fetch!(opts, :prompt),
       harness: orchestrator.harness,
@@ -246,7 +251,9 @@ defmodule RepoBuilder.Orchestrator.Server do
     # single flush happens on the terminal event / terminate.
     ni = non_neg(event.input_tokens)
     no = non_neg(event.output_tokens)
-    delta = Orchestrators.emit_cost_recorded(state.orchestrator_id, event.cost_usd)
+
+    delta =
+      Orchestrators.emit_cost_recorded(state.orchestrator_id, event.cost_usd, state.project_id)
 
     state = %State{
       state
@@ -263,7 +270,9 @@ defmodule RepoBuilder.Orchestrator.Server do
   def handle_info({:harness_event, %Event.Done{} = event}, %State{} = state) do
     # Fold the terminal frame's billed cost (still emitting telemetry) into the
     # accumulator, then flush the whole turn in ONE write with the final status.
-    delta = Orchestrators.emit_cost_recorded(state.orchestrator_id, event.cost_usd)
+    delta =
+      Orchestrators.emit_cost_recorded(state.orchestrator_id, event.cost_usd, state.project_id)
+
     state = %State{state | acc_cost: Decimal.add(state.acc_cost, delta)}
     _ = flush(state, if(event.ok, do: :idle, else: :error))
     {:stop, :normal, %State{state | flushed?: true}}
