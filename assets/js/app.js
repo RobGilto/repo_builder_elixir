@@ -241,8 +241,10 @@ const DragSelect = {
 // (issue log-copy-chip). Hosted on the stable #logs-pane (NOT #event-stream-wrap,
 // which already owns the one permitted phx-hook, DragSelect), so it survives stream
 // churn. Delegates from `.cns-event-row__ln[data-log]` cells: a plain click copies
-// that cell's `log-XXXX`; a drag across rows copies the inclusive, DOM-ordered range
-// `"log-FIRST to log-LAST"` (direction-agnostic). Mirrors DragSelect's pointer-drag +
+// that cell's `log-XXXX`; a drag across rows copies EVERY spanned log number,
+// compressed into consecutive runs and split on gaps (e.g. "log-184 to log-187,
+// log-190") so the copy describes exactly which rows were collected, not just the
+// two endpoints (direction-agnostic). Mirrors DragSelect's pointer-drag +
 // capture-phase click-swallow and ClipboardCopy's clipboard guard. Pure client: no
 // server round-trip. Guards on `.cns-event-row__ln` so it never co-fires with
 // DragSelect (which guards on `.cns-event-row__select`).
@@ -294,11 +296,10 @@ const LogCopy = {
         text = anchor.dataset.log
         cells = [anchor]
       } else {
-        // Order anchor/end by current DOM position so direction never matters.
-        const following = anchor.compareDocumentPosition(end) & Node.DOCUMENT_POSITION_FOLLOWING
-        const [first, last] = following ? [anchor, end] : [end, anchor]
-        text = `${first.dataset.log} to ${last.dataset.log}`
-        cells = [first, last]
+        // Collect EVERY log cell the drag actually spans (not just the two endpoints),
+        // recomputed from the live DOM so the copy reflects the real rows on screen.
+        cells = this.cellsBetween(anchor, end)
+        text = this.formatLogs(cells)
         // Clear any selection that began in the first frame before the class took effect.
         window.getSelection()?.removeAllRanges()
       }
@@ -324,6 +325,42 @@ const LogCopy = {
     document.addEventListener("pointerup", this._onPointerUp)
     document.addEventListener("pointercancel", this._onPointerUp)
     this.el.addEventListener("click", this._onClickCapture, true)
+  },
+
+  // Every `.cns-event-row__ln[data-log]` cell in DOM order between two endpoints
+  // (inclusive), direction-agnostic. Reads the current DOM so rows that arrived
+  // mid-gesture are included.
+  cellsBetween(anchor, end) {
+    const all = [...this.el.querySelectorAll(".cns-event-row__ln[data-log]")]
+    const ai = all.indexOf(anchor)
+    const ei = all.indexOf(end)
+    if (ai === -1 || ei === -1) return [anchor]
+    const [lo, hi] = ai <= ei ? [ai, ei] : [ei, ai]
+    return all.slice(lo, hi + 1)
+  },
+
+  // Render the spanned cells as an accurate, copy-friendly string. Consecutive log
+  // numbers collapse to "log-A to log-B"; gaps split into separate ranges, so a
+  // multi-range or sparse selection is described exactly (e.g. "log-184 to log-187,
+  // log-190, log-192 to log-193"). Falls back to a comma list if numbers don't parse.
+  formatLogs(cells) {
+    const nums = [...new Set(
+      cells
+        .map(c => parseInt(String(c.dataset.log).replace(/^log-/, ""), 10))
+        .filter(n => Number.isFinite(n))
+    )].sort((a, b) => a - b)
+    if (nums.length === 0) return cells.map(c => c.dataset.log).join(", ")
+
+    const runs = []
+    let start = nums[0]
+    let prev = nums[0]
+    for (let i = 1; i < nums.length; i++) {
+      if (nums[i] === prev + 1) { prev = nums[i]; continue }
+      runs.push([start, prev])
+      start = prev = nums[i]
+    }
+    runs.push([start, prev])
+    return runs.map(([a, b]) => (a === b ? `log-${a}` : `log-${a} to log-${b}`)).join(", ")
   },
 
   flash(cells) {
