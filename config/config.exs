@@ -331,7 +331,17 @@ config :repo_builder, :orchestrator,
   # the HARD per-turn ceiling (catches a turn that stays byte-active but never finishes). The
   # circuit breaker trips a harness/model path after `breaker_max_failures` failures and
   # half-opens after `breaker_cooldown_ms`.
-  drive_interval_ms: 30_000,
+  #
+  # The drive loop is a BACKSTOP, not the engine (deterministic-worker-fleet-gate): the
+  # event-driven holding pattern (`auto_resume_on_worker_return`) is the primary re-engagement
+  # path, and `RepoBuilder.Orchestrator.WorkerFleet` stops the loop from spending an LLM turn
+  # to poll an orchestrator that has live, progressing workers (a worker is "progressing" when
+  # its session process is alive and it is `:holding` or heartbeating within
+  # `worker_progress_grace_ms`). `min_drive_interval_ms` is a hard per-orchestrator cooldown
+  # that floors the drive cadence regardless of fleet edge cases — bounding worst-case spend.
+  drive_interval_ms: 120_000,
+  min_drive_interval_ms: 120_000,
+  worker_progress_grace_ms: 90_000,
   drive_on_boot: true,
   max_stall: 2,
   escalate_after_stall: 3,

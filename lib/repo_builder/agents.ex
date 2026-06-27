@@ -194,6 +194,37 @@ defmodule RepoBuilder.Agents do
     :ok
   end
 
+  @typedoc """
+  A narrow live-worker projection for the deterministic drive-loop fleet gate
+  (`RepoBuilder.Orchestrator.WorkerFleet`): just the id, status, and last meaningful
+  `heartbeat_at` — never a full row, so the hot Driver tick stays cheap.
+  """
+  @type live_worker :: %{
+          id: Ecto.UUID.t(),
+          status: Agent.status(),
+          heartbeat_at: DateTime.t() | nil
+        }
+
+  @doc """
+  List the non-archived workers for `orchestrator_id` currently in a LIVE status
+  (`:running`/`:holding`), projected to `{id, status, heartbeat_at}` only (self-healing
+  drive-loop fleet gate). This is the cheap, token-free signal the `WorkerFleet`
+  classifier uses to decide whether the autonomous Driver should stand down rather than
+  spend an LLM turn polling. Indexed via `agents_orchestrator_id_index` /
+  `agents_active_index`.
+  """
+  @spec live_workers_for(Ecto.UUID.t()) :: [live_worker()]
+  def live_workers_for(orchestrator_id) do
+    Repo.all(
+      from(a in Agent,
+        where:
+          a.orchestrator_id == ^orchestrator_id and a.archived == false and
+            a.status in [:running, :holding],
+        select: %{id: a.id, status: a.status, heartbeat_at: a.heartbeat_at}
+      )
+    )
+  end
+
   @doc "List all workers owned by one orchestrator (newest first)."
   @spec list_for_orchestrator(Ecto.UUID.t()) :: [Agent.t()]
   def list_for_orchestrator(orchestrator_id) do

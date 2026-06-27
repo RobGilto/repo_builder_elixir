@@ -139,6 +139,11 @@ config :repo_builder, :orchestrator,
   # (deadline tests override per-scope). Breaker thresholds match prod.
   drive_on_boot: false,
   drive_interval_ms: :infinity,
+  # No drive cooldown by default so unrelated tests that call `Driver.tick/0` repeatedly are
+  # not throttled (the fleet-gate test sets its own cooldown per-scope via app-env). The
+  # progress grace matches the prod ordering (>= quiescence_ms) for fleet-classification tests.
+  min_drive_interval_ms: 0,
+  worker_progress_grace_ms: 90_000,
   max_stall: 2,
   escalate_after_stall: 3,
   turn_deadline_ms: 180_000,

@@ -32,17 +32,28 @@ defmodule RepoBuilder.Orchestrator.Driver do
 
   alias RepoBuilder.Budget
   alias RepoBuilder.Budget.Scope
-  alias RepoBuilder.Orchestrator.{Ledgers, Queue, Reflections, TaskLedger}
+  alias RepoBuilder.Orchestrator.{Ledgers, Queue, Reflections, TaskLedger, WorkerFleet}
   alias RepoBuilder.Orchestrator.Orchestrator
   alias RepoBuilder.Orchestrators
 
-  @default_interval_ms 30_000
+  # The drive loop is now a BACKSTOP, not the engine: the event-driven holding pattern is
+  # the primary re-engagement path, and the deterministic `WorkerFleet` gate stops the loop
+  # from polling an orchestrator that has live, progressing workers. So the default tick is
+  # slow and a per-orchestrator cooldown floors the cadence regardless of fleet edge cases.
+  @default_interval_ms 120_000
+  @default_min_drive_interval_ms 120_000
   @default_max_stall 2
   @default_escalate_after_stall 3
 
-  # GenServer state: `acted` maps orchestrator_id => the last Progress entry id whose
-  # stall verdict we already applied, so a stall is counted exactly once per turn.
-  @type state :: %{acted: %{optional(Ecto.UUID.t()) => Ecto.UUID.t()}}
+  # GenServer state:
+  #   * `acted` maps orchestrator_id => the last Progress entry id whose stall verdict we
+  #     already applied, so a stall is counted exactly once per turn.
+  #   * `last_drive` maps orchestrator_id => the monotonic-ms timestamp it was last driven,
+  #     so the `min_drive_interval_ms` cooldown deterministically bounds drive spend.
+  @type state :: %{
+          acted: %{optional(Ecto.UUID.t()) => Ecto.UUID.t()},
+          last_drive: %{optional(Ecto.UUID.t()) => integer()}
+        }
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts),
@@ -61,11 +72,14 @@ defmodule RepoBuilder.Orchestrator.Driver do
     _ = if interval_enabled?(), do: schedule_tick()
 
     if drive_on_boot?() do
-      {:ok, %{acted: %{}}, {:continue, :boot}}
+      {:ok, initial_state(), {:continue, :boot}}
     else
-      {:ok, %{acted: %{}}}
+      {:ok, initial_state()}
     end
   end
+
+  @spec initial_state() :: state()
+  defp initial_state, do: %{acted: %{}, last_drive: %{}}
 
   @impl true
   def handle_continue(:boot, state) do
@@ -87,7 +101,7 @@ defmodule RepoBuilder.Orchestrator.Driver do
   end
 
   def handle_call(:reset, _from, _state) do
-    {:reply, :ok, %{acted: %{}}}
+    {:reply, :ok, initial_state()}
   end
 
   # --- drive sweep ---
@@ -95,7 +109,7 @@ defmodule RepoBuilder.Orchestrator.Driver do
   @spec do_tick(state()) :: {non_neg_integer(), state()}
   defp do_tick(state) do
     Orchestrators.list_drivable()
-    |> Enum.filter(&(within_budget?(&1) and queue_free?(&1)))
+    |> Enum.filter(&drivable_now?(&1, state))
     |> Enum.reduce({0, state}, fn orchestrator, {count, st} ->
       {acted?, st} = drive_one(orchestrator, st)
       {count + if(acted?, do: 1, else: 0), st}
@@ -114,8 +128,14 @@ defmodule RepoBuilder.Orchestrator.Driver do
     state = maybe_apply_stall(id, state)
 
     case Ledgers.current(id) do
-      %TaskLedger{} = ledger -> act_on(orchestrator, ledger, state)
-      nil -> {false, state}
+      %TaskLedger{} = ledger ->
+        # `act_on/3` always takes an action (drive / replan / escalate), so stamp the
+        # per-orchestrator drive cooldown whenever there is an active ledger to act on.
+        {acted?, state} = act_on(orchestrator, ledger, state)
+        {acted?, stamp_drive(state, id)}
+
+      nil ->
+        {false, state}
     end
   end
 
@@ -206,6 +226,18 @@ defmodule RepoBuilder.Orchestrator.Driver do
 
   # --- gates ---
 
+  # The full drive-eligibility gate for one tick, evaluated against the PRE-tick state:
+  #   * within the budget guard,
+  #   * the orchestrator's own turn queue is not busy,
+  #   * the deterministic worker-fleet gate allows it (no live, progressing workers —
+  #     those are re-engaged event-driven by the holding pattern, never polled), and
+  #   * the per-orchestrator drive cooldown has elapsed.
+  @spec drivable_now?(Orchestrator.t(), state()) :: boolean()
+  defp drivable_now?(%Orchestrator{id: id} = orchestrator, state) do
+    within_budget?(orchestrator) and queue_free?(orchestrator) and
+      WorkerFleet.drivable?(id) and cooldown_elapsed?(id, state)
+  end
+
   @spec within_budget?(Orchestrator.t()) :: boolean()
   defp within_budget?(%Orchestrator{id: id, project_id: project_id}) do
     Budget.Guard.check(Scope.scopes_for(%{orchestrator_id: id, project_id: project_id})) == :ok
@@ -213,6 +245,23 @@ defmodule RepoBuilder.Orchestrator.Driver do
 
   @spec queue_free?(Orchestrator.t()) :: boolean()
   defp queue_free?(%Orchestrator{id: id}), do: not Queue.snapshot(id).busy?
+
+  # Deterministic per-orchestrator cooldown: never drive the same orchestrator faster than
+  # `min_drive_interval_ms`, bounding worst-case spend regardless of fleet-classification
+  # edge cases. Uses monotonic time (immune to wall-clock jumps). Unstamped => eligible.
+  @spec cooldown_elapsed?(Ecto.UUID.t(), state()) :: boolean()
+  defp cooldown_elapsed?(id, %{last_drive: last_drive}) do
+    case Map.get(last_drive, id) do
+      nil -> true
+      last -> now_ms() - last >= min_drive_interval_ms()
+    end
+  end
+
+  @spec stamp_drive(state(), Ecto.UUID.t()) :: state()
+  defp stamp_drive(state, id), do: put_in(state.last_drive[id], now_ms())
+
+  @spec now_ms() :: integer()
+  defp now_ms, do: System.monotonic_time(:millisecond)
 
   # --- prompts ---
 
@@ -268,6 +317,10 @@ defmodule RepoBuilder.Orchestrator.Driver do
 
   @spec interval_ms() :: pos_integer() | :infinity
   defp interval_ms, do: config()[:drive_interval_ms] || @default_interval_ms
+
+  @spec min_drive_interval_ms() :: non_neg_integer()
+  defp min_drive_interval_ms,
+    do: config()[:min_drive_interval_ms] || @default_min_drive_interval_ms
 
   @spec drive_on_boot?() :: boolean()
   defp drive_on_boot?, do: Keyword.get(config(), :drive_on_boot, true)

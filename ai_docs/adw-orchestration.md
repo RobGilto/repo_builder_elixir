@@ -439,6 +439,20 @@ Any generated orchestrator must encode these limits (both tracked in
   nor a down WS relay may affect a workflow's exit code. `ADW_EVENTS_DISABLED=1`
   must always remain a valid operator escape hatch — an app must degrade to
   showing only `adw_state.json` when events are disabled.
+- **Drive-loop spend is bounded deterministically, NOT by an LLM
+  (deterministic-worker-fleet-gate).** The autonomous `Orchestrator.Driver` is a
+  *backstop*, not the engine: the event-driven holding pattern
+  (`auto_resume_on_worker_return`) is the primary re-engagement path. The Driver
+  must never spend an LLM turn merely to *check* worker liveness/progress — that is
+  answered programmatically by `RepoBuilder.Orchestrator.WorkerFleet` from cheap
+  runtime state (an indexed `Agents.live_workers_for/1` query + a `SessionRegistry`
+  liveness probe + the `heartbeat_at` column, zero tokens). An orchestrator with a
+  live, progressing/holding worker fleet (`:active`) is skipped entirely; only
+  `:empty`/`:quiescent` fleets are driven, and a per-orchestrator
+  `min_drive_interval_ms` cooldown floors the cadence regardless of fleet edge cases.
+  The original failure this prevents: a worker legitimately busy for minutes on a long
+  external op while the loop re-engaged an Opus orchestrator ≈once a minute, each wake
+  re-reading a ~196K-token cached context — 88% of a project's entire token spend.
 
 ## 7. What `/build-adw-orchestrator` generates — and what it never does
 
