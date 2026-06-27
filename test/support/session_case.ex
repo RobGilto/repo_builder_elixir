@@ -13,6 +13,7 @@ defmodule RepoBuilder.SessionCase do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias RepoBuilder.Logs.Writer
+  alias RepoBuilder.Orchestrator.Breaker
 
   using do
     quote do
@@ -34,6 +35,10 @@ defmodule RepoBuilder.SessionCase do
     on_exit(&drain_sessions/0)
 
     unless tags[:async], do: Mox.set_mox_global()
+
+    # Isolate the shared circuit-breaker ETS (self-healing Phase 4) so a worker failure in one
+    # test can't trip a breaker that refuses a dispatch in the next.
+    Breaker.reset()
 
     :ok
   end

@@ -16,6 +16,10 @@ defmodule RepoBuilderWeb.ProjectsLive do
   alias RepoBuilder.Orchestrators
   alias RepoBuilder.Projects
   alias RepoBuilder.Secrets
+  alias RepoBuilder.Settings
+  alias RepoBuilder.StackLayers
+  alias RepoBuilder.StackLayers.Contract
+  alias RepoBuilder.StackLayers.StackLayer
   alias RepoBuilder.Workflows
 
   @impl true
@@ -29,26 +33,35 @@ defmodule RepoBuilderWeb.ProjectsLive do
   end
 
   defp apply_action(socket, :index, _params) do
-    assign(socket, page_title: "Projects", projects: Projects.list_projects(), project: nil)
+    assign(socket,
+      page_title: "Projects",
+      projects: Projects.list_projects(),
+      project: nil,
+      platform_id: platform_id()
+    )
   end
 
   defp apply_action(socket, :show, %{"id" => id}) do
-    case Projects.fetch_project(id) do
-      {:ok, project} ->
-        orchestrator = elem(Orchestrators.get_or_create_for_project(project.id), 1)
-
-        socket
-        |> assign(page_title: project.name, project: project)
-        |> assign(resolved: Commands.resolve_all(project))
-        |> assign(runs: Workflows.list_recent_for_project(project.id, 20))
-        |> assign(cost: project_cost(project.id))
-        |> assign(secrets: Secrets.list_names(project.id))
-        |> assign(secret_form: %{"name" => "", "value" => ""})
-        |> assign(orchestrator: orchestrator, model_rows: model_rows(orchestrator))
-
+    with {:ok, project} <- Projects.fetch_project(id),
+         {:ok, orchestrator} <- Orchestrators.get_or_create_for_project(project.id) do
+      socket
+      |> assign(page_title: project.name, project: project)
+      |> assign(resolved: Commands.resolve_all(project))
+      |> assign(runs: Workflows.list_recent_for_project(project.id, 20))
+      |> assign(cost: project_cost(project.id))
+      |> assign(secrets: Secrets.list_names(project.id))
+      |> assign(secret_form: %{"name" => "", "value" => ""})
+      |> assign(orchestrator: orchestrator, model_rows: model_rows(orchestrator))
+      |> assign_stack_layers(project.id)
+    else
       {:error, :not_found} ->
         socket
         |> put_flash(:error, "Project not found")
+        |> push_navigate(to: ~p"/projects")
+
+      {:error, _changeset} ->
+        socket
+        |> put_flash(:error, "Could not resolve an orchestrator for this project")
         |> push_navigate(to: ~p"/projects")
     end
   end
@@ -129,9 +142,35 @@ defmodule RepoBuilderWeb.ProjectsLive do
     end
   end
 
-  def handle_event("delete_project", _params, socket) do
-    {:ok, _} = Projects.delete_project(socket.assigns.project)
-    {:noreply, push_navigate(socket, to: ~p"/projects")}
+  # Mix & match one layer per type (stack-layers subsystem). Replaces whichever layer of
+  # this type is currently selected: deselect the type's current pick, then select the new
+  # one (or leave the type empty when "none"). Re-renders the live contract preview.
+  def handle_event(
+        "select_stack_layer",
+        %{"layer_type" => layer_type, "stack_layer_id" => stack_layer_id},
+        socket
+      ) do
+    project_id = socket.assigns.project.id
+
+    Enum.each(
+      layers_of_type(project_id, layer_type),
+      &StackLayers.deselect_layer(project_id, &1.id)
+    )
+
+    _ =
+      if stack_layer_id not in [nil, ""] do
+        StackLayers.select_layer(project_id, stack_layer_id)
+      end
+
+    {:noreply, assign_stack_layers(socket, project_id)}
+  end
+
+  def handle_event("delete_project", %{"id" => id}, socket) do
+    if id == platform_id() do
+      {:noreply, put_flash(socket, :error, "The platform repo project can't be deregistered")}
+    else
+      deregister_project(socket, id)
+    end
   end
 
   def handle_event("add_secret", %{"name" => name, "value" => value}, socket) do
@@ -166,6 +205,35 @@ defmodule RepoBuilderWeb.ProjectsLive do
      |> assign(secrets: Secrets.list_names(project.id))}
   end
 
+  # The platform's own "repo" project (seeded row whose root_path is the BEAM cwd). It is the
+  # safe home the console falls back to, so it must never be deregistered. `nil` before seeding.
+  @spec platform_id() :: Ecto.UUID.t() | nil
+  defp platform_id do
+    case Projects.default_project() do
+      nil -> nil
+      project -> project.id
+    end
+  end
+
+  # Deregister a project and, if it was the persisted console selection, drop that pointer so
+  # "back to console" resolves to the platform repo project (via `Projects.active_or_default/1`)
+  # instead of a now-dead id. Historical agents/runs are kept (FK is unscoped on delete).
+  @spec deregister_project(Phoenix.LiveView.Socket.t(), Ecto.UUID.t()) ::
+          {:noreply, Phoenix.LiveView.Socket.t()}
+  defp deregister_project(socket, id) do
+    with {:ok, project} <- Projects.fetch_project(id),
+         {:ok, _} <- Projects.delete_project(project) do
+      _ = if Settings.get_active_project_id() == id, do: Settings.put_active_project_id(nil)
+
+      {:noreply,
+       socket
+       |> put_flash(:info, "Deregistered #{project.name}")
+       |> push_navigate(to: ~p"/projects")}
+    else
+      _ -> {:noreply, put_flash(socket, :error, "Could not deregister project")}
+    end
+  end
+
   @impl true
   def render(%{live_action: :index} = assigns) do
     ~H"""
@@ -177,11 +245,25 @@ defmodule RepoBuilderWeb.ProjectsLive do
         <h1 class="text-xl font-semibold">Projects</h1>
 
         <ul id="projects" class="space-y-2">
-          <li :for={project <- @projects} class="rounded border border-zinc-700 p-3">
-            <.link navigate={~p"/projects/#{project.id}"} class="font-medium text-cyan-400">
-              {project.name}
-            </.link>
-            <span class="ml-2 text-xs text-zinc-400">{project.root_path}</span>
+          <li
+            :for={project <- @projects}
+            class="flex items-center justify-between rounded border border-zinc-700 p-3"
+          >
+            <div>
+              <.link navigate={~p"/projects/#{project.id}"} class="font-medium text-cyan-400">
+                {project.name}
+              </.link>
+              <span class="ml-2 text-xs text-zinc-400">{project.root_path}</span>
+            </div>
+            <button
+              :if={project.id != @platform_id}
+              phx-click="delete_project"
+              phx-value-id={project.id}
+              data-confirm={"Deregister #{project.name}? Historical agents/runs are kept (unscoped)."}
+              class="rounded bg-red-800 px-2 py-1 text-xs"
+            >
+              Deregister
+            </button>
           </li>
           <li :if={@projects == []} class="text-sm text-zinc-400">
             No projects yet — register a target repo below.
@@ -230,6 +312,9 @@ defmodule RepoBuilderWeb.ProjectsLive do
     ~H"""
     <Layouts.app flash={@flash}>
       <div class="space-y-6">
+        <.link navigate={~p"/projects"} class="text-cyan-400 text-sm">
+          ← back to projects
+        </.link>
         <div class="flex items-center justify-between">
           <h1 class="text-xl font-semibold">{@project.name}</h1>
           <div class="flex gap-2">
@@ -241,10 +326,11 @@ defmodule RepoBuilderWeb.ProjectsLive do
             </.link>
             <button
               phx-click="delete_project"
-              data-confirm="Delete this project? Historical agents/runs are kept (unscoped)."
+              phx-value-id={@project.id}
+              data-confirm="Deregister this project? Historical agents/runs are kept (unscoped)."
               class="rounded bg-red-800 px-3 py-1 text-sm"
             >
-              Delete
+              Deregister
             </button>
           </div>
         </div>
@@ -344,6 +430,59 @@ defmodule RepoBuilderWeb.ProjectsLive do
 
         <div class="rounded border border-zinc-700 p-4 space-y-3">
           <div>
+            <h3 class="font-semibold">Stack layers</h3>
+            <p class="text-xs text-zinc-500">
+              Compose this project's stack — one layer per type. The selection becomes the
+              "build ONLY within this stack" contract injected into every worker the
+              orchestrator spawns. Manage the catalog in Settings → Stack Layers.
+            </p>
+          </div>
+
+          <form
+            :for={{type, options} <- @stack_layer_options}
+            id={"project-stack-layer-#{type}"}
+            phx-change="select_stack_layer"
+            class="flex flex-wrap items-center gap-2 text-sm"
+          >
+            <input type="hidden" name="layer_type" value={type} />
+            <span class="w-20 text-xs font-semibold uppercase text-zinc-300">{type}</span>
+
+            <select
+              name="stack_layer_id"
+              class="rounded border border-zinc-600 bg-zinc-800 px-2 py-1"
+            >
+              <option value="" selected={@selected_layer_ids[to_string(type)] in [nil, ""]}>
+                none…
+              </option>
+              <option
+                :for={layer <- options}
+                value={layer.id}
+                selected={@selected_layer_ids[to_string(type)] == layer.id}
+              >
+                {layer.name} ({layer.language})
+              </option>
+            </select>
+          </form>
+
+          <div>
+            <div class="text-xs font-semibold uppercase text-zinc-400">Contract preview</div>
+            <pre
+              :if={@stack_contract != ""}
+              id="project-stack-contract"
+              class="mt-1 whitespace-pre-wrap rounded bg-zinc-900 p-3 text-xs text-zinc-300"
+            >{@stack_contract}</pre>
+            <p
+              :if={@stack_contract == ""}
+              id="project-stack-contract-empty"
+              class="text-xs text-zinc-500"
+            >
+              No layers selected — workers receive no stack contract.
+            </p>
+          </div>
+        </div>
+
+        <div class="rounded border border-zinc-700 p-4 space-y-3">
+          <div>
             <h3 class="font-semibold">Secrets</h3>
             <p class="text-xs text-zinc-500">
               Deposited values are encrypted at rest and injected into a worker's environment
@@ -427,6 +566,37 @@ defmodule RepoBuilderWeb.ProjectsLive do
   defp pack_ids do
     packs = Commands.list_packs() |> Enum.map(& &1.id) |> Enum.uniq()
     Enum.uniq(["auto" | Enum.sort(packs)])
+  end
+
+  # Stack-layers card assigns (stack-layers subsystem): the per-type catalog options, the
+  # project's current selection keyed by type-string (one pick per type for the picker),
+  # and the live contract preview. Recomputed after every selection change.
+  @spec assign_stack_layers(Phoenix.LiveView.Socket.t(), Ecto.UUID.t()) ::
+          Phoenix.LiveView.Socket.t()
+  defp assign_stack_layers(socket, project_id) do
+    by_type = StackLayers.list_layers_by_type()
+
+    options =
+      Enum.map(StackLayer.layer_types(), fn type -> {type, Map.get(by_type, type, [])} end)
+
+    selected =
+      project_id
+      |> StackLayers.layers_for_project()
+      |> Map.new(fn layer -> {Atom.to_string(layer.layer_type), layer.id} end)
+
+    assign(socket,
+      stack_layer_options: options,
+      selected_layer_ids: selected,
+      stack_contract: Contract.render(project_id)
+    )
+  end
+
+  # The project's currently-selected layers of a given type-string (stack-layers subsystem).
+  @spec layers_of_type(Ecto.UUID.t(), String.t()) :: [StackLayer.t()]
+  defp layers_of_type(project_id, layer_type) do
+    project_id
+    |> StackLayers.layers_for_project()
+    |> Enum.filter(&(Atom.to_string(&1.layer_type) == layer_type))
   end
 
   # The per-project worker roster card rows: the EFFECTIVE entry per tier (project

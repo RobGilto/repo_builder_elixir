@@ -28,6 +28,7 @@ defmodule RepoBuilder.Agents.Agent do
           model: String.t() | nil,
           system_prompt: String.t() | nil,
           archived: boolean(),
+          heartbeat_at: DateTime.t() | nil,
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
@@ -49,6 +50,11 @@ defmodule RepoBuilder.Agents.Agent do
     # Soft-archive (issue agent-CRUD): an archived agent is hidden from the default
     # rail/list but its row + `agent_logs`/cost history are preserved (vs hard delete).
     field :archived, :boolean, default: false
+    # Liveness heartbeat (self-healing Phase 1): bumped on every normalized harness event
+    # (real progress), NOT on every row write. Drives the soft `:running → :idle`
+    # quiescence demotion and the reaper's live-stale idle-demotion pass; nil until the
+    # worker emits its first event.
+    field :heartbeat_at, :utc_datetime_usec
     timestamps()
   end
 

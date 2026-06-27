@@ -82,6 +82,19 @@ defmodule RepoBuilder.Application do
       # Boot-time reconciliation of orphaned OS children via the durable ledger.
       # Runs AFTER Repo (it reads os_pid_ledger). Disabled on boot in tests.
       RepoBuilder.OrphanReaper,
+      # Periodic + boot liveness sweep for phantom :running workers (issue worker-terminal
+      # Part B). Runs AFTER Repo and the SessionRegistry/SessionSupervisor so its liveness
+      # lookups are valid; reconciles a stuck row to :error and re-engages the owning
+      # orchestrator. Disabled on boot + interval in tests (tests drive sweep/0).
+      RepoBuilder.Session.LivenessReaper,
+      # Native ETS circuit breaker for worker-dispatch paths (self-healing Phase 4): trips a
+      # repeatedly-failing harness/model/role so the leader reroutes instead of burning budget.
+      RepoBuilder.Orchestrator.Breaker,
+      # Autonomous drive loop (self-healing Phase 4): on an interval + on boot it drives every
+      # orchestrator with an active goal one inner-loop step toward DONE (stall→replan→escalate),
+      # so a BEAM/node restart RESUMES unfinished goals from the durable ledger rather than cold-
+      # starting. Disabled on boot + interval in tests (the suite drives `tick/0`).
+      RepoBuilder.Orchestrator.Driver,
       # Start to serve requests, typically the last entry
       RepoBuilderWeb.Endpoint
     ]

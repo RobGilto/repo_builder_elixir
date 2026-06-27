@@ -90,6 +90,35 @@ A pack is `priv/command_packs/<pack>/<version>/commands/**/*.md`. Built-in packs
    `generic` pack's token-templated bodies already work. Add a stack pack only for the
    commands whose prose truly differs.
 
+## Stack Layers & the worker stack contract
+
+Where **Capabilities/command-packs** supply the *command values* that vary per stack
+(`{{TEST_COMMAND}}` …), **Stack Layers** supply the typed *composition + reasoning/
+guardrails* — the "who/why/which-language" layer the worker must stay within. The two are
+orthogonal and both unchanged by each other.
+
+- **Catalog** — `stack_layers` rows (`{layer_type, name, language, reasoning, enabled,
+  source}`), the only `Repo` caller being `RepoBuilder.StackLayers`. `layer_type` is a
+  closed enum (`frontend | backend | database | tooling`). Operator CRUD lives at
+  Settings → Stack Layers; `seed_default_layers/0` (run from `priv/repo/seeds.exs`) ships a
+  starter catalog, and an operator edit marks a row `:manual` so re-seed never clobbers it.
+- **Composition** — `project_stack_layers` joins selected catalog layers to a project
+  (mix & match, one pick per type in the UI). `/projects/:id` exposes a per-type picker
+  with a live contract preview. `seed_project_from_stack/2` best-effort auto-selects layers
+  whose `language` matches the detected stack on register/refresh — never clobbering an
+  existing selection.
+- **Contract** — `RepoBuilder.StackLayers.Contract.render/1` is pure (mirrors
+  `ContextPrimer.render/1`): project id → a markdown "build ONLY within this stack" block,
+  or `""` when there are no layers (fully back-compatible). `layer.reasoning` is
+  worker-facing prose, injected verbatim.
+- **Injection** — the load-bearing fix. The contract is folded onto the front of a
+  worker's persisted `agents.system_prompt` at the single `create_agent/2` chokepoint
+  (`orchestrator/tools.ex`), ordered **contract → task body → reporting clause**, so the
+  language guardrail leads every turn for that worker's life. The same contract is surfaced
+  in the orchestrator prompt (`system_prompt.ex` `project_stack_block/1`). Persisted at
+  create — re-mixing a project's layers affects *future* workers; existing workers keep the
+  charter they were born with.
+
 ## Worktree isolation
 
 `RepoBuilder.Projects.Worktree.checkout/2` provisions

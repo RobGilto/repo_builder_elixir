@@ -8,12 +8,15 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
   """
   alias RepoBuilder.Commands
   alias RepoBuilder.Definitions
+  alias RepoBuilder.Expertise
   alias RepoBuilder.Harness.Registry
-  alias RepoBuilder.Orchestrator.{Orchestrator, Templates, ToolCatalog}
+  alias RepoBuilder.Orchestrator.{Orchestrator, Reflections, Templates, ToolCatalog}
   alias RepoBuilder.Orchestrators
   alias RepoBuilder.Plugins.Activation
   alias RepoBuilder.Projects
   alias RepoBuilder.Secrets
+  alias RepoBuilder.StackLayers
+  alias RepoBuilder.StackLayers.Contract
   alias RepoBuilder.WorkflowEngine.Catalog
 
   @doc "Build the system prompt for `orchestrator`."
@@ -106,15 +109,15 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     Working directory:
     #{working_dir_block(orchestrator)}
     #{project_primer_block(orchestrator)}
+    #{project_stack_block(orchestrator)}
     #{project_secrets_block(orchestrator)}
 
-    Worker specialization (name workers by the role they play):
-    - builder: implement features, write code
-    - reviewer: code review, quality checks
-    - tester: write and run tests
-    - documenter: write documentation
-    - debugger: troubleshoot failures
+    Worker roles (data-driven from the live subagent-template registry — name workers by role):
+    #{worker_roles_block()}
 
+    #{leader_expertise_block()}
+    #{expertise_block(orchestrator)}
+    #{reflections_block(orchestrator)}
     Message queue & holding pattern:
     - Operator messages you receive while you are working are QUEUED and delivered to
       you as your NEXT turn, in the order they were sent. You will not be interrupted
@@ -244,6 +247,17 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
 
       _ ->
         ""
+    end
+  end
+
+  # Inject the active project's stack contract (stack-layers subsystem) so the
+  # orchestrator frames tasks and spawns workers on-stack. Same back-compat contract as
+  # `project_primer_block/1`: no project / no selected layers ⇒ "" (prompt unchanged).
+  @spec project_stack_block(Orchestrator.t()) :: String.t()
+  defp project_stack_block(%Orchestrator{} = orchestrator) do
+    case resolve_project(orchestrator) do
+      %Projects.Project{} = project -> Contract.render(project.id)
+      _no_project -> ""
     end
   end
 
@@ -447,5 +461,121 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
       [] -> "(none registered)"
       harnesses -> harnesses |> Enum.sort() |> Enum.join(", ")
     end
+  end
+
+  # Data-driven worker roles (self-healing Phase 5): the live subagent-template registry
+  # replaces the old frozen five-role list. Empty state still names the conventional roles.
+  @spec worker_roles_block() :: String.t()
+  defp worker_roles_block do
+    case Templates.list() do
+      [] ->
+        "- (no role templates yet — author one via save_agent_template; name workers by role, " <>
+          "e.g. builder/reviewer/tester/documenter/debugger)"
+
+      templates ->
+        Enum.map_join(templates, "\n", fn template ->
+          "- #{template.name}: #{template.description}"
+        end)
+    end
+  end
+
+  @doc """
+  The shared leadership playbook injected into EVERY orchestrator prompt (self-healing Phase 5):
+  the explicit autonomous drive-loop protocol — set a goal, record progress every turn, verify
+  against the tree, drive/spawn/report decision rules, when to replan, escalate as a last resort.
+  Public so it can be reused/asserted.
+  """
+  @spec leader_expertise_block() :: String.t()
+  def leader_expertise_block do
+    """
+    Autonomous leadership — the drive loop (run this every turn, even with no operator present):
+    - SET A GOAL: for any non-trivial objective call `set_goal` with a concrete
+      `definition_of_done` (and a plan). It is DURABLE — it survives a restart and you reconcile
+      against it each turn instead of re-deriving intent from memory.
+    - RECORD PROGRESS every turn: call `record_progress` (made_progress / looping / next_agent /
+      summary). An unreported turn is treated as a STALL by the drive loop.
+    - VERIFY, never assume: do NOT trust a worker's claim that work is done. Use `inspect_repo`
+      (git_status / changed_files / read_file) to check the ACTUAL tree against the definition of
+      done before believing it.
+    - ONE STEP per turn: drive a worker (`command_agent`), fan out a new role (`create_agent`),
+      or — only once the definition of done is verified — `report_complete`. Don't poll; end your
+      turn and you'll be re-engaged when there is work to review.
+    - REPLAN on stagnation: after two no-progress turns you'll be told to REPLAN — reconsider the
+      facts/plan and try a DIFFERENT approach rather than pushing the same step again.
+    - ESCALATE is the last resort: only a genuine blocker with no path forward should reach the
+      away operator.
+    """
+    |> String.trim_trailing()
+  end
+
+  # The code-validated domain mental model(s) for the project's stack (self-healing Phase 5):
+  # render each selected stack layer's expertise (keyed by the kebab-cased layer name). "" when
+  # no project / no models exist (back-compatible: prompt unchanged).
+  @spec expertise_block(Orchestrator.t()) :: String.t()
+  defp expertise_block(%Orchestrator{} = orchestrator) do
+    case orchestrator
+         |> relevant_domains()
+         |> Enum.map(&Expertise.render/1)
+         |> Enum.reject(&(&1 == "")) do
+      [] ->
+        ""
+
+      bodies ->
+        """
+        Domain expertise (code-validated mental model for this stack — verify against the cited code):
+        #{Enum.join(bodies, "\n\n")}
+        """
+        |> String.trim_trailing()
+    end
+  end
+
+  # Kebab-cased domain keys derived from the project's selected stack layers (e.g. an
+  # "Elixir / Phoenix" layer → "elixir-phoenix"). No project ⇒ no domains.
+  @spec relevant_domains(Orchestrator.t()) :: [String.t()]
+  defp relevant_domains(%Orchestrator{} = orchestrator) do
+    case resolve_project(orchestrator) do
+      %Projects.Project{id: id} ->
+        id |> StackLayers.layers_for_project() |> Enum.map(&domain_key(&1.name)) |> Enum.uniq()
+
+      _no_project ->
+        []
+    end
+  rescue
+    _error -> []
+  end
+
+  @spec domain_key(String.t()) :: String.t()
+  defp domain_key(name) do
+    name
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9]+/, "-")
+    |> String.trim("-")
+  end
+
+  # The last N verbal lessons for the project (self-healing Phase 5 — Reflexion): so the next
+  # run starts ahead of where the last ended. "" when none (back-compatible).
+  @spec reflections_block(Orchestrator.t()) :: String.t()
+  defp reflections_block(%Orchestrator{} = orchestrator) do
+    project_id =
+      case resolve_project(orchestrator) do
+        %Projects.Project{id: id} -> id
+        _no_project -> nil
+      end
+
+    case Reflections.list_recent(project_id, 5) do
+      [] ->
+        ""
+
+      reflections ->
+        lines = Enum.map_join(reflections, "\n", fn r -> "- #{r.lesson}" end)
+
+        """
+        Lessons from past runs (apply them; don't repeat the mistakes):
+        #{lines}
+        """
+        |> String.trim_trailing()
+    end
+  rescue
+    _error -> ""
   end
 end

@@ -372,6 +372,114 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
           },
           "required" => ["name", "description", "system_prompt"]
         }
+      },
+      %{
+        name: "set_goal",
+        description:
+          "Set (or refresh) the durable GOAL you are driving — your Task Ledger. `goal` is " <>
+            "the objective; `definition_of_done` is how you VERIFY completion (be concrete and " <>
+            "checkable). Optional `plan` is an ordered list of steps. This persists across turns " <>
+            "and a restart, so you reconcile against it each turn instead of re-deriving intent. " <>
+            "Required before the autonomous drive loop will keep advancing the work.",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "goal" => %{"type" => "string", "description" => "The objective to drive to done."},
+            "definition_of_done" => %{
+              "type" => "string",
+              "description" => "Concrete, checkable criteria for completion."
+            },
+            "plan" => %{
+              "type" => "array",
+              "items" => %{"type" => "string"},
+              "description" => "Optional ordered step list."
+            }
+          },
+          "required" => ["goal", "definition_of_done"]
+        }
+      },
+      %{
+        name: "record_progress",
+        description:
+          "Record a Progress Ledger entry for THIS turn: whether the goal is `satisfied` (done), " <>
+            "whether you are `looping` (repeating without advancing), whether you `made_progress`, " <>
+            "and `next_agent`/`next_instruction` for the next step plus a one-line `summary`. Do " <>
+            "this EVERY turn — the drive loop reads it to decide whether to keep driving, replan, " <>
+            "or report complete; an unreported turn is treated as a stall.",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "satisfied" => %{"type" => "boolean", "description" => "Is the goal complete?"},
+            "looping" => %{
+              "type" => "boolean",
+              "description" => "Are you repeating without progress?"
+            },
+            "made_progress" => %{
+              "type" => "boolean",
+              "description" => "Did this turn advance the goal?"
+            },
+            "next_agent" => %{
+              "type" => "string",
+              "description" => "Who acts next (a worker name)."
+            },
+            "next_instruction" => %{
+              "type" => "string",
+              "description" => "What the next step should do."
+            },
+            "summary" => %{"type" => "string", "description" => "One-line summary of this turn."}
+          },
+          "required" => ["made_progress"]
+        }
+      },
+      %{
+        name: "get_ledger",
+        description:
+          "Read your current Task Ledger + latest Progress entry: the goal, definition-of-done, " <>
+            "step plan, lifecycle status, stall count, and the last recorded progress. Use it to " <>
+            "re-orient at the start of a turn.",
+        input_schema: %{"type" => "object", "properties" => %{}, "required" => []}
+      },
+      %{
+        name: "report_complete",
+        description:
+          "Declare the GOAL complete: marks the Task Ledger done (the drive loop stops) and " <>
+            "notifies the operator with your `summary` and any `recommendations`. Only call this " <>
+            "once you have VERIFIED the definition-of-done against the actual tree (use " <>
+            "`inspect_repo`), not just a worker's self-report.",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "summary" => %{"type" => "string", "description" => "What was accomplished."},
+            "recommendations" => %{
+              "type" => "string",
+              "description" => "Optional follow-ups / caveats for the operator."
+            }
+          },
+          "required" => ["summary"]
+        }
+      },
+      %{
+        name: "inspect_repo",
+        description:
+          "Read-only inspection of your working directory so you can verify work against the " <>
+            "ACTUAL tree (not a worker's self-report). `op`: `git_status` (short status + branch), " <>
+            "`changed_files` (the porcelain change list), or `read_file` (read one file by `path`). " <>
+            "Path-jailed to the working dir and capped; makes NO edits.",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "op" => %{
+              "type" => "string",
+              "enum" => ["git_status", "changed_files", "read_file"],
+              "description" => "Which inspection to run."
+            },
+            "path" => %{
+              "type" => "string",
+              "description" => "Relative path under the working dir (required for read_file)."
+            }
+          },
+          "required" => ["op"]
+        }
       }
     ]
   end

@@ -18,6 +18,7 @@ defmodule RepoBuilder.DataCase do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias RepoBuilder.Logs.Writer
+  alias RepoBuilder.Orchestrator.Breaker
 
   using do
     quote do
@@ -42,6 +43,9 @@ defmodule RepoBuilder.DataCase do
   def setup_sandbox(tags) do
     pid = Sandbox.start_owner!(RepoBuilder.Repo, shared: not tags[:async])
     on_exit(fn -> Sandbox.stop_owner(pid) end)
+    # Isolate the shared circuit-breaker ETS (self-healing Phase 4) so a worker failure in one
+    # test can't trip a breaker that refuses a dispatch in the next.
+    Breaker.reset()
     # Drain the async Logs.Writer before the sandbox connection is checked in, so a
     # late persist never races teardown. Registered before drain_sessions so (LIFO)
     # it runs AFTER sessions stop — no new casts arrive once we drain.

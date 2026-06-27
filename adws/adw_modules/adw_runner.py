@@ -114,7 +114,9 @@ def _emit_missing_commands(emitter: Emitter, missing: list[str], working_dir: st
     """Emit the neutral ``error`` event naming the unresolved slash commands."""
     names = ", ".join(f"/{name}" for name in missing)
     emitter.error(
-        f"missing slash command(s) in {commands_dir(working_dir)}: {names}",
+        f"missing slash command(s) in {commands_dir(working_dir)}: {names}"
+        " — run via the RepoBuilder orchestrator's start_adw, which seeds these from the"
+        " command resolver",
         reason="spawn_failed",
     )
 

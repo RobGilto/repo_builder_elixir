@@ -15,6 +15,11 @@
 {:ok, seeded} = RepoBuilder.CostCenter.seed_prices()
 IO.puts("Seeded #{seeded} model price rows.")
 
+# Idempotently seed the Stack Layers catalog (stack-layers subsystem). Safe to re-run:
+# refreshes `:seed` rows, preserves operator `:manual` edits, never duplicates.
+{:ok, layers_seeded} = RepoBuilder.StackLayers.seed_default_layers()
+IO.puts("Seeded #{layers_seeded} stack layer rows.")
+
 # Idempotently seed the platform's own Project (agentic-layer adaptor) so existing
 # global agents/runs (project_id == nil) have a logical "platform itself" home, and
 # the console's project switcher always has a default. Re-running is safe — the unique

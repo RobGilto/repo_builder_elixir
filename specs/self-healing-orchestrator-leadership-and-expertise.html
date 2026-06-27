@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan: Self-Healing Orchestrator Leadership &amp; Expertise</title>
+<style>
+  :root {
+    /* Self-healing autonomy identity — indigo leader, teal worker/healing, green pulse */
+    --ink:        #14161f;
+    --paper:      #f6f7fa;
+    --panel:      #ffffff;
+    --muted:      #5c6373;
+    --line:       #dde1ea;
+    --accent:     #4f46b8;   /* orchestrator / leader */
+    --accent-2:   #128a8a;   /* worker / healing */
+    --pulse:      #2e8b6f;   /* liveness / heartbeat / ok */
+    --stall:      #b9791b;   /* stall / replan */
+    --stop:       #b23b3b;   /* phantom / error */
+    --code-bg:    #161826;
+    --code-fg:    #e6e8f5;
+    --radius:     12px;
+    --shadow:     0 1px 2px rgba(20,22,31,.06), 0 8px 24px rgba(20,22,31,.06);
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Inter", "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); line-height: 1.6; font-size: 16px;
+  }
+  main { max-width: 980px; margin: 0 auto; padding: 3rem 1.5rem 6rem; }
+  header h1 { font-size: 2.1rem; line-height: 1.15; margin: 0 0 .75rem; letter-spacing: -.02em; }
+  h2 { font-size: 1.5rem; margin: 2.6rem 0 .9rem; letter-spacing: -.01em; padding-bottom: .4rem; border-bottom: 2px solid var(--line); }
+  h3 { font-size: 1.18rem; margin: 1.6rem 0 .6rem; }
+  h4 { font-size: 1.02rem; margin: 1.2rem 0 .4rem; color: var(--accent); }
+  p { margin: .5rem 0; }
+  a { color: var(--accent-2); }
+  code { font-family: var(--mono); font-size: .88em; background: #eceaf7; color: #322c63; padding: .1em .38em; border-radius: 5px; }
+  pre { background: var(--code-bg); color: var(--code-fg); padding: 1rem 1.1rem; border-radius: var(--radius); overflow-x: auto; font-size: .82rem; line-height: 1.55; }
+  pre code { background: none; color: inherit; padding: 0; }
+  section { scroll-margin-top: 1rem; }
+  strong { font-weight: 650; }
+
+  /* metadata */
+  details.meta { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: .5rem 1rem; margin: 1rem 0 0; box-shadow: var(--shadow); }
+  details.meta summary { cursor: pointer; font-weight: 600; color: var(--muted); }
+  details.meta dl { display: grid; grid-template-columns: max-content 1fr; gap: .3rem 1.2rem; margin: .8rem 0 .3rem; font-size: .85rem; }
+  details.meta dt { color: var(--muted); font-variant: small-caps; letter-spacing: .03em; }
+  details.meta dd { margin: 0; font-family: var(--mono); font-size: .8rem; word-break: break-word; }
+
+  /* figures / images */
+  figure { margin: 1.6rem 0; text-align: center; }
+  figure img { max-width: 100%; height: auto; border-radius: var(--radius); border: 1px solid var(--line); box-shadow: var(--shadow); }
+  figcaption { color: var(--muted); font-size: .85rem; margin-top: .6rem; font-style: italic; }
+  .img-todo { border: 1px dashed var(--line); border-radius: var(--radius); padding: 2.2rem 1rem; color: var(--muted); background: repeating-linear-gradient(45deg, #fff, #fff 12px, #f1f3f8 12px, #f1f3f8 24px); font-size: .85rem; }
+
+  /* hero */
+  .hero { margin-top: 1.6rem; }
+
+  /* callouts */
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem 1.2rem; box-shadow: var(--shadow); }
+  .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 720px) { .twocol { grid-template-columns: 1fr; } }
+
+  /* files */
+  .files ul { list-style: none; padding: 0; }
+  .files li { padding: .35rem 0; border-bottom: 1px dashed var(--line); }
+  .tag { display: inline-block; font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: .12em .5em; border-radius: 999px; vertical-align: middle; margin-right: .35rem; }
+  .tag.existing { background: #e3e2f4; color: var(--accent); }
+  .tag.new { background: #d9f0ee; color: var(--accent-2); }
+
+  /* phases */
+  .phase { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: var(--radius); padding: 1.2rem 1.4rem; margin: 1.4rem 0; box-shadow: var(--shadow); }
+  .phase h3 { margin-top: .2rem; }
+  code.status { background: var(--ink); color: #fff; font-weight: 700; padding: .05em .45em; border-radius: 5px; }
+  ul.checklist { list-style: none; padding-left: 0; }
+  ul.checklist li { padding: .28rem 0 .28rem 0; }
+  ul.checklist li code.status { margin-right: .5rem; }
+  .loop { margin-top: .9rem; padding: .7rem .9rem; background: #fbf4e6; border: 1px solid #eedcb4; border-radius: 8px; font-size: .9rem; }
+
+  /* tables */
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .9rem; }
+  th, td { text-align: left; padding: .55rem .7rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: #edeef4; font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  td code { font-size: .82em; }
+
+  /* questionables / amendments */
+  #questionables details, #amendments details { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: .6rem 1rem; margin: .6rem 0; box-shadow: var(--shadow); }
+  #questionables summary, #amendments summary { cursor: pointer; font-weight: 600; }
+  .qa-answer { color: var(--muted); margin-top: .6rem; }
+
+  /* badges / legend */
+  .badge { font-size: .72rem; font-weight: 700; padding: .1em .5em; border-radius: 999px; margin-left: .4rem; vertical-align: middle; }
+  .badge.lead { background: #e3e2f4; color: var(--accent); }
+  .badge.work { background: #d9f0ee; color: var(--accent-2); }
+  .badge.pulse { background: #dcefe6; color: var(--pulse); }
+  .badge.stall { background: #fbeed6; color: var(--stall); }
+  .badge.stop { background: #f6dede; color: var(--stop); }
+  .legend { display: flex; flex-wrap: wrap; gap: .5rem 1rem; font-size: .82rem; color: var(--muted); margin: .4rem 0 0; }
+  .legend span::before { content: "●"; margin-right: .35rem; }
+  .legend .l-lead::before { color: var(--accent); }
+  .legend .l-work::before { color: var(--accent-2); }
+  .legend .l-pulse::before { color: var(--pulse); }
+  .legend .l-stall::before { color: var(--stall); }
+  .legend .l-stop::before { color: var(--stop); }
+</style>
+</head>
+<body>
+<main>
+
+  <!-- ===== HEADER + UPDATABLE METADATA ===== -->
+  <header>
+    <h1>Self-Healing Orchestrator Leadership &amp; Expertise</h1>
+    <p class="panel">Turn the orchestrator from a <em>reactive meta-agent</em> into an <strong>autonomous, self-healing project leader</strong>. Workers self-correct their own state (a waiting worker becomes <code>:idle</code>, never a phantom <code>:running</code>); the leader keeps a durable <strong>goal + progress ledger</strong>, reads what has actually been done, and drives the project to <code>DONE</code> — driving a worker, fanning out new workers, or reporting completion with recommendations — all while the operator walks away. Every orchestrator, not just the project one, carries <strong>expertise</strong>: a leadership playbook plus a self-improving, code-validated domain mental model.</p>
+    <p class="legend">
+      <span class="l-lead">orchestrator / leader</span>
+      <span class="l-work">worker / healing</span>
+      <span class="l-pulse">liveness / heartbeat</span>
+      <span class="l-stall">stall / replan</span>
+      <span class="l-stop">phantom / error</span>
+    </p>
+    <details class="meta">
+      <summary>Metadata</summary>
+      <dl>
+        <dt>created</dt>      <dd>2026-06-27</dd>
+        <dt>modified</dt>     <dd>2026-06-27</dd>
+        <dt>commits</dt>      <dd>—</dd>
+        <dt>agent name</dt>   <dd>claude-opus-4-8</dd>
+        <dt>session id</dt>   <dd>0d22cee2-d30b-4db6-b842-1035ca4f9fc8</dd>
+        <dt>back refs</dt>    <dd>specs/issue-worker-terminal-adw-bug-sdlc_planner-orchestrator-misses-finished-workers.md, specs/issue-orchestrator-stuck-adw-bug-sdlc_planner-orchestrator-stuck-running.md, specs/issue-orch-stall-adw-resume-sdlc_planner-orchestrator-turn-idle-watchdog.md, ai_docs/agentic-layer-adaptor.md, specs/stack-layers-crud-and-worker-stack-contract.html</dd>
+        <dt>forward refs</dt> <dd>—</dd>
+      </dl>
+    </details>
+  </header>
+
+  <!-- Hero image — synced to the :root visual identity. -->
+  <figure class="hero">
+    <!-- {{HERO_IMAGE: an autonomous orchestrator leader pulse-driving worker agents around a self-healing loop to DONE}} -->
+    <img src="self-healing-orchestrator-leadership-and-expertise/hero.png" alt="A central indigo orchestrator with a heartbeat pulse drives teal worker agents around a self-healing loop toward DONE">
+    <figcaption>One indigo leader, a steady heartbeat, and a self-healing loop that drives teal workers to <code>DONE</code> while the operator is away.</figcaption>
+  </figure>
+
+  <!-- ===== PURPOSE / PROBLEM / SOLUTION ===== -->
+  <section id="purpose">
+    <h2>Purpose</h2>
+    <p>The platform already <em>reacts</em> well: the <code>LivenessReaper</code> (issue worker-terminal + issue orchestrator-stuck) reaps phantom <code>:running</code> workers to <code>:error</code> and re-engages the owning orchestrator, and reconciles wedged orchestrator turns to <code>:idle</code>; the turn-idle watchdog (issue orch-stall) recovers a byte-silent turn. But every one of those mechanisms is <strong>reactive</strong> — it cleans up something that is <em>already</em> dead, stuck, or silent. The system cannot yet keep itself <em>moving forward</em>. This plan adds the missing <strong>proactive</strong> and <strong>leadership</strong> layers so the operator can hand the orchestrator a goal, walk away, and trust the system to (a) keep every agent in an honest state, (b) drive the work to completion, and (c) heal itself end-to-end when any part stalls — and to do all three with accumulated <strong>expertise</strong> rather than a static prompt.</p>
+  </section>
+
+  <section id="problem">
+    <h2>Problem</h2>
+    <p>Four structural gaps stand between today's reactive cleanup and true fire-and-walk-away autonomy:</p>
+    <ul>
+      <li><strong>Workers have no honest "waiting" state.</strong> A worker is written <code>:running</code> optimistically the instant <code>Session.Supervisor.start_session/1</code> returns (<code>orchestrator/tools.ex:355,632</code>). The only inactivity mechanism — <code>Session.Server</code>'s idle timer (<code>idle_ms</code> = 300&nbsp;s) — <em>kills</em> the child and emits <code>%Event.Error{reason: :idle_timeout}</code>, mapping to <code>:error</code> (<code>session/server.ex:458-480</code>). There is <strong>no path that demotes a live, quiescent worker to <code>:idle</code></strong> while keeping its session alive. The reset signal is raw stdout bytes (<code>server.ex:428</code>), so a worker is "active" if it prints, not if it works. A worker that finished its thought and is simply waiting looks identical to a runaway — both read <code>:running</code> forever, then both die to <code>:error</code>.</li>
+      <li><strong>The leader has no memory of the goal or the progress.</strong> The orchestrator brain carries <em>no</em> stored objective, plan, or definition-of-done. The single autonomous re-engagement — <code>Queue.maybe_auto_resume/2</code> on a <code>{:worker_terminal}</code> signal — fires a generic prompt: <em>"Worker X finished; review its work and decide next steps"</em> (<code>queue.ex:601-610</code>), carrying only a name and an ok/error flag. The brain must re-derive the entire plan from CLI session memory every turn, and it cannot inspect the working tree, git diff, or test results — it can only read a worker's self-reported <code>final_message</code>. There is no Task Ledger, no Progress Ledger, no notion of "what remains."</li>
+      <li><strong>Nothing jump-starts a stalled leader.</strong> The orchestrator only acts when an operator types or a worker returns a terminal. <code>LivenessReaper.sweep_orchestrators</code> flips a wedged orchestrator's <em>status</em> to <code>:idle</code> but never enqueues a turn. Resume turns self-extinguish: a resume that dispatches no new worker cannot re-trigger itself (<code>maybe_consume_pending_resume</code> clears the flag first). With zero live workers and no inbound signal, an idle orchestrator with unfinished work simply <em>sits</em>. The queue is in-memory only, so a process restart silently drops the backlog.</li>
+      <li><strong>No expertise — for any orchestrator.</strong> The system prompt is static meta-agent guidance with a hardcoded five-role list (builder/reviewer/tester/documenter/debugger). The role-template half of "expertise" exists (<code>Orchestrator.Templates</code> versioned registry + <code>SUBAGENT_MAP</code> injection), but it <strong>drops the <code>tools</code> field</strong> (<code>template.ex:9</code>) and there is <em>no</em> self-improving, code-validated domain mental model — nothing that learns. Every orchestrator, Claude or pi, is the same blank conductor every run.</li>
+    </ul>
+    <figure>
+      <!-- {{PROBLEM_IMAGE: phantom workers frozen at :running doing nothing while an idle leader never wakes; a broken loop}} -->
+      <img src="self-healing-orchestrator-leadership-and-expertise/problem.png" alt="Worker nodes frozen at status running while an idle orchestrator never wakes; the drive loop is broken">
+      <figcaption>Quiescent workers wedge at <code>:running</code> then die to <code>:error</code>; the idle leader has no goal, no progress model, and nothing to wake it.</figcaption>
+    </figure>
+  </section>
+
+  <section id="solution">
+    <h2>Solution</h2>
+    <p>Build the proactive + leadership + expertise layers <strong>on top of</strong> the existing reactive foundation, reusing every seam already in place (the per-orchestrator FIFO <code>Queue</code>, the <code>worker_terminal</code> PubSub signal, <code>LivenessReaper</code>, <code>SystemPrompt.build/1</code>, <code>Orchestrator.Templates</code>, <code>StackLayers</code>). The design is a <strong>dual-ledger control loop</strong> (Magentic-One) wrapped around the OTP supervision tree, fed by authoritative <strong>push liveness</strong> (<code>Process.monitor</code>) rather than LLM self-report.</p>
+
+    <table>
+      <thead><tr><th>Layer</th><th>What it guarantees</th><th>Core mechanism</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>1 · Worker state hygiene</strong> <span class="badge work">proactive</span></td>
+          <td>A live worker that stops doing meaningful work becomes <code>:idle</code> (alive, resumable) — never a phantom <code>:running</code>, never killed-to-<code>:error</code> for merely waiting.</td>
+          <td><code>heartbeat_at</code> column bumped on <em>meaningful</em> events; a soft quiescence timer demotes <code>:running → :idle</code> without killing; a new <code>LivenessReaper</code> pass demotes live-but-stale workers.</td>
+        </tr>
+        <tr>
+          <td><strong>2 · Push liveness</strong> <span class="badge pulse">instant</span></td>
+          <td>A dead worker is known the instant it dies, not 60&nbsp;s later — and is never falsely reaped while alive.</td>
+          <td>The long-lived per-orchestrator <code>Queue</code> <code>Process.monitor</code>s each dispatched worker pid; a <code>DOWN</code> with no preceding terminal synthesizes <code>worker_terminal{ok?: false}</code> immediately.</td>
+        </tr>
+        <tr>
+          <td><strong>3 · Goal &amp; Progress Ledger</strong> <span class="badge lead">durable</span></td>
+          <td>The leader has a persistent objective, plan, and definition-of-done, plus a per-turn record of "what's done vs what remains."</td>
+          <td>New <code>task_ledgers</code> + <code>progress_entries</code> tables; the brain records a Progress Ledger each turn via new tools; auto-resume seeds the goal + ledger.</td>
+        </tr>
+        <tr>
+          <td><strong>4 · Autonomous drive loop</strong> <span class="badge stall">self-driving</span></td>
+          <td>An idle orchestrator with unfinished work is jump-started; stalls trigger replanning; only a genuine blocker escalates to the away human.</td>
+          <td>A supervised <code>Orchestrator.Driver</code> tick + boot-resume sweep; a <code>stall_count</code>→replan rule; a per-key circuit breaker on repeated failures; a per-turn deadline watchdog; <code>:holding</code> + <code>PushNotification</code> as last-resort escalation.</td>
+        </tr>
+        <tr>
+          <td><strong>5 · Expertise (all orchestrators)</strong> <span class="badge lead">learning</span></td>
+          <td>Every orchestrator drives better over time: a shared leadership playbook + a self-improving, code-validated domain mental model + per-role tool scoping + recalled lessons.</td>
+          <td>A <code>leader_expertise_block</code> in <code>SystemPrompt</code>; file-based versioned expertise (<code>.md</code>) with an ACT→LEARN→REUSE self-improve job; re-introduced <code>tools</code> scoping; a <code>reflections</code> table injected next run.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>The through-line: <strong>state is honest (1–2), the goal is durable (3), the loop never stops until <code>DONE</code> or a real blocker (4), and the leader gets smarter every run (5).</strong> Phases 1–2 make the substrate trustworthy; 3–4 are the leadership engine; 5 is the expertise that the engine runs on. A BEAM/node restart becomes a <em>resume</em> from the ledger, not a cold start.</p>
+
+    <figure>
+      <!-- {{SOLUTION_IMAGE: dual-ledger control loop — leader with Task Ledger + Progress Ledger driving workers, proactive idle, heartbeat}} -->
+      <img src="self-healing-orchestrator-leadership-and-expertise/solution.png" alt="An orchestrator holding a Task Ledger and Progress Ledger drives workers around a control loop with heartbeat liveness toward DONE">
+      <figcaption>A dual-ledger control loop: the leader reconciles a Task Ledger + Progress Ledger each tick, dispatches workers, and self-heals toward <code>DONE</code>.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== RELEVANT FILES ===== -->
+  <section id="files" class="files">
+    <h2>Relevant Files</h2>
+
+    <h3>Existing Files</h3>
+    <ul>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/agents/agent.ex</code> — worker schema; add <code>heartbeat_at</code>; status enum <code>[:idle,:running,:error,:holding]</code> stays unchanged (the demotion reuses <code>:idle</code>).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/agents.ex</code> — add <code>touch_heartbeat/1</code>, <code>list_stale_live_running/1</code> (live-but-quiescent), keep <code>list_stuck_running/1</code> (phantom).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/session/server.ex</code> — bump <code>heartbeat_at</code> on meaningful events; add a soft <code>quiescence</code> timer that demotes <code>:running → :idle</code> <em>without</em> killing (distinct from the <code>idle_ms</code> kill timer); keep the synthesized-terminal backstop.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/logs/writer.ex</code> — <code>update_status_quietly/2</code> is the terminal-status mapper; bump <code>heartbeat_at</code> in <code>persist/2</code> on normalized events.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/session/liveness_reaper.ex</code> — add a third sweep pass <code>sweep_idle_workers/1</code>: live workers <code>:running</code> past a quiescence grace → <code>:idle</code> (not <code>:error</code>); make <code>reconcile_phantom_orchestrator</code> optionally re-drive.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/queue.ex</code> — <code>Process.monitor</code> dispatched worker pids; on <code>DOWN</code>-without-terminal synthesize <code>worker_terminal</code>; seed auto-resume with the goal + ledger; consume Driver drive-ticks.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/server.ex</code> — record a Progress Ledger entry on turn flush; arm a per-turn deadline; expose turn outcome to the ledger.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/tools.ex</code> &amp; <code>tool_catalog.ex</code> — add leader tools: <code>set_goal</code>, <code>record_progress</code>, <code>report_complete</code>, <code>get_ledger</code>, read-only <code>inspect_repo</code> (git status / changed files / read file in working_dir); apply per-worker <code>tools</code> allowlist in <code>create_agent</code>.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/system_prompt.ex</code> — inject <code>leader_expertise_block/0</code> (the drive-loop playbook + ledger protocol), the per-stack expertise, and recent <code>reflections</code>; replace the hardcoded five-role list with the Templates registry.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator.ex</code> &amp; <code>orchestrator/orchestrator.ex</code> — context for ledger/stall/heartbeat queries; <code>list_drivable/0</code> (active goal, <code>:idle</code>, within budget).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/template.ex</code> &amp; <code>templates.ex</code> — re-introduce the <code>tools</code> frontmatter field (reverse the <code>template.ex:9</code> drop) for per-role tool scoping.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/stack_layers/stack_layer.ex</code> &amp; <code>stack_layers.ex</code> — the static <code>reasoning</code> string is complemented by a file-based, self-improving expertise (versioned <code>.md</code> keyed by domain, often the layer <code>name</code>) rendered into the stack contract; no schema change.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/application.ex</code> — supervise <code>Orchestrator.Driver</code> (after the Queue registry/supervisor, alongside <code>LivenessReaper</code>).</li>
+      <li><span class="tag existing">existing</span> <code>config/config.exs</code> &amp; <code>config/test.exs</code> — new knobs: <code>:session</code> <code>quiescence_ms</code>; <code>:orchestrator</code> <code>drive_interval_ms</code>, <code>drive_on_boot</code>, <code>max_stall</code>, <code>escalate_after_stall</code>, <code>turn_deadline_ms</code>, <code>breaker_max_failures</code>, <code>breaker_cooldown_ms</code>, <code>experts_dir</code>; reaper idle-demotion toggle.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/dashboard.ex</code> — broadcasts for ledger/heartbeat/stall updates (<code>broadcast_ledger_updated</code>); reuse <code>broadcast_worker_terminal/2</code>.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/live/console_live.ex</code> &amp; <code>components/console_components.ex</code> — surface the goal, progress ledger, heartbeat, stall counter, and an "escalated / awaiting human" banner.</li>
+    </ul>
+
+    <h3>New Files</h3>
+    <ul>
+      <li><span class="tag new">new</span> <code>priv/repo/migrations/&lt;ts&gt;_add_heartbeat_at_to_agents.exs</code> — <code>heartbeat_at :utc_datetime_usec</code> + index.</li>
+      <li><span class="tag new">new</span> <code>priv/repo/migrations/&lt;ts&gt;_create_task_ledgers.exs</code> — goal, facts, guesses, <code>plan</code> (jsonb steps), definition_of_done, <code>status</code> enum, <code>stall_count</code>, FKs to orchestrator + project.</li>
+      <li><span class="tag new">new</span> <code>priv/repo/migrations/&lt;ts&gt;_create_progress_entries.exs</code> — per-turn snapshot (satisfied/on_track/looping/made_progress/next_agent/next_instruction/summary).</li>
+      <li><span class="tag new">new</span> <code>priv/repo/migrations/&lt;ts&gt;_create_orchestrator_reflections.exs</code> — verbal lessons (project_id, goal, lesson).</li>
+      <li><span class="tag new">new</span> <code>priv/orchestrator/experts/&lt;domain&gt;/0001.md</code> — seed mental models as versioned <code>.md</code> (read-only root; a writable <code>experts_dir</code> shadows by version, exactly like <code>Orchestrator.Templates</code>). No migration — expertise is file-based.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/orchestrator/task_ledger.ex</code> — TypedStruct + Ecto schema for the durable goal/plan.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/orchestrator/progress_entry.ex</code> — Ecto schema for a per-turn progress snapshot.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/orchestrator/ledgers.ex</code> — context: <code>upsert_goal</code>, <code>record_progress</code>, <code>current/1</code>, <code>bump_stall/1</code>, <code>mark_done/escalated</code>.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/orchestrator/driver.ex</code> — supervised GenServer: periodic drive tick + boot-resume sweep + escalation.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/orchestrator/breaker.ex</code> — native ETS-backed circuit breaker (open/half-open/closed + cooldown) keyed by harness/model/tool/role; <code>ask/1</code> before spawn, <code>fail/1</code>/<code>succeed/1</code> trip + reset; reroute on open.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/expertise.ex</code> + <code>lib/repo_builder/expertise/self_improve.ex</code> — ACT→LEARN→REUSE over versioned <code>.md</code> mental models (dual-root, like <code>Orchestrator.Templates</code>): render expertise into prompts, run the post-build self-improve job that writes a new <code>NNNN.md</code> version, validate against code.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/orchestrator/reflections.ex</code> — write/read verbal lessons; render the last N into the system prompt.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/session/worker_proactive_idle_test.exs</code> — quiescent worker → <code>:idle</code>, stays alive/resumable; active worker untouched.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/orchestrator/worker_monitor_test.exs</code> — <code>DOWN</code>-without-terminal → instant synthetic <code>worker_terminal</code>.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/orchestrator/ledgers_test.exs</code> — goal upsert, progress recording, stall bump, done/escalate.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/orchestrator/driver_test.exs</code> — drive tick jump-starts an idle orchestrator with unfinished work; stall→replan; escalation; boot-resume.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/orchestrator/breaker_test.exs</code> — trips after N failures, fails fast while open, half-opens after cooldown, closes on success.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/expertise_test.exs</code> + <code>test/repo_builder/expertise/self_improve_test.exs</code> — render, self-improve sync, tool scoping, reflections injection.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder_web/live/console_autonomy_test.exs</code> — ledger/heartbeat/stall render; escalation banner.</li>
+    </ul>
+  </section>
+
+  <!-- ===== IMPLEMENTATION PHASES ===== -->
+  <section id="phases">
+    <h2>Implementation Phases</h2>
+    <p><strong>IMPORTANT:</strong> Execute every phase and task step by step, in order, top to bottom.</p>
+    <p>Status markers: <code>[]</code> idle · <code>[wip]</code> in progress · <code>[x]</code> complete · <code>[f]</code> failed. All start as <code>[]</code>; the Build Plan workflow updates them as it works.</p>
+
+    <!-- PHASE 1 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 1: Worker State Hygiene — proactive idle &amp; heartbeat</h3>
+      <p>Give workers an honest "waiting" state. A live worker that stops doing <em>meaningful</em> work is demoted <code>:running → :idle</code> while its session stays alive and resumable — instead of wedging at <code>:running</code> until the <code>idle_ms</code> timer kills it to <code>:error</code>. Liveness is measured by a <code>heartbeat_at</code> bumped on normalized harness events, not by raw stdout bytes.</p>
+
+      <figure>
+        <!-- {{PHASE_IMAGE: a worker with a heartbeat line; on quiescence it softens to :idle (alive), not killed to :error}} -->
+        <img src="self-healing-orchestrator-leadership-and-expertise/phase1.png" alt="A worker node with a heartbeat line; when it goes quiet it softens to idle while staying alive, rather than being killed">
+        <figcaption>Quiescent ≠ dead: the worker softens to <code>:idle</code> and stays resumable.</figcaption>
+      </figure>
+
+      <h4>1. Heartbeat column &amp; meaningful-activity signal</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Migration <code>add_heartbeat_at_to_agents</code>: <code>heartbeat_at :utc_datetime_usec</code>, backfilled to <code>updated_at</code>, plus an index for the staleness query.</li>
+        <li><code class="status">[]</code> Add <code>field :heartbeat_at, :utc_datetime_usec</code> to <code>Agents.Agent</code> and <code>Agents.touch_heartbeat/1</code> (a cheap, conflict-free bump that does <em>not</em> change <code>status</code>).</li>
+        <li><code class="status">[]</code> In <code>Logs.Writer.persist/2</code>, call <code>touch_heartbeat/1</code> on every normalized event for an agent_id (a real harness event = real progress), so liveness tracks <em>work</em>, not stdout chatter (today's <code>reset_idle</code> only fires on <code>{:stdout,…}</code>, <code>server.ex:428</code>).</li>
+      </ul>
+
+      <h4>2. Soft quiescence demotion (alive, not killed)</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> In <code>Session.Server</code>, add a <code>quiescence_ref</code> timer (<code>quiescence_ms</code>, default 90&nbsp;s) armed alongside <code>idle_ms</code> but <em>shorter</em>; reset on the same meaningful-event signal as the heartbeat.</li>
+        <li><code class="status">[]</code> On <code>:quiescence</code> for a non-blocking, non-orchestrator worker: write <code>Agents.set_status(:idle)</code>, broadcast <code>agent_updated</code>, and <strong>keep the process and session alive</strong> (do NOT <code>:exec.stop</code>, do NOT emit a terminal). The next <code>command_agent</code> resumes it; the <code>idle_ms</code> kill timer remains the hard backstop for a truly abandoned session.</li>
+        <li><code class="status">[]</code> Guard ordering: a worker mid-inference (recent heartbeat) is never demoted; orchestrator turns (<code>config.orchestrator == true</code>) are exempt (their lifecycle is the turn, governed by <code>turn_idle_ms</code>).</li>
+      </ul>
+
+      <h4>3. Reaper idle-demotion pass (the catch-all)</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add <code>Agents.list_stale_live_running/1</code>: <code>archived == false and status == :running and heartbeat_at &lt; ^stale_before</code> (distinct from <code>list_stuck_running/1</code>, which targets phantoms by <code>updated_at</code>).</li>
+        <li><code class="status">[]</code> Add <code>LivenessReaper.sweep_idle_workers/1</code> as a third pass: of the stale-by-heartbeat workers, demote the ones whose <code>SessionRegistry</code> process <em>is</em> alive to <code>:idle</code> (the soft-demotion safety net if a per-session timer was missed); phantoms (dead process) keep going to <code>:error</code> via the existing <code>sweep_agents</code>.</li>
+        <li><code class="status">[]</code> Config: <code>:session</code> gains <code>quiescence_ms: 90_000</code>; document the three-timer hierarchy (<code>quiescence_ms</code> 90 s soft-idle &lt; <code>turn_idle_ms</code> 120 s &lt; <code>min_stale_ms</code> 120 s reaper &lt; <code>idle_ms</code> 300 s hard-kill). Tests pin all four.</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>ExUnit with the existing <code>SessionCase</code> harness (real <code>Session.Server</code> via the <code>Fake</code> in-process harness, real <code>Repo</code>, ephemeral data). Drive the quiescence timer deterministically by sending the timer message directly and asserting on <code>Agents.get/1</code> status + process liveness via <code>Registry.lookup</code>.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/session/worker_proactive_idle_test.exs</code> — quiescent worker becomes <code>:idle</code>; process still registered/alive; a follow-up <code>command_agent</code> resumes it; an actively-heartbeating worker is NOT demoted; the <code>idle_ms</code> hard-kill path still errors a truly abandoned session.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/session/liveness_reaper_test.exs</code> — extended: live-stale worker → <code>:idle</code>; phantom worker still → <code>:error</code>; no regression on the orchestrator pass.</li>
+        <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> &amp; <code>mix credo --strict</code> &amp; <code>mix dialyzer</code> — green gate (typed-Elixir standard, <code>@spec</code> on every new function).</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <!-- PHASE 2 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 2: Push Liveness — instant terminal via <code>Process.monitor</code></h3>
+      <p>Stop waiting up to 60&nbsp;s for the reaper to notice a dead worker. The long-lived per-orchestrator <code>Queue</code> already monitors the per-turn pid; extend it to monitor every <strong>dispatched worker</strong> pid too. A <code>DOWN</code> that arrives with no preceding terminal is authoritative proof of death — synthesize the <code>worker_terminal{ok?: false}</code> immediately so the leader re-engages in milliseconds, not after a sweep.</p>
+
+      <figure>
+        <!-- {{PHASE_IMAGE: orchestrator Process.monitor link to a worker pid; a DOWN with no terminal becomes an instant synthetic terminal}} -->
+        <img src="self-healing-orchestrator-leadership-and-expertise/phase2.png" alt="A monitor link from the orchestrator to a worker process; when the worker dies the DOWN becomes an instant synthetic terminal signal">
+        <figcaption>OTP push beats LLM self-report: a <code>DOWN</code> is instant, authoritative liveness.</figcaption>
+      </figure>
+
+      <h4>1. Monitor dispatched workers</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> When the brain dispatches a worker (the <code>create_agent</code>/<code>command_agent</code> path that resolves a worker pid), register <code>{worker_id, monitor_ref}</code> in the owning <code>Queue</code> state (it already holds the orchestrator id and subscribes to <code>orchestrator:&lt;id&gt;:workers</code>).</li>
+        <li><code class="status">[]</code> Track a per-worker <code>saw_terminal?</code> flag in the Queue, cleared when a real <code>worker_terminal</code> arrives, so <code>DOWN</code> handling can distinguish clean exit from crash.</li>
+      </ul>
+
+      <h4>2. DOWN-without-terminal → synthetic terminal</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add a <code>handle_info({:DOWN, ref, :process, _pid, reason}, state)</code> clause matching a monitored <em>worker</em> ref (not the turn ref): if no terminal was seen, build the same payload <code>LivenessReaper.reconcile_phantom/1</code> uses (<code>%{worker_id, name, ok?: false, holding?: false, …}</code>) and feed it straight into <code>maybe_auto_resume/2</code>; set the agent row to <code>:error</code> if still <code>:running</code>.</li>
+        <li><code class="status">[]</code> De-dup against the reaper: the reaper's <code>session_alive?</code> check already skips live workers; the synthetic terminal flips status first, so a later sweep finds nothing — assert both can't double-fire (idempotent via <code>seen_worker_ids</code>).</li>
+        <li><code class="status">[]</code> Demote the reaper to the <em>backstop</em> role it was always meant to be (BEAM/node restart, where monitors don't survive) — no behavior change, just documented precedence: monitor first, reaper second.</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>Real <code>Queue</code> GenServer + a real (Fake-harness) worker session. Kill the worker pid with <code>Process.exit(pid, :kill)</code> (bypasses <code>terminate/2</code>, exactly the gap the reaper documents at <code>server.ex:517-519</code>) and assert the Queue emits the synthetic terminal essentially immediately.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/worker_monitor_test.exs</code> — hard-kill a dispatched worker → Queue receives <code>DOWN</code> → synthetic <code>worker_terminal{ok?: false}</code> within a tight timeout; agent row reconciled to <code>:error</code>; a clean terminal does NOT double-fire.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/ test/repo_builder/session/</code> — no regression in queue advance, holding-pattern, or reaper passes.</li>
+        <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> &amp; <code>mix credo --strict</code> &amp; <code>mix dialyzer</code> — green gate.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <!-- PHASE 3 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 3: Goal &amp; Progress Ledger — the leadership substrate</h3>
+      <p>Give the leader a durable memory of the goal and the progress toward it (the Magentic-One dual-ledger). A <strong>Task Ledger</strong> holds the objective, known facts, guesses, the step plan, and the definition-of-done; a <strong>Progress Ledger</strong> records, each turn, the answers to: <em>are we done? on track? looping? did we make progress? who acts next, with what instruction?</em> This is the model the leader reconciles against instead of re-deriving intent from CLI memory every turn.</p>
+
+      <figure>
+        <!-- {{PHASE_IMAGE: a Task Ledger (goal, facts, plan, done-criteria) and a Progress Ledger feeding the orchestrator brain}} -->
+        <img src="self-healing-orchestrator-leadership-and-expertise/phase3.png" alt="A Task Ledger holding goal, facts, plan and definition of done beside a per-turn Progress Ledger, both feeding the orchestrator">
+        <figcaption>Two ledgers: a durable Task Ledger (goal &amp; plan) and a per-turn Progress Ledger (done? looping? next?).</figcaption>
+      </figure>
+
+      <h4>1. Schemas &amp; context</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Migrations + schemas <code>TaskLedger</code> (<code>goal</code>, <code>facts</code>, <code>guesses</code>, <code>plan</code> jsonb step list, <code>definition_of_done</code>, <code>status</code> ∈ <code>[:active,:done,:escalated,:abandoned]</code>, <code>stall_count</code>, FK orchestrator + project) and <code>ProgressEntry</code> (booleans <code>satisfied/on_track/looping/made_progress</code>, <code>next_agent</code>, <code>next_instruction</code>, <code>summary</code>, FK ledger + turn agent_id).</li>
+        <li><code class="status">[]</code> Context <code>Orchestrator.Ledgers</code>: <code>upsert_goal/2</code>, <code>current/1</code> (active ledger for an orchestrator), <code>record_progress/2</code>, <code>bump_stall/1</code> / <code>reset_stall/1</code>, <code>mark_done/2</code>, <code>mark_escalated/2</code>. All <code>@spec</code>'d, fail-soft on the write path.</li>
+      </ul>
+
+      <h4>2. Leader tools to read &amp; write the ledger</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add to <code>Tools.dispatch</code> + <code>ToolCatalog</code>: <code>set_goal{goal, definition_of_done, plan?}</code>, <code>record_progress{satisfied, looping, made_progress, next_agent, next_instruction, summary}</code>, <code>get_ledger{}</code>, <code>report_complete{summary, recommendations}</code> (sets ledger <code>:done</code> + notifies the operator).</li>
+        <li><code class="status">[]</code> Add read-only <code>inspect_repo{op}</code> — <code>git_status</code> / <code>changed_files</code> / <code>read_file(path)</code> scoped to the orchestrator <code>working_dir</code> — so the leader can verify "done" against the <em>actual tree</em>, not only a worker's self-reported <code>final_message</code>. Read-only, secrets-gated, path-jailed to <code>working_dir</code>.</li>
+      </ul>
+
+      <h4>3. Auto-record &amp; goal-seeded resume</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> On turn flush in <code>Orchestrator.Server</code>, if the brain did not explicitly <code>record_progress</code>, write a minimal Progress entry (turn outcome ok/error + cost) so the ledger never has gaps.</li>
+        <li><code class="status">[]</code> Rewrite <code>Queue.auto_resume_prompt/1</code> to seed the goal + definition-of-done + last Progress entry + the returning worker's <code>final_message</code> — replacing the generic "review and decide" string (<code>queue.ex:601-610</code>), so the leader resumes <em>with intent</em>.</li>
+        <li><code class="status">[]</code> Broadcast <code>ledger_updated</code> on every ledger write for the console (Phase 6).</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>Context-level ExUnit + a Fake-harness orchestrator turn driving the tools end-to-end. Assert the ledger persists, the resume prompt contains the goal, and <code>inspect_repo</code> is jailed to <code>working_dir</code>.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/ledgers_test.exs</code> — goal upsert; progress recording; stall bump/reset; done/escalate transitions; current-ledger resolution.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/tools_ledger_test.exs</code> — each new tool round-trips; <code>inspect_repo</code> refuses paths outside <code>working_dir</code>; <code>report_complete</code> marks <code>:done</code>.</li>
+        <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> &amp; <code>mix credo --strict</code> &amp; <code>mix dialyzer</code> — green gate.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <!-- PHASE 4 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 4: Autonomous Drive Loop — jump-start, stall→replan, escalate</h3>
+      <p>The engine of fire-and-walk-away. A supervised <code>Orchestrator.Driver</code> ticks periodically: for every orchestrator with an <code>:active</code> goal that is <code>:idle</code> and within budget, it enqueues a low-priority <strong>drive turn</strong> that runs one inner-loop iteration — assess the Progress Ledger, then drive a worker, fan out new workers, report completion, or replan. Stalls escalate through replanning; only a genuine blocker reaches the away human. On boot, the same sweep <em>resumes</em> unfinished goals — a restart becomes a resume.</p>
+
+      <figure>
+        <!-- {{PHASE_IMAGE: a circular drive loop with a periodic tick, a stall gauge feeding a replan, and a human-escalation exit}} -->
+        <img src="self-healing-orchestrator-leadership-and-expertise/phase4.png" alt="A circular autonomous drive loop with a periodic tick, a stall gauge that triggers replanning, and a last-resort human escalation exit">
+        <figcaption>Tick → assess → act; a rising stall gauge triggers replan; a true blocker escalates to the human.</figcaption>
+      </figure>
+
+      <h4>1. The Driver GenServer</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> New <code>Orchestrator.Driver</code> (supervised in <code>application.ex</code> near <code>LivenessReaper</code>): on <code>drive_interval_ms</code> (default 30&nbsp;s) call <code>Orchestrators.list_drivable/0</code> (active goal · <code>:idle</code> · not over <code>Budget.Guard</code>) and <code>Queue.enqueue_drive/1</code> a goal-seeded drive turn for each. Operator turns always front-run drive turns (reuse the existing priority ordering).</li>
+        <li><code class="status">[]</code> Boot-resume: on <code>drive_on_boot</code>, immediately sweep drivable orchestrators so a BEAM/node restart resumes every unfinished goal from its ledger checkpoint (Durable-Checkpoint pattern). Disabled in tests (<code>drive_on_boot: false</code>, <code>drive_interval_ms: :infinity</code>); tests drive <code>tick/0</code> explicitly — mirroring the <code>LivenessReaper</code> test contract.</li>
+      </ul>
+
+      <h4>2. Failure ladder: stall→replan, repeated-failure→circuit-break, blocker→escalate</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> After each drive/resume turn, compare the new Progress entry to the prior: no <code>made_progress</code> or <code>looping</code> → <code>Ledgers.bump_stall/1</code>; real progress → <code>reset_stall/1</code>.</li>
+        <li><code class="status">[]</code> At <code>stall_count &gt; max_stall</code> (default 2) the next drive turn is a <strong>replan turn</strong> — a prompt that tells the brain to revise the Task Ledger (facts/plan) rather than push the same step (Magentic-One stagnation rule).</li>
+        <li><code class="status">[]</code> <strong>Circuit breaker on repeated failures</strong> (distinct from no-progress stalls): a native ETS-backed <code>Orchestrator.Breaker</code> keyed by harness/model/tool/worker-role tracks consecutive failures. Past <code>breaker_max_failures</code> (default 3) the key <em>opens</em> — <code>Breaker.ask/1</code> fails fast so the leader stops hammering a broken path and reroutes to another roster tier; the key <em>half-opens</em> after <code>breaker_cooldown_ms</code> and <em>closes</em> on the next success. Pairs with <code>Budget.Guard</code> (spend) and the stall ladder (progress); escalation is reached only when reroute is exhausted.</li>
+        <li><code class="status">[]</code> At <code>stall_count &gt;= escalate_after_stall</code> (default 3) with no path forward (replan exhausted and the breaker has tripped every reroute): set the ledger <code>:escalated</code>, put the orchestrator into <code>:holding</code> with a <code>holding_reason</code>, broadcast, and fire a <code>PushNotification</code> — the away-human last resort. An operator message resumes from the ledger checkpoint.</li>
+        <li><code class="status">[]</code> Per-turn deadline: <code>Orchestrator.Server</code> arms <code>turn_deadline_ms</code> (re-armed per frame) so a hung turn that the byte-idle <code>turn_idle_ms</code> can't catch (a stream trickling keep-alive bytes) is force-flushed to <code>:error</code> and the Driver re-engages.</li>
+      </ul>
+
+      <h4>3. Convergence guards (don't spin, don't spend)</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> The Driver never enqueues a drive turn while one is queued/running for that orchestrator, while it's <code>:escalated</code>/<code>:holding</code>, or while <code>Budget.Guard</code> says stop (when budget frees, the next tick re-engages — closing the "no re-drive after budget" gap).</li>
+        <li><code class="status">[]</code> A <code>:done</code> ledger is terminal: no further drive turns; <code>report_complete</code> is the only exit besides escalation/abandon.</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>Real <code>Driver</code> + <code>Queue</code> + Fake-harness turns, with <code>drive_interval_ms: :infinity</code> so the test owns the clock via <code>Driver.tick/0</code>. Scripts assert the loop converges (drives until <code>:done</code>) and the stall ladder fires in order.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/driver_test.exs</code> — idle orchestrator with an active goal is jump-started; a progressing loop reaches <code>:done</code> and stops; two no-progress turns trigger a replan turn; the third escalates to <code>:holding</code> + notification; boot-resume re-engages an unfinished goal; budget-stop suppresses drive then resumes.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/server_turn_deadline_test.exs</code> — a turn exceeding <code>turn_deadline_ms</code> is force-flushed to <code>:error</code> and re-driven.</li>
+        <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> &amp; <code>mix credo --strict</code> &amp; <code>mix dialyzer</code> — green gate.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <!-- PHASE 5 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 5: Expertise — leadership playbook &amp; self-improving mental models</h3>
+      <p>Make <em>every</em> orchestrator — project leader or worker-spawned sub-leader, Claude or pi — a better autonomous driver, and let it learn. Two faces of expertise: a shared <strong>leadership playbook</strong> baked into every system prompt, and a self-improving, <strong>code-validated domain mental model</strong> (the reference repo's ACT→LEARN→REUSE) keyed off the stack the project is built on. Plus the two parity gaps: per-role <code>tools</code> scoping and recalled lessons.</p>
+
+      <figure>
+        <!-- {{PHASE_IMAGE: ACT → LEARN → REUSE loop with an expertise mental model validated against code as source of truth}} -->
+        <img src="self-healing-orchestrator-leadership-and-expertise/phase5.png" alt="An ACT to LEARN to REUSE loop where an expertise mental model is validated against the code as the source of truth">
+        <figcaption>Expertise as a living mental model: act, learn (validate against code), reuse — every run sharper.</figcaption>
+      </figure>
+
+      <h4>1. Leadership playbook for all orchestrators</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add <code>SystemPrompt.leader_expertise_block/0</code>: the explicit drive-loop protocol (record progress every turn, verify against the tree with <code>inspect_repo</code>, never assume a worker reported back, spawn vs drive vs report decision rules, when to replan, when to <code>report_complete</code>). Injected into <em>every</em> orchestrator prompt regardless of harness — the "all orchestrators" requirement.</li>
+        <li><code class="status">[]</code> Replace the hardcoded five-role worker-specialization list (<code>system_prompt.ex:113-119</code>) with the live <code>Orchestrator.Templates</code> registry so roles are data, not a frozen string.</li>
+      </ul>
+
+      <h4>2. Self-improving domain mental model (ACT→LEARN→REUSE)</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Persist the <code>expertise</code> mental model as versioned <code>.md</code> files per domain — a writable <code>experts_dir</code> shadowing a read-only <code>priv/orchestrator/experts/&lt;domain&gt;/NNNN.md</code> seed root, reusing the <code>Orchestrator.Templates</code> dual-root append-only mechanism. Each file is structured, code-pointer-bearing markdown (YAML frontmatter + body) that supersedes today's static <code>reasoning</code> string; render it into the worker stack contract and the leader prompt. <strong>No DB migration</strong> — file-based for free history, <code>restore/2</code>, and plugin/command-pack portability.</li>
+        <li><code class="status">[]</code> <code>Expertise.SelfImprove</code> — the LEARN step as a post-build job: spawn a read-tooled worker that re-reads the modules the expertise cites (Elixir <code>Module.fun/arity</code> + line pointers), diffs them against the current body, <strong>writes the next <code>NNNN.md</code> version</strong> (append-only, like Templates) trimmed to a size cap, and re-validates (<code>YamlElixir.read_from_string/1</code> on the frontmatter or a structured-schema check). Triggered after a build ADW completes (mirrors the reference <code>plan_build_improve</code> Step 3).</li>
+        <li><code class="status">[]</code> <code>Expertise.question/2</code> — the read-only REUSE consumer: answer a domain question from the mental model, citing <code>module:line</code>, making no edits.</li>
+      </ul>
+
+      <h4>3. Parity gaps: tool scoping &amp; reflections</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Re-introduce the <code>tools</code> frontmatter field in <code>Orchestrator.Template</code> (reverse the deliberate drop at <code>template.ex:9</code>) and apply it as a per-worker allowlist in <code>create_agent</code> — so a "scout" role is genuinely read-only, a "builder" can write, matching the reference role-template semantics.</li>
+        <li><code class="status">[]</code> <code>Orchestrator.Reflections</code> — a reflection turn (after <code>report_complete</code> or escalation) writes a one-line verbal lesson (project_id, goal, lesson) à la Reflexion; <code>SystemPrompt</code> injects the last N for the project so the next run starts ahead of where the last one ended.</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>Pure-context ExUnit for rendering/validation; a Fake-harness job for the self-improve loop; assert tool scoping actually restricts a worker.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/expertise_test.exs</code> — expertise renders into prompt + stack contract; <code>question/2</code> is read-only; per-stack keying resolves.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/expertise/self_improve_test.exs</code> — a stale mental model is re-synced against changed code; size cap enforced; invalid body rejected.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/template_tools_test.exs</code> + <code>reflections_test.exs</code> — <code>tools</code> allowlist scopes a created worker; reflections persist and inject into the next prompt.</li>
+        <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> &amp; <code>mix credo --strict</code> &amp; <code>mix dialyzer</code> — green gate.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <!-- PHASE 6 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 6: Console observability &amp; end-to-end self-healing validation</h3>
+      <p>Make the autonomy legible and prove it end-to-end. The operator who walked away should, on returning, see exactly where the leader is: the goal, the live progress ledger, each agent's heartbeat-backed state, the stall counter, and a loud banner if anything escalated to "awaiting human."</p>
+
+      <figure>
+        <!-- {{PHASE_IMAGE: a console panel showing goal, progress ledger, heartbeats, stall gauge, and a DONE / awaiting-human state}} -->
+        <img src="self-healing-orchestrator-leadership-and-expertise/phase6.png" alt="A console dashboard showing the goal, a progress ledger, agent heartbeats, a stall gauge, and a DONE or awaiting-human banner">
+        <figcaption>The walk-away dashboard: goal, progress ledger, heartbeats, stall gauge, and the <code>DONE</code> / awaiting-human verdict.</figcaption>
+      </figure>
+
+      <h4>1. Surface the ledger &amp; liveness</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>ConsoleLive</code> subscribes to <code>ledger_updated</code>; render a per-orchestrator panel: goal, definition-of-done, the latest Progress entry (done?/looping?/next), and the step plan with per-step status.</li>
+        <li><code class="status">[]</code> Agent cards show a heartbeat freshness dot (green pulsing / amber stale / red phantom) derived from <code>heartbeat_at</code>, and the soft-idle state distinctly from error.</li>
+        <li><code class="status">[]</code> A stall gauge + an "Escalated — awaiting human" banner with the <code>holding_reason</code> and a one-click resume.</li>
+      </ul>
+
+      <h4>2. End-to-end self-healing scenario test</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> A LiveView + Fake-harness integration test that runs the full loop: set a goal → Driver dispatches a worker → worker goes quiescent (→ <code>:idle</code>, alive) → worker hard-killed (→ instant synthetic terminal) → leader re-drives → reports <code>complete</code>; assert the console reflects each transition and the ledger ends <code>:done</code>.</li>
+        <li><code class="status">[]</code> A stall scenario: force two no-progress turns → assert replan turn → third → assert escalation banner + notification.</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p><code>Phoenix.LiveViewTest</code> against the real console, plus a Tidewave-assisted manual smoke per the project's runtime-intelligence convention. The integration test is the acceptance gate for the whole plan.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder_web/live/console_autonomy_test.exs</code> — ledger panel, heartbeat dots, stall gauge, escalation banner, resume button all render and update on broadcast.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/self_healing_e2e_test.exs</code> — the full quiescent→killed→re-driven→done scenario and the stall→replan→escalate scenario both pass.</li>
+        <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> &amp; <code>mix credo --strict</code> &amp; <code>mix dialyzer</code> — green gate.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== GLOBAL VALIDATION ===== -->
+  <section id="validation">
+    <h2>Validation Commands</h2>
+    <p>Execute these commands to validate the entire plan is complete:</p>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>mix ecto.migrate</code> — all four migrations apply cleanly (and <code>mix ecto.rollback</code> reverses them).</li>
+      <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — the entire suite (existing + ~9 new files) is green with zero warnings.</li>
+      <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/self_healing_e2e_test.exs</code> — the end-to-end fire-and-walk-away scenario drives a goal to <code>:done</code> with no human input, surviving a quiescent worker, a hard-killed worker, and a stall.</li>
+      <li><code class="status">[]</code> <code>mix format --check-formatted</code> — formatting clean.</li>
+      <li><code class="status">[]</code> <code>mix credo --strict</code> — no issues; every new public function carries an <code>@spec</code> (hard gate per <code>.credo.exs</code>).</li>
+      <li><code class="status">[]</code> <code>mix dialyzer</code> — no new warnings beyond the pre-existing baseline.</li>
+      <li><code class="status">[]</code> Manual (Tidewave): set a goal on a live orchestrator, close the browser, reconnect after several drive ticks, and confirm the ledger advanced and agents are in honest states without any operator input.</li>
+    </ul>
+    <div class="loop">
+      🔁 <strong>The plan is not complete until every box is checked and every command passes. If for some reason a step is not possible to complete, mark it with [f] and move on if possible.</strong>
+    </div>
+  </section>
+
+  <!-- ===== QUESTIONABLES ===== -->
+  <section id="questionables">
+    <h2>Questionables</h2>
+    <figure>
+      <!-- {{QUESTIONABLES_IMAGE: a fork in the road weighing storage and policy trade-offs for the autonomy layer}} -->
+      <div class="img-todo">Optional image — open design decisions for the autonomy &amp; expertise layer.</div>
+      <figcaption>The load-bearing decisions, each with a chosen default and an escape hatch.</figcaption>
+    </figure>
+
+    <details>
+      <summary>Where does the expertise mental model live — versioned <code>.md</code> files like <code>Orchestrator.Templates</code>, or Ecto rows on <code>stack_layers</code>?</summary>
+      <p class="qa-answer"><strong>Decided: versioned <code>.md</code> files</strong> (reuse the <code>Orchestrator.Templates</code> append-only <code>NNNN.md</code> dual-root — a writable <code>experts_dir</code> shadowing a read-only <code>priv/orchestrator/experts/&lt;domain&gt;/</code> seed root). Rationale: free version history + <code>restore/2</code>, it matches the reference repo's flat-file model exactly, and a mental model can ride along in a plugin/command-pack (cross-project portability). The self-improve job simply writes the next <code>NNNN.md</code>. The Ecto-rows-on-<code>stack_layers</code> alternative (one queryable source of truth, co-located with the static <code>reasoning</code> string) was rejected to keep expertise portable and trivially versioned.</p>
+    </details>
+    <details>
+      <summary>On quiescence, should a worker go <code>:idle</code> (alive, resumable) or be cleanly stopped?</summary>
+      <p class="qa-answer"><strong>Default: <code>:idle</code> and kept alive.</strong> The user's explicit ask is "a worker waiting for a while should be idle, not running." Keeping the process + resumable session alive lets the leader re-engage it with one <code>command_agent</code> rather than re-spawning. The hard <code>idle_ms</code> kill timer (300 s) remains the backstop for a session that is truly abandoned, so we don't leak processes. If process-count pressure (<code>max_live_sessions: 100</code>) becomes the binding constraint, switch the quiescence action to a clean stop that still records <code>:idle</code> (resume = re-spawn from the session_id), trading latency for headroom.</p>
+    </details>
+    <details>
+      <summary>Stall &amp; escalation thresholds — are <code>max_stall: 2</code> / <code>escalate_after_stall: 3</code> right?</summary>
+      <p class="qa-answer"><strong>Default: replan after 2 no-progress turns, escalate after 3</strong> (the Magentic-One stagnation bound is "≤ 2 before revising the ledger"). These are config knobs, not constants, so they tune without code change. Escalation is deliberately a <em>last resort</em> after retry → replan → (optional) circuit-breaker reroute; a too-eager escalation defeats walk-away autonomy, a too-lazy one burns budget spinning. Pair with <code>Budget.Guard</code> as the hard spend ceiling.</p>
+    </details>
+    <details>
+      <summary>Should we add a circuit breaker per harness/model/tool on repeated failure?</summary>
+      <p class="qa-answer"><strong>Decided: yes — in scope.</strong> A native, ETS-backed <code>Orchestrator.Breaker</code> (open/half-open/closed with a cooldown — no new hex dependency; <code>jlouis/fuse</code> is a drop-in alternative if we later prefer a battle-tested lib) sits in Phase 4's failure ladder. When a specific model/tool/harness/worker-role fails repeatedly it <em>opens</em> the breaker: the leader fails fast and reroutes to another roster tier instead of burning budget on a broken path, then the breaker half-opens after a cooldown. It complements <code>Budget.Guard</code> (spend) and the stall→replan ladder (progress), and only when reroute is exhausted does the blocker escalate to the away human. The typed <code>command_agent</code> contract (objective/output/boundaries/expected artifacts) ships in Phase 3 alongside it.</p>
+    </details>
+    <details>
+      <summary>Does the Driver tick risk thundering or duplicate turns across many orchestrators?</summary>
+      <p class="qa-answer"><strong>Mitigated by design.</strong> The Driver only enqueues for orchestrators that are <code>:idle</code> with an <code>:active</code> goal and not already queued/running (the Queue's own FIFO + the in-memory "current" guard prevent doubles), and operator turns always front-run. A single 30 s tick across all projects is cheap (one indexed query). If fan-out grows, shard the tick or jitter per-orchestrator; the in-memory queue's non-durability across a Queue crash is a known limitation (Phase 4 boot-resume rehydrates from the durable ledger, not the queue).</p>
+    </details>
+  </section>
+
+  <!-- ===== NOTES ===== -->
+  <section id="notes">
+    <h2>Notes</h2>
+
+    <h3>What we are <em>not</em> rebuilding</h3>
+    <p>This plan is strictly additive over a working reactive foundation. Untouched and relied upon: <code>LivenessReaper</code>'s phantom passes (worker → <code>:error</code>, orchestrator → <code>:idle</code>), the per-orchestrator FIFO <code>Queue</code> and its holding-pattern (<code>maybe_auto_resume</code> handover / wind-down / force-retire), the <code>worker_terminal</code> PubSub seam, the coalesced <code>flush_turn</code> cost/status write, the <code>turn_idle_ms</code> byte-idle watchdog, <code>Budget.Guard</code>, and <code>Orchestrator.Templates</code> / <code>SUBAGENT_MAP</code> injection. The reaper stays — it is the backstop for the one thing monitors can't survive: a BEAM/node restart.</p>
+
+    <h3>Architecture lineage (why these mechanisms)</h3>
+    <table>
+      <thead><tr><th>Pattern</th><th>Source</th><th>Where it lands</th></tr></thead>
+      <tbody>
+        <tr><td>Dual-Ledger Control Loop (Task + Progress Ledger)</td><td>Magentic-One — <a href="https://arxiv.org/abs/2411.04468">arXiv 2411.04468</a></td><td>Phase 3 schemas; Phase 4 inner loop</td></tr>
+        <tr><td>Stall counter → replan (stagnation ≤ 2)</td><td>Magentic-One</td><td>Phase 4 <code>stall_count</code> ladder</td></tr>
+        <tr><td>Lead-agent task contracts; circuit breaker</td><td>Anthropic multi-agent research system; <code>jlouis/fuse</code></td><td>Phase 3 <code>command_agent</code> contract; Phase 4 <code>Orchestrator.Breaker</code></td></tr>
+        <tr><td>Durable checkpoint / resume-not-restart</td><td>LangGraph checkpointers; Anthropic</td><td>Phase 4 boot-resume from ledger</td></tr>
+        <tr><td>Self-improving memory / verbal reflection</td><td>Reflexion <a href="https://arxiv.org/abs/2303.11366">2303.11366</a>; Voyager <a href="https://arxiv.org/abs/2305.16291">2305.16291</a></td><td>Phase 5 reflections + expertise self-improve</td></tr>
+        <tr><td>Let-it-crash + <code>Process.monitor</code> push liveness</td><td>OTP supervision principles</td><td>Phase 2 worker monitoring</td></tr>
+        <tr><td>Lease/TTL sweep + human escalation last resort</td><td>etcd leases; LangGraph <code>interrupt</code>; this repo's <code>LivenessReaper</code></td><td>Phase 1 heartbeat; Phase 4 <code>:holding</code> escalation</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Timer hierarchy (single source of truth)</h3>
+    <p>Four timers must not fight each other; pin them in config and assert the ordering in tests:</p>
+    <pre><code>quiescence_ms  =  90_000   # Phase 1: live worker -> :idle (alive)        [soft]
+turn_idle_ms   = 120_000   # existing: byte-silent orchestrator turn -> Error
+min_stale_ms   = 120_000   # existing: phantom (dead-process) reap -> :error
+turn_deadline  = 180_000   # Phase 4: hard per-turn ceiling -> force flush
+idle_ms        = 300_000   # existing: abandoned worker hard-kill -> :error  [hard]
+drive_interval = 30_000    # Phase 4: Driver autonomy tick</code></pre>
+    <p>Invariant: <code>quiescence_ms &lt; idle_ms</code> (soften before you kill) and <code>min_stale_ms ≥ 2×interval</code> (the reaper grace the existing module already documents as load-bearing).</p>
+
+    <h3>Dependencies &amp; risks</h3>
+    <ul>
+      <li><strong>No new hard deps required.</strong> <code>YamlElixir</code> (already present) covers expertise-frontmatter validation; <code>PushNotification</code> is an existing harness affordance; the Phase 4 circuit breaker (<code>Orchestrator.Breaker</code>) is a native ETS GenServer — no new hex dep — with <code>jlouis/fuse</code> as a named drop-in alternative; expertise mental models are versioned <code>.md</code> files (no DB migration).</li>
+      <li><strong>Risk — runaway autonomy.</strong> The drive loop is bounded on three axes: <code>Budget.Guard</code> (spend), <code>escalate_after_stall</code> (no-progress), and <code>:done</code> ledger terminality. A goal with no definition-of-done is the main footgun → <code>set_goal</code> requires <code>definition_of_done</code>.</li>
+      <li><strong>Risk — over-eager idle demotion.</strong> Demoting a genuinely-working-but-quiet worker would be wrong; mitigated by keying the heartbeat on <em>normalized harness events</em> (real tool calls / text frames), not stdout bytes, and by never demoting within <code>quiescence_ms</code> of the last event.</li>
+      <li><strong>Risk — monitor/reaper double-fire.</strong> Idempotency via <code>seen_worker_ids</code> + status-flip-first ordering (Phase 2); covered by an explicit test.</li>
+      <li><strong>Scope boundary — multi-orchestrator collaboration.</strong> This plan makes each orchestrator a strong solo leader; cross-orchestrator delegation (a leader spawning sub-leaders that themselves drive) is enabled by the expertise-for-all-orchestrators work but its coordination protocol is future work.</li>
+    </ul>
+
+    <h3>Build order rationale</h3>
+    <p>1→2 first because the leadership engine must stand on <em>trustworthy state</em> (an honest <code>:idle</code> and instant death detection); 3 before 4 because the drive loop reconciles against the ledger; 5 enriches the brain the loop already runs; 6 makes it all observable and is the acceptance gate. Each phase is independently shippable and independently valuable — Phase 1 alone fixes the user's most concrete complaint ("a waiting worker should be idle").</p>
+
+    <figure>
+      <!-- {{NOTES_IMAGE: the four-timer hierarchy as nested concentric windows from soft-idle to hard-kill}} -->
+      <div class="img-todo">Optional image — the four-timer hierarchy as nested windows (soft-idle → reap → deadline → hard-kill).</div>
+      <figcaption>Optional: the timer hierarchy, soft to hard.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== AMENDMENTS ===== -->
+  <section id="amendments">
+    <h2>Amendments</h2>
+    <details open>
+      <summary>2026-06-27 — Locked two Questionables: expertise stored as versioned <code>.md</code> files; circuit breaker promoted to in-scope</summary>
+      <p>Per operator decision before first execution: <strong>(1)</strong> the self-improving domain mental model lives in versioned <code>.md</code> files (the <code>Orchestrator.Templates</code> dual-root <code>NNNN.md</code> mechanism), <em>not</em> Ecto rows on <code>stack_layers</code> — the <code>add_expertise_to_stack_layers</code> migration is dropped (five migrations → four); Phase 5, the Solution table, Relevant/New Files, and Questionable&nbsp;1 updated. <strong>(2)</strong> A circuit breaker is promoted from deferred to in-scope: a native ETS-backed <code>Orchestrator.Breaker</code> (open/half-open/closed + cooldown, no new hex dep) added to Phase 4's failure ladder — repeated worker/tool/harness/model failures fail fast and reroute to another roster tier before escalation; new <code>breaker.ex</code> + <code>breaker_test.exs</code>, config knobs <code>breaker_max_failures</code>/<code>breaker_cooldown_ms</code>, Questionable&nbsp;4 and the lineage table updated. All other defaults unchanged.</p>
+    </details>
+  </section>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan: Add a Godot + Elixir Command-Pack Stack</title>
+<style>
+  :root {
+    /* Godot (blue) + Elixir (purple) identity — composable, layered, minimal */
+    --ink:      #161226;
+    --paper:    #f7f6fb;
+    --panel:    #ffffff;
+    --muted:    #61607a;
+    --line:     #ddd9ec;
+    --godot:    #478cbf;   /* engine / detection */
+    --elixir:   #6e4a9e;   /* core / capability */
+    --accent:   #6e4a9e;
+    --accent-2: #478cbf;
+    --ok:       #2e8b6f;
+    --warn:     #c2871d;
+    --code-bg:  #1c1733;
+    --code-fg:  #e7e0f7;
+    --radius:   12px;
+    --shadow:   0 1px 2px rgba(22,18,38,.06), 0 8px 24px rgba(22,18,38,.07);
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Inter", "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--sans); line-height: 1.6; font-size: 16px; }
+  main { max-width: 980px; margin: 0 auto; padding: 3rem 1.5rem 6rem; }
+  header h1 { font-size: 2.05rem; line-height: 1.15; margin: 0 0 .75rem; letter-spacing: -.02em; }
+  h2 { font-size: 1.5rem; margin: 2.6rem 0 .9rem; letter-spacing: -.01em; padding-bottom: .4rem; border-bottom: 2px solid var(--line); }
+  h3 { font-size: 1.18rem; margin: 1.5rem 0 .6rem; }
+  h4 { font-size: 1.0rem; margin: 1.2rem 0 .4rem; color: var(--accent-2); }
+  p { margin: .5rem 0; }
+  a { color: var(--accent-2); }
+  code { font-family: var(--mono); font-size: .88em; background: #efeaf8; color: #3c2a59; padding: .1em .38em; border-radius: 5px; }
+  pre { background: var(--code-bg); color: var(--code-fg); padding: 1rem 1.1rem; border-radius: var(--radius); overflow-x: auto; font-size: .82rem; line-height: 1.55; }
+  pre code { background: none; color: inherit; padding: 0; }
+  section { scroll-margin-top: 1rem; }
+
+  details.meta { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: .5rem 1rem; margin: 1rem 0 0; box-shadow: var(--shadow); }
+  details.meta summary { cursor: pointer; font-weight: 600; color: var(--muted); }
+  details.meta dl { display: grid; grid-template-columns: max-content 1fr; gap: .3rem 1.2rem; margin: .8rem 0 .3rem; font-size: .85rem; }
+  details.meta dt { color: var(--muted); font-variant: small-caps; letter-spacing: .03em; }
+  details.meta dd { margin: 0; font-family: var(--mono); font-size: .8rem; word-break: break-word; }
+
+  figure { margin: 1.6rem 0; text-align: center; }
+  figure img { max-width: 100%; height: auto; border-radius: var(--radius); border: 1px solid var(--line); box-shadow: var(--shadow); }
+  figcaption { color: var(--muted); font-size: .85rem; margin-top: .6rem; font-style: italic; }
+  .img-todo { border: 1px dashed var(--line); border-radius: var(--radius); padding: 2rem 1rem; color: var(--muted); background: repeating-linear-gradient(45deg, #fff, #fff 12px, #f1eefb 12px, #f1eefb 24px); font-size: .85rem; }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem 1.2rem; box-shadow: var(--shadow); }
+  .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 720px) { .twocol { grid-template-columns: 1fr; } }
+
+  .files ul { list-style: none; padding: 0; }
+  .files li { padding: .35rem 0; border-bottom: 1px dashed var(--line); }
+  .tag { display: inline-block; font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: .12em .5em; border-radius: 999px; vertical-align: middle; margin-right: .35rem; }
+  .tag.existing { background: #e2eef7; color: var(--godot); }
+  .tag.new { background: #ece3f6; color: var(--elixir); }
+
+  .phase { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: var(--radius); padding: 1.2rem 1.4rem; margin: 1.4rem 0; box-shadow: var(--shadow); }
+  .phase h3 { margin-top: .2rem; }
+  code.status { background: var(--ink); color: #fff; font-weight: 700; padding: .05em .45em; border-radius: 5px; }
+  ul.checklist { list-style: none; padding-left: 0; }
+  ul.checklist li { padding: .28rem 0; }
+  ul.checklist li code.status { margin-right: .5rem; }
+  .loop { margin-top: .9rem; padding: .7rem .9rem; background: #fbf4e6; border: 1px solid #eedcb4; border-radius: 8px; font-size: .9rem; }
+
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .9rem; }
+  th, td { text-align: left; padding: .55rem .7rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: #efeaf8; font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+
+  #notes details { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: .6rem 1rem; margin: .6rem 0; box-shadow: var(--shadow); }
+  #notes summary { cursor: pointer; font-weight: 600; }
+  .qa-answer { color: var(--muted); margin-top: .6rem; }
+</style>
+</head>
+<body>
+<main>
+
+  <!-- ===== HEADER + UPDATABLE METADATA ===== -->
+  <header>
+    <h1>Add a Godot + Elixir Command-Pack Stack</h1>
+    <p class="panel">Teach the agentic-layer adaptor a new <strong>godot&nbsp;+&nbsp;elixir</strong> stack so a project with both <code>project.godot</code> and <code>mix.exs</code> is auto-detected, gets the right capability commands, and resolves a small purpose-built command pack — by composing the system's existing primitive (a single token-templated command <code>.md</code> file) over three tiny registry edits. No resolver change, no migration.</p>
+    <details class="meta">
+      <summary>Metadata</summary>
+      <dl>
+        <dt>created</dt>      <dd>2026-06-26</dd>
+        <dt>modified</dt>     <dd>2026-06-26</dd>
+        <dt>commits</dt>      <dd>—</dd>
+        <dt>agent name</dt>   <dd>claude-opus-4-8</dd>
+        <dt>session id</dt>   <dd>planf3-godot-elixir-2026-06-26</dd>
+        <dt>back refs</dt>    <dd>ai_docs/agentic-layer-adaptor.md, specs/agentic-layer-adaptor-and-planning-wizard.html, specs/agentic-plugin-system-foundation.html</dd>
+        <dt>forward refs</dt> <dd>—</dd>
+      </dl>
+    </details>
+  </header>
+
+  <!-- Hero image — synced to the :root identity. -->
+  <figure>
+    <!-- {{HERO_IMAGE: three thin stacked layers labeled DETECT / CAPABILITIES / PACK resolving to one command card, Godot-blue + Elixir-purple, minimal}} -->
+    <div class="img-todo">HERO IMAGE — three stacked layers (DETECT → CAPABILITIES → PACK) composing into one resolved command card. Run the image-generation sub-workflow to fill.</div>
+    <figcaption>The primitive stacks: a detected stack feeds capability tokens, which a small pack templates into a resolved command.</figcaption>
+  </figure>
+
+  <!-- ===== PURPOSE / PROBLEM / SOLUTION ===== -->
+  <section id="purpose">
+    <h2>Purpose</h2>
+    <p>Answer the operator's question directly — <em>"is there a primitive I can stack up to create command packs?"</em> — and use it to add first-class support for a <strong>Godot game with an Elixir core</strong>. The answer is yes: the platform already has a composable primitive, and adding a stack is a small, well-bounded edit, not a new subsystem.</p>
+    <div class="panel">
+      <strong>The primitive, in one sentence.</strong> A command pack is just a versioned folder of single-purpose command files — <code>priv/command_packs/&lt;pack&gt;/&lt;version&gt;/commands/&lt;name&gt;.md</code> — each a YAML-frontmatter <code>.md</code> body that may contain <em>capability tokens</em> (<code>{{TEST_COMMAND}}</code>, <code>{{BUILD_COMMAND}}</code>, …). You "stack up" these <code>.md</code> files into a pack; packs layer over a token-templated <code>generic</code> base through the resolver's precedence chain. You usually write <em>only</em> the files whose prose genuinely differs from generic.</p></strong>
+    </div>
+  </section>
+
+  <section id="problem">
+    <h2>Problem</h2>
+    <p>Two real gaps stand between "the primitive exists" and "a Godot + Elixir repo just works":</p>
+    <ul>
+      <li><strong>Detection can't see the combination.</strong> <code>Projects.Profiler</code> scans an ordered <code>@markers</code> list and the <em>first existing</em> marker wins. A Godot + Elixir repo has <em>both</em> <code>project.godot</code> and <code>mix.exs</code>; because <code>mix.exs</code> is first, the repo is detected as plain <code>"elixir"</code> — the Godot half is invisible. So you cannot add this stack by simply appending one marker.</li>
+      <li><strong>No capability values or pack for the combined toolchain.</strong> <code>Projects.Capabilities.@defaults</code> has no <code>godot_elixir</code> entry, and <code>Commands.Pack.@stack_packs</code> has no mapping, so <code>"auto"</code> would fall through to <code>generic</code> with Elixir-only (or empty) command values — nothing describes the Godot headless import/export/test flow.</li>
+    </ul>
+    <figure>
+      <!-- {{PROBLEM_IMAGE: an ordered marker list where mix.exs is picked first, the project.godot marker greyed/ignored, single-match arrow}} -->
+      <div class="img-todo">PROBLEM IMAGE — an ordered marker scan stopping at <code>mix.exs</code>, leaving <code>project.godot</code> greyed out ("first match wins").</div>
+      <figcaption>First-match marker scanning hides the Godot half of a Godot + Elixir repo.</figcaption>
+    </figure>
+  </section>
+
+  <section id="solution">
+    <h2>Solution</h2>
+    <p>Compose the existing primitive over three tiny registry edits, plus a combined-marker detection tweak. Nothing in the resolver, the Project schema, or the DB changes.</p>
+    <table>
+      <thead><tr><th>Layer (existing seam)</th><th>What we add for <code>godot_elixir</code></th><th>File</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Detection</strong> — stack heuristics</td><td>A combined-marker rule: <code>project.godot</code> <em>and</em> <code>mix.exs</code> ⇒ <code>language: "godot_elixir"</code>, evaluated <em>before</em> the single-marker scan.</td><td><code>projects/profiler.ex</code></td></tr>
+        <tr><td><strong>Capability map</strong> — the per-stack token values</td><td>A <code>"godot_elixir"</code> defaults entry (mix-based test/build/typecheck, Godot-aware run + source dirs).</td><td><code>projects/capabilities.ex</code></td></tr>
+        <tr><td><strong>Stack→pack map</strong> — the <code>"auto"</code> wiring</td><td><code>"godot_elixir" =&gt; "godot-elixir"</code>.</td><td><code>commands/pack.ex</code></td></tr>
+        <tr><td><strong>Command pack</strong> — the composed primitive</td><td>A 3-file pack (<code>build/run/test</code>) describing the Godot headless export/test flow; everything else falls through to <code>generic</code>.</td><td><code>priv/command_packs/godot-elixir/1.0.0/…</code></td></tr>
+      </tbody>
+    </table>
+    <p>Because <code>Commands.list_packs/0</code> discovers packs from disk and <code>ProjectsLive</code>'s pack picker derives its options from it, the new pack appears in the UI automatically — no web-layer change.</p>
+    <figure>
+      <!-- {{SOLUTION_IMAGE: the resolver precedence chain repo-local > plugin > pinned > stack-pack(godot-elixir) > generic, with token fill arrow}} -->
+      <div class="img-todo">SOLUTION IMAGE — the resolver precedence chain with the new <code>godot-elixir</code> stack pack slotting in above <code>generic</code>, capability tokens filling the body.</div>
+      <figcaption>The new stack pack slots into the existing precedence chain; unmatched commands still inherit the token-templated generic body.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== RELEVANT FILES ===== -->
+  <section id="files" class="files">
+    <h2>Relevant Files</h2>
+
+    <h3>Existing Files</h3>
+    <ul>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/projects/profiler.ex</code> — stack detection (<code>@markers</code> at line 34, <code>detect_stack/1</code> at line 71). Add the combined Godot+Elixir heuristic here.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/projects/capabilities.ex</code> — the typed per-stack capability map (<code>@defaults</code> at line 32). Add the <code>"godot_elixir"</code> entry.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/commands/pack.ex</code> — pack discovery + <code>@stack_packs</code> mapping (line 24) + <code>stack_pack_id/1</code> (line 67). Add the language→pack id mapping.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/commands/resolver.ex</code> — precedence walk + token fill. <strong>Read-only</strong>: the chain already supports a new stack pack; no change needed.</li>
+      <li><span class="tag existing">existing</span> <code>priv/command_packs/generic/1.0.0/commands/*.md</code> — the token-templated base every stack inherits. Reference for token usage; do not modify.</li>
+      <li><span class="tag existing">existing</span> <code>priv/command_packs/elixir/1.0.0/commands/{build,test}.md</code> — closest prior art for prose-divergent command bodies.</li>
+      <li><span class="tag existing">existing</span> <code>test/repo_builder/commands/resolver_test.exs</code> — pattern for pack-resolution tests; add <code>godot_elixir</code> cases.</li>
+      <li><span class="tag existing">existing</span> <code>test/repo_builder/projects_test.exs</code> — pattern for Profiler/capability tests; add the combined-marker detection case.</li>
+      <li><span class="tag existing">existing</span> <code>ai_docs/agentic-layer-adaptor.md</code> — the authoritative authoring guide. Add <code>godot-elixir</code> to the supported-stacks list (and, optionally, note the <code>default_model_tier</code> field listed in its Project seam was since removed).</li>
+    </ul>
+
+    <h3>New Files</h3>
+    <ul>
+      <li><span class="tag new">new</span> <code>priv/command_packs/godot-elixir/1.0.0/commands/build.md</code> — compile the Elixir core + Godot headless import/export.</li>
+      <li><span class="tag new">new</span> <code>priv/command_packs/godot-elixir/1.0.0/commands/run.md</code> — start the Elixir runtime, launch the Godot client (headless for CI).</li>
+      <li><span class="tag new">new</span> <code>priv/command_packs/godot-elixir/1.0.0/commands/test.md</code> — the Elixir green gate + Godot GUT headless tests (self-contained — a stack pack does not chain to the <code>elixir</code> pack).</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/projects/godot_elixir_stack_test.exs</code> — detection + capability defaults for the new stack (optional: fold into existing files instead).</li>
+    </ul>
+  </section>
+
+  <!-- ===== IMPLEMENTATION PHASES ===== -->
+  <section id="phases">
+    <h2>Implementation Phases</h2>
+    <p><strong>IMPORTANT:</strong> Execute every phase and task step by step, in order, top to bottom.</p>
+    <p>Status markers: <code>[]</code> idle · <code>[wip]</code> in progress · <code>[x]</code> complete · <code>[f]</code> failed. All start as <code>[]</code>; the Build Plan workflow updates them as it works.</p>
+
+    <!-- PHASE 1 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 1: Detect the Godot + Elixir combination</h3>
+      <p>Teach <code>Profiler.detect_stack/1</code> to recognise a repo carrying <em>both</em> <code>project.godot</code> and <code>mix.exs</code> as <code>"godot_elixir"</code>, evaluated before the ordered single-marker scan so the combination is never masked by <code>mix.exs</code>.</p>
+
+      <figure>
+        <!-- {{PHASE_IMAGE: a cond/guard checking BOTH project.godot AND mix.exs before the ordered marker list}} -->
+        <div class="img-todo">PHASE 1 IMAGE — a combined-marker guard (both <code>project.godot</code> &amp; <code>mix.exs</code>) short-circuiting ahead of the ordered single-marker list.</div>
+        <figcaption>The combined check runs first; plain single-marker detection is the fallback.</figcaption>
+      </figure>
+
+      <h4>1. Add the combined-marker heuristic</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> In <code>profiler.ex</code>, wrap <code>detect_stack/1</code> in a <code>cond</code> that checks the combination first, keeping the existing <code>Enum.find(@markers, …)</code> as the fallback branch:
+<pre><code>defp detect_stack(root) do
+  cond do
+    godot_elixir?(root) -&gt;
+      %{"language" =&gt; "godot_elixir", "build_tool" =&gt; "mix+godot",
+        "marker" =&gt; "project.godot+mix.exs"}
+
+    true -&gt;
+      case Enum.find(@markers, fn {m, _l, _t} -&gt;
+             File.regular?(Path.join(root, m))
+           end) do
+        {marker, language, build_tool} -&gt;
+          %{"language" =&gt; language, "build_tool" =&gt; build_tool, "marker" =&gt; marker}
+
+        nil -&gt;
+          %{"language" =&gt; "unknown", "build_tool" =&gt; nil, "marker" =&gt; nil}
+      end
+  end
+end
+
+@spec godot_elixir?(String.t()) :: boolean()
+defp godot_elixir?(root) do
+  File.regular?(Path.join(root, "project.godot")) and
+    File.regular?(Path.join(root, "mix.exs"))
+end</code></pre></li>
+        <li><code class="status">[]</code> Keep the heuristic fail-silent (pure <code>File.regular?/1</code>, no shell-out) — consistent with the rest of the Profiler.</li>
+      </ul>
+
+      <h4>2. Testing Strategy</h4>
+      <p>ExUnit with a tmp-dir fixture (mirror the Profiler tests in <code>projects_test.exs</code>): write the marker files into a temp dir and assert the detected language. Cover the precedence edge case explicitly (both markers ⇒ <code>godot_elixir</code>, not <code>elixir</code>).</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Temp dir with <code>project.godot</code> + <code>mix.exs</code> ⇒ <code>stack["language"] == "godot_elixir"</code>.</li>
+        <li><code class="status">[]</code> Temp dir with only <code>mix.exs</code> ⇒ still <code>"elixir"</code> (no regression).</li>
+        <li><code class="status">[]</code> Temp dir with only <code>project.godot</code> ⇒ <code>"unknown"</code> (out of scope for this plan; documents the boundary).</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/projects_test.exs</code> — detection passes.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- PHASE 2 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 2: Capability defaults for the stack</h3>
+      <p>Give <code>godot_elixir</code> its capability token values so the <code>generic</code> base (and the new pack) render real commands. These are <em>defaults</em> — every field stays operator-overridable per project.</p>
+
+      <h4>1. Add the <code>"godot_elixir"</code> defaults entry</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add to <code>Capabilities.@defaults</code> (after <code>"elixir"</code>):
+<pre><code>"godot_elixir" =&gt; %{
+  package_manager: "mix",
+  test_command: "mix test",
+  build_command: "mix compile",
+  lint_command: "mix credo --strict",
+  format_command: "mix format",
+  typecheck_command: "mix dialyzer",
+  run_command: "mix run",
+  spec_dir: "specs",
+  source_dirs: ["lib", "scenes", "scripts"],
+  test_dir: "test"
+}</code></pre></li>
+        <li><code class="status">[]</code> Leave Godot-specific actions (headless export, GUT) to the pack <em>prose</em> — the capability map holds only the single-value tokens, and the Elixir <code>mix</code> commands are the right defaults for the typed core.</li>
+      </ul>
+
+      <h4>2. Testing Strategy</h4>
+      <p>ExUnit against <code>Capabilities.detect/1</code> + the JSONB round-trip (<code>to_map/1</code>/<code>from_map/1</code>), mirroring existing capability tests.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>Capabilities.detect(%{"language" =&gt; "godot_elixir"})</code> yields <code>test_command: "mix test"</code>, <code>source_dirs: ["lib","scenes","scripts"]</code>.</li>
+        <li><code class="status">[]</code> <code>detect |&gt; to_map |&gt; from_map</code> round-trips with string keys (no atoms leak).</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/projects_test.exs</code> — capability defaults pass.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- PHASE 3 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 3: Map the stack to a pack &amp; author the pack files</h3>
+      <p>Wire <code>"auto"</code> to the new pack and compose the primitive: write only the command files whose prose genuinely diverges from <code>generic</code> (build/run/test for the Godot headless flow). Unwritten commands fall through to <code>generic</code> with tokens filled.</p>
+
+      <h4>1. Add the stack→pack mapping</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> In <code>commands/pack.ex</code>, add to <code>@stack_packs</code>: <code>"godot_elixir" =&gt; "godot-elixir"</code>.</li>
+      </ul>
+
+      <h4>2. Author the pack command files</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>priv/command_packs/godot-elixir/1.0.0/commands/build.md</code>:
+<pre><code>---
+description: Compile the Elixir core, then import/export the Godot project headlessly
+argument-hint: [export-preset]
+---
+# Build (Godot + Elixir)
+1. Compile the Elixir core: `{{BUILD_COMMAND}} --warnings-as-errors`.
+2. Import Godot assets headlessly: `godot --headless --import`.
+3. Export the game (when a preset is given): `godot --headless --export-release "$1"`.
+- Elixir sources: `{{SOURCE_DIRS}}`; Godot scenes/scripts sit beside `project.godot`.</code></pre></li>
+        <li><code class="status">[]</code> <code>priv/command_packs/godot-elixir/1.0.0/commands/run.md</code>:
+<pre><code>---
+description: Start the Elixir runtime, then launch the Godot client (headless for CI)
+argument-hint: [scene]
+---
+# Run (Godot + Elixir)
+- Start the Elixir core/runtime: `{{RUN_COMMAND}}`.
+- Launch the Godot client: `godot` (pass a scene via `$1`; add `--headless` on a server/CI).</code></pre></li>
+        <li><code class="status">[]</code> <code>priv/command_packs/godot-elixir/1.0.0/commands/test.md</code> (self-contained — the resolver does not chain a stack pack to the <code>elixir</code> pack):
+<pre><code>---
+description: Run the Elixir green gate and the Godot (GUT) headless tests
+argument-hint: [filter]
+---
+# Test (Godot + Elixir)
+Elixir core:
+1. `mix compile --warnings-as-errors`
+2. `mix format --check-formatted`
+3. `mix credo --strict`
+4. `{{TEST_COMMAND}} --warnings-as-errors` (append `$ARGUMENTS` to scope).
+Godot:
+5. `godot --headless -s addons/gut/gut_cmdln.gd -gexit` (GUT runner; skip if no GUT addon).</code></pre></li>
+        <li><code class="status">[]</code> Do <strong>not</strong> create <code>plan.md</code>/<code>fix.md</code>/<code>review.md</code> — they intentionally fall through to the token-templated <code>generic</code> bodies.</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>ExUnit mirroring <code>resolver_test.exs</code>: build an in-memory <code>%Project{stack: %{"language" =&gt; "godot_elixir"}, command_pack: "auto", capabilities: caps("godot_elixir")}</code> and assert the resolved pack/version/body and token fill.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>Commands.resolve(project, "build")</code> ⇒ <code>resolved.pack == "godot-elixir"</code>, body contains <code>godot --headless</code> and the filled <code>mix compile</code>.</li>
+        <li><code class="status">[]</code> <code>Commands.resolve(project, "test")</code> ⇒ godot-elixir pack, body contains both the Elixir gate and the GUT line.</li>
+        <li><code class="status">[]</code> <code>Commands.resolve(project, "plan")</code> ⇒ falls through to <code>generic</code> (<code>resolved.pack == "generic"</code>) with tokens filled — proves the fall-through.</li>
+        <li><code class="status">[]</code> <code>"godot-elixir" in (Commands.list_packs() |&gt; Enum.map(&amp; &amp;1.id))</code> — the pack is discovered on disk.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/commands/resolver_test.exs</code> — resolution + fall-through pass.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- PHASE 4 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 4: Document &amp; verify end-to-end</h3>
+      <p>Record the new stack in the authoring guide and prove the whole path — detection → capabilities → pack resolution → UI picker — works with a clean green gate.</p>
+
+      <h4>1. Documentation</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> In <code>ai_docs/agentic-layer-adaptor.md</code>, add <code>godot-elixir</code> to the stack-pack list in the authoring guide; note the combined-marker detection caveat (first-match scanning) so the next stack author knows the pattern.</li>
+        <li><code class="status">[]</code> (Optional cleanup, while editing the doc) The Project-seam tuple still lists <code>default_model_tier</code>, which was removed by the per-project-models work — drop it from the doc to keep it accurate.</li>
+      </ul>
+
+      <h4>2. UI smoke (no code change expected)</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Confirm <code>ProjectsLive</code>'s <code>pack_ids/0</code> (derived from <code>Commands.list_packs/0</code>) now lists <code>godot-elixir</code> in the <code>/projects/:id</code> pack picker — automatic, no edit.</li>
+        <li><code class="status">[]</code> (Optional, Tidewave/manual) Register a scratch repo containing both markers and confirm the dashboard shows the <code>godot_elixir</code> stack and the resolved command provenance.</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>The full Elixir green gate — the project's own standard — over the touched contexts and the whole suite.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix compile --warnings-as-errors</code> — typespecs/changeset clean.</li>
+        <li><code class="status">[]</code> <code>mix format --check-formatted</code> — formatting.</li>
+        <li><code class="status">[]</code> <code>mix credo --strict</code> — <code>@spec</code> gate + style (new private fns need a <code>@spec</code>).</li>
+        <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — full suite green, no regressions in profiler/capability/resolver tests.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+  </section>
+
+  <!-- ===== GLOBAL VALIDATION ===== -->
+  <section id="validation">
+    <h2>Validation Commands</h2>
+    <p>Execute these commands to validate the entire plan is complete:</p>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>mix test test/repo_builder/projects_test.exs</code> — combined-marker detection + capability defaults.</li>
+      <li><code class="status">[]</code> <code>mix test test/repo_builder/commands/resolver_test.exs</code> — pack resolves for <code>auto</code>, fall-through to generic works.</li>
+      <li><code class="status">[]</code> <code>mix compile --warnings-as-errors</code> — zero warnings.</li>
+      <li><code class="status">[]</code> <code>mix format --check-formatted</code> — formatted.</li>
+      <li><code class="status">[]</code> <code>mix credo --strict</code> — <code>@spec</code> gate + style clean.</li>
+      <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — full suite green.</li>
+    </ul>
+    <div class="loop">🔁 <strong>The plan is not complete until every box is checked and every command passes. If for some reason a step is not possible to complete, mark it with [f] and move on if possible.</strong></div>
+  </section>
+
+  <!-- ===== NOTES ===== -->
+  <section id="notes">
+    <h2>Notes</h2>
+
+    <h3>Direct answer: the two-level primitive</h3>
+    <p>The operator asked whether there's "a primitive I can stack up to create command packs." There are two composable levels, and you rarely touch more than the first:</p>
+    <div class="twocol">
+      <div class="panel"><strong>1 · The command file.</strong> A single <code>&lt;name&gt;.md</code> (frontmatter + token-templated body) under <code>priv/command_packs/&lt;pack&gt;/&lt;version&gt;/commands/</code>. Stack several of these into a folder and you have a pack. <code>:</code>-namespaced names nest (<code>experts:ws:q</code> → <code>commands/experts/ws/q.md</code>). This is the atom you "stack up."</div>
+      <div class="panel"><strong>2 · The stack wiring (3 registries).</strong> To make <code>"auto"</code> pick your pack for a detected repo, register the stack in <code>Profiler.@markers</code> (detect), <code>Capabilities.@defaults</code> (token values), and <code>Pack.@stack_packs</code> (language→pack id). That's the entire surface — the resolver, schema, and DB are untouched.</div>
+    </div>
+    <p>The deliberate design payoff: because the <code>generic</code> pack's bodies are already token-templated (<code>{{TEST_COMMAND}}</code> …), a brand-new stack that only supplies capability <em>values</em> works with <strong>zero</strong> command files. You author a pack file only when the <em>prose</em> truly differs — here, the Godot headless export/test flow.</p>
+
+    <h3>Key design decision — why detection needs a heuristic, not a marker</h3>
+    <p><code>Profiler</code> scans an ordered list and the first existing marker wins, so appending <code>{"project.godot", "godot", "godot"}</code> would never fire for a Godot+Elixir repo (<code>mix.exs</code> precedes it) and a Godot-only marker would also steal plain-Godot repos we're not scoping here. The combined predicate (<code>project.godot</code> <em>and</em> <code>mix.exs</code>) evaluated first is the minimal correct change. If plain-Godot (GDScript-only) support is wanted later, add a single-marker entry <em>after</em> the combined check — that's a separate, additive follow-up.</p>
+
+    <h3>Why the test pack is self-contained</h3>
+    <p>The resolver precedence is <code>repo-local → plugin → pinned → stack-pack → generic</code>. A stack pack does <strong>not</strong> chain to the <code>elixir</code> pack — if <code>godot-elixir/test.md</code> is absent, the next layer is <code>generic</code>, not Elixir. So <code>godot-elixir/test.md</code> intentionally inlines the full Elixir green gate <em>plus</em> the Godot step, rather than assuming Elixir's <code>test.md</code> is inherited.</p>
+
+    <h3>Capability tokens available to pack bodies</h3>
+    <p><code>{{TEST_COMMAND}} {{BUILD_COMMAND}} {{LINT_COMMAND}} {{FORMAT_COMMAND}} {{TYPECHECK_COMMAND}} {{RUN_COMMAND}} {{PACKAGE_MANAGER}} {{SPEC_DIR}} {{SOURCE_DIRS}} {{TEST_DIR}}</code> — filled from <code>project.capabilities</code> at resolve time; plus <code>$ARGUMENTS</code> / <code>$1…$N</code> for invocation args. Repo-local <code>.claude/commands</code> bodies are returned verbatim (no token fill) — the repo always wins.</p>
+
+    <h3>Scope, risks, dependencies</h3>
+    <ul>
+      <li><strong>No new dependency, no migration, no config.</strong> Pure code + on-disk pack files. Ship as a built-in pack under <code>priv/command_packs/</code> (operator packs would instead live under <code>config :repo_builder, :command_packs, operator_dir:</code>).</li>
+      <li><strong>Capability values are best-effort defaults.</strong> Real Godot+Elixir projects vary (NIF vs port vs sidecar). The defaults are operator-overridable per project via the changeset, so "approximately right" is acceptable; the pack prose carries the Godot specifics.</li>
+      <li><strong>Out of scope:</strong> plain-Godot (GDScript-only) detection; a GUT/export ADW; per-project Godot export presets. All are clean additive follow-ups on the same three registries.</li>
+    </ul>
+
+    <h3>Open follow-up worth flagging</h3>
+    <p>This plan's images are left as placeholders. Generating them calls the GPT image API (billed, external) via <code>uv run scripts/generate_gpt_image.py</code> — run the planf3 Image Generation sub-workflow when you want them filled.</p>
+  </section>
+
+  <!-- ===== AMENDMENTS ===== -->
+  <section id="amendments">
+    <h2>Amendments</h2>
+    <p class="qa-answer">No amendments yet — populated by the Update Plan / Update References workflows after first execution.</p>
+  </section>
+
+</main>
+</body>
+</html>

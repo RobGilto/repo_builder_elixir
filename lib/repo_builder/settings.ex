@@ -3,12 +3,17 @@ defmodule RepoBuilder.Settings do
   Operator-editable application settings (BUILD_PROMPT.md §8). This module is the **only**
   `Repo` caller for the `app_settings` table.
 
-  Today it backs one setting: the **global default worker-model roster**
-  (`"default_agent_models"`). A new project's orchestrator seeds its per-project roster
-  (`orchestrators.metadata["agent_models"]`) from this default, and any tier a project
-  leaves unset reads through to it at spawn time. The roster is string-keyed JSON
-  (`%{category => %{"harness" => h, "provider" => p | nil, "model" => m}}`, §8 — no atom
-  keys) so it matches the on-orchestrator shape exactly and round-trips through JSONB.
+  It backs two settings today:
+
+    * the **global default worker-model roster** (`"default_agent_models"`) — a new
+      project's orchestrator seeds its per-project roster
+      (`orchestrators.metadata["agent_models"]`) from this default, and any tier a project
+      leaves unset reads through to it at spawn time. The roster is string-keyed JSON
+      (`%{category => %{"harness" => h, "provider" => p | nil, "model" => m}}`, §8 — no atom
+      keys) so it matches the on-orchestrator shape exactly and round-trips through JSONB.
+    * the operator's **last-selected console project** (`"active_project"`) — so the console
+      reopens on the same project after navigating away or reloading
+      (`get_active_project_id/0` / `put_active_project_id/1`).
 
   When no `"default_agent_models"` row exists yet (first boot / tests), reads fall back to
   the compile-time `config :repo_builder, :default_agent_models` map.
@@ -79,6 +84,43 @@ defmodule RepoBuilder.Settings do
     )
     |> case do
       {:ok, %AppSetting{value: value}} -> {:ok, value}
+      {:error, %Ecto.Changeset{} = changeset} -> {:error, changeset}
+    end
+  end
+
+  @active_project_key "active_project"
+
+  @doc """
+  The operator's last-selected console project id, so the console reopens on the same
+  project after navigating away (e.g. to `/projects`) or reloading. Returns `nil` when no
+  selection has been persisted yet — callers resolve `nil` to the platform default via
+  `RepoBuilder.Projects.active_or_default/1`, which also tolerates a since-deleted id.
+  """
+  @spec get_active_project_id() :: String.t() | nil
+  def get_active_project_id do
+    case Repo.get_by(AppSetting, key: @active_project_key) do
+      %AppSetting{value: %{"project_id" => id}} when is_binary(id) -> id
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Persist the operator's active console project selection (or `nil` to clear it). Upserts a
+  single `"active_project"` row; the stored value is string-keyed JSON to round-trip through
+  JSONB unchanged.
+  """
+  @spec put_active_project_id(String.t() | nil) ::
+          {:ok, String.t() | nil} | {:error, Ecto.Changeset.t()}
+  def put_active_project_id(id) when is_binary(id) or is_nil(id) do
+    %AppSetting{}
+    |> AppSetting.changeset(%{"key" => @active_project_key, "value" => %{"project_id" => id}})
+    |> Repo.insert(
+      on_conflict: {:replace, [:value, :updated_at]},
+      conflict_target: :key,
+      returning: true
+    )
+    |> case do
+      {:ok, %AppSetting{value: %{"project_id" => stored}}} -> {:ok, stored}
       {:error, %Ecto.Changeset{} = changeset} -> {:error, changeset}
     end
   end

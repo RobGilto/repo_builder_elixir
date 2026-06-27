@@ -323,7 +323,25 @@ config :repo_builder, :orchestrator,
   # Writable root for operator/orchestrator-authored subagent templates (the
   # read-only built-ins ship at priv/orchestrator/agents). Markdown-with-frontmatter
   # files, versioned on the filesystem. Overridden to a tmp dir in test.exs.
-  agents_dir: Path.expand("~/.repo_builder/agents")
+  agents_dir: Path.expand("~/.repo_builder/agents"),
+  # Autonomous drive loop (self-healing Phase 4). `Orchestrator.Driver` ticks every
+  # `drive_interval_ms` (and once on boot when `drive_on_boot`) and drives every orchestrator
+  # with an active goal one inner-loop step. The stall ladder: `max_stall` no-progress turns →
+  # a replan turn; `escalate_after_stall` → escalate to the away human. `turn_deadline_ms` is
+  # the HARD per-turn ceiling (catches a turn that stays byte-active but never finishes). The
+  # circuit breaker trips a harness/model path after `breaker_max_failures` failures and
+  # half-opens after `breaker_cooldown_ms`.
+  drive_interval_ms: 30_000,
+  drive_on_boot: true,
+  max_stall: 2,
+  escalate_after_stall: 3,
+  turn_deadline_ms: 180_000,
+  breaker_max_failures: 3,
+  breaker_cooldown_ms: 60_000,
+  # Writable root for self-improving domain mental models (self-healing Phase 5): versioned
+  # `.md` files shadowing the read-only `priv/orchestrator/experts` seed root (same dual-root
+  # mechanism as agent templates). Overridden to a tmp dir in test.exs.
+  experts_dir: Path.expand("~/.repo_builder/experts")
 
 # Editor integration: open files in the operator's editor from the file-diff event cards.
 # Disabled by default in config/test.exs; overridable at runtime via RB_EDITOR_CMD /
@@ -337,12 +355,32 @@ config :repo_builder, :session,
   max_live_sessions: 100,
   max_children: 200,
   idle_ms: 300_000,
+  # Soft quiescence demotion (self-healing Phase 1). A live worker quiet on MEANINGFUL
+  # events past this window is demoted `:running → :idle` while staying alive/resumable —
+  # the honest "waiting" state. Load-bearing ordering: `quiescence_ms` (soft, 90 s)
+  # < `turn_idle_ms` (120 s) ≈ `min_stale_ms` (120 s reaper) < `idle_ms` (300 s hard-kill).
+  quiescence_ms: 90_000,
   # Hostile-stream OOM backstop (BUILD_PROMPT.md §6 rule 6): a single un-newline-terminated
   # line larger than this is treated as a runaway flood and kills the child. Sized at 16 MiB
   # so legitimate large single-line stream-json frames (big Read/diff/Firecrawl tool results)
   # pass through; tune per deploy via REPO_BUILDER_MAX_LINE_BYTES (config/runtime.exs).
   max_line_bytes: 16_777_216,
   workspace_base: "priv/workspaces"
+
+# Phantom-worker liveness sweep (issue worker-terminal Part B). `RepoBuilder.Session.LivenessReaper`
+# reconciles non-archived agents wedged `:running`/`:holding` whose session process is dead
+# (a hard kill / brutal shutdown / node restart that bypassed `terminate/2`) and re-engages
+# the owning orchestrator. `min_stale_ms` is a load-bearing grace (≥ 2× the interval): it
+# avoids reaping a worker in the sub-second window between `command_agent`'s optimistic
+# `:running` write and the `Session.Server` registering in `SessionRegistry`.
+config :repo_builder, :session_liveness_reaper,
+  sweep_on_boot: true,
+  interval_ms: 60_000,
+  min_stale_ms: 120_000,
+  # Pass 3 (self-healing Phase 1): demote live-but-stale `:running` workers to `:idle`
+  # (alive), the catch-all if a per-session quiescence timer was missed. Toggle off to
+  # disable just that pass; the phantom passes are unaffected.
+  idle_demotion: true
 
 # Agentic plugin system (the agentic plugin system foundation). The SINGLE reader is
 # `RepoBuilder.Plugins.Registry`. `install_dir` is the live install target (a sibling

@@ -157,6 +157,24 @@ defmodule RepoBuilder.Dashboard do
     :ok
   end
 
+  @doc """
+  Broadcast that an orchestrator's Task/Progress Ledger changed (self-healing Phase 3) so an
+  open console re-renders the goal panel. Subscribers (on `console:events`, via
+  `subscribe_events/0`) receive `{:ledger_updated, orchestrator_id, view}` where `view` is
+  the `Orchestrator.Ledgers.view/1` map (or `nil` when the goal cleared). Additive seam.
+  """
+  @spec broadcast_ledger_updated(Ecto.UUID.t(), map() | nil) :: :ok
+  def broadcast_ledger_updated(orchestrator_id, view) do
+    _ =
+      Phoenix.PubSub.broadcast(
+        RepoBuilder.PubSub,
+        @events_topic,
+        {:ledger_updated, orchestrator_id, view}
+      )
+
+    :ok
+  end
+
   @doc "Topic for one orchestrator's FIFO turn-queue snapshots (issue message-queue)."
   @spec orchestrator_queue_topic(Ecto.UUID.t()) :: String.t()
   def orchestrator_queue_topic(orchestrator_id), do: "orchestrator:#{orchestrator_id}:queue"

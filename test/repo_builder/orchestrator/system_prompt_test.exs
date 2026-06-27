@@ -85,7 +85,10 @@ defmodule RepoBuilder.Orchestrator.SystemPromptTest do
     assert prompt =~ "Available slash commands"
     # Narrative framing.
     assert prompt =~ "conductor of this multi-agent orchestra"
-    assert prompt =~ "builder: implement features"
+    # Worker roles are now DATA-DRIVEN from the subagent-template registry (self-healing
+    # Phase 5) — no frozen five-role list. The empty-state still names the conventional roles.
+    assert prompt =~ "Worker roles (data-driven"
+    assert prompt =~ "builder/reviewer/tester/documenter/debugger"
   end
 
   test "includes the context-management block referencing report_cost + compaction" do

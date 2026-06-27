@@ -128,6 +128,36 @@ defmodule RepoBuilder.Orchestrator.StartAdwWorkingDirTest do
     end
   end
 
+  describe "provisioning → foster repo gains .claude/commands on launch" do
+    test "launching against a registered repo with no commands seeds them and still starts" do
+      slug = "planz"
+      target = dir_with_adw(slug)
+      register_project(target)
+      orch = orchestrator()
+
+      commands_dir = Path.join([target, ".claude", "commands"])
+      refute File.dir?(commands_dir), "fixture repo should ship no commands"
+
+      assert {:ok, %{"run_id" => run_id, "mode" => "adw"}} =
+               Tools.call("start_adw", orch.id, %{
+                 "input" => "build it",
+                 "harness" => "adw",
+                 "workflow_type" => slug,
+                 "working_dir" => target,
+                 "adw_runner" => "bash"
+               })
+
+      # The standard ADW step set was materialized into the target repo before spawn
+      # (the canned fixture declares no slash commands → fallback set).
+      for name <- ~w(plan build review test fix) do
+        assert File.regular?(Path.join(commands_dir, name <> ".md")),
+               "expected #{name}.md to be provisioned"
+      end
+
+      wait_for_done(run_id)
+    end
+  end
+
   describe "omitted working_dir → orchestrator dir fallback (back-compat)" do
     test "the worker spawns in the orchestrator's working dir when none is passed" do
       slug = "plany"

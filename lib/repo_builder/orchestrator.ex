@@ -17,7 +17,7 @@ defmodule RepoBuilder.Orchestrators do
   import Ecto.Query, only: [from: 2]
 
   alias RepoBuilder.Harness.Registry
-  alias RepoBuilder.Orchestrator.{Orchestrator, SystemPrompt}
+  alias RepoBuilder.Orchestrator.{Orchestrator, SystemPrompt, TaskLedger}
   alias RepoBuilder.Projects
   alias RepoBuilder.Repo
   alias RepoBuilder.Settings
@@ -81,12 +81,17 @@ defmodule RepoBuilder.Orchestrators do
         {:ok, orchestrator}
 
       nil ->
-        harness = harness || default_harness()
+        # No explicit harness ⇒ seed the brain from the LEADER tier (same as project
+        # orchestrators), so a fresh platform orchestrator reflects the lead model. An
+        # explicit harness is honored as-is with that harness's registry defaults.
+        attrs =
+          case harness do
+            nil -> leader_brain_attrs(Settings.default_agent_models(), default_harness())
+            h -> apply_harness_defaults(%{harness: h}, h)
+          end
 
         %Orchestrator{}
-        |> Orchestrator.changeset(
-          apply_harness_defaults(%{name: @default_name, harness: harness}, harness)
-        )
+        |> Orchestrator.changeset(Map.put(attrs, :name, @default_name))
         |> Repo.insert()
         |> handle_default_race()
     end
@@ -163,25 +168,91 @@ defmodule RepoBuilder.Orchestrators do
   @spec create_for_project(Projects.Project.t()) ::
           {:ok, Orchestrator.t()} | {:error, Ecto.Changeset.t()}
   defp create_for_project(%Projects.Project{} = project) do
-    harness = project_harness(project)
+    name = project_orchestrator_name(project)
+
+    # A previously-deregistered project of the same name leaves its orchestrator behind:
+    # deleting a project NILIFIES `orchestrators.project_id` (on_delete: :nilify_all) but the
+    # globally-unique `name` (`"orch:" <> project_name`) survives. Re-registering the same
+    # name would then collide on that unique name. Re-adopt the orphan for the new project
+    # instead — unblocks re-registration AND preserves the orchestrator's history (cost/logs,
+    # FK'd by orchestrator_id). Only an UNBOUND (`project_id: nil`) row is adoptable; project
+    # names are unique, so a bound same-named row can't belong to a different live project.
+    case Repo.get_by(Orchestrator, name: name) do
+      %Orchestrator{project_id: nil} = orphan -> adopt_for_project(orphan, project)
+      _ -> insert_for_project(project, name)
+    end
+  end
+
+  @spec insert_for_project(Projects.Project.t(), String.t()) ::
+          {:ok, Orchestrator.t()} | {:error, Ecto.Changeset.t()}
+  defp insert_for_project(%Projects.Project{} = project, name) do
+    roster = Settings.default_agent_models()
 
     attrs =
-      %{name: project_orchestrator_name(project), harness: harness}
-      |> apply_harness_defaults(harness)
+      roster
+      # The orchestrator's own brain (harness/provider/model) defaults to the LEADER worker
+      # tier, so the console header's harness toggle + model select reflect the lead model
+      # out of the box instead of the non-orchestrating "fake" dev stub.
+      |> leader_brain_attrs(project_harness(project))
       |> Map.merge(%{
+        name: name,
         project_id: project.id,
         working_dir: project.root_path,
         # Seed the per-project worker roster from the operator's global default so a
         # freshly registered project can spawn category workers immediately (read-through
         # in `effective_agent_model/2` still covers any tier left unset). String-keyed
         # JSONB shape, matching `metadata["agent_models"]`.
-        metadata: %{"agent_models" => Settings.default_agent_models()}
+        metadata: %{"agent_models" => roster}
       })
 
     %Orchestrator{}
     |> Orchestrator.changeset(attrs)
     |> Repo.insert()
     |> handle_project_race(project.id)
+  end
+
+  # The orchestrator's own brain seeded from the roster's LEADER tier (the lead model):
+  # `%{harness, provider, model, session_id: nil}`. Falls back to `fallback_harness`'s
+  # registry defaults when the leader tier names no usable orchestrating harness (unset, or
+  # the non-orchestrating "fake" stub) — in which case the operator picks the model.
+  @spec leader_brain_attrs(map(), String.t()) :: map()
+  defp leader_brain_attrs(roster, fallback_harness) do
+    case roster do
+      %{"leader" => %{"harness" => harness} = leader} when is_binary(harness) ->
+        if orchestrating_harness?(harness) do
+          %{
+            harness: harness,
+            provider: leader["provider"],
+            model: leader["model"],
+            session_id: nil
+          }
+        else
+          apply_harness_defaults(%{}, fallback_harness)
+        end
+
+      _ ->
+        apply_harness_defaults(%{}, fallback_harness)
+    end
+  end
+
+  # A harness usable as an orchestrator brain: a registered orchestrating harness, excluding
+  # the "fake" stub (orchestrating in dev/test config, but never a real brain the header
+  # toggle offers).
+  @spec orchestrating_harness?(String.t()) :: boolean()
+  defp orchestrating_harness?(harness),
+    do: harness != "fake" and harness in Registry.orchestrating_harnesses()
+
+  # Rebind a leftover (unbound) orchestrator to a re-registered project: `set_project/2`
+  # restores `project_id`/`working_dir` and clears the resumable session (fresh context for
+  # the re-registered repo), then `backfill_roster/1` reseeds an empty roster from the global
+  # default. Falls back to a fresh insert only if the orphan vanished between read and write.
+  @spec adopt_for_project(Orchestrator.t(), Projects.Project.t()) ::
+          {:ok, Orchestrator.t()} | {:error, Ecto.Changeset.t()}
+  defp adopt_for_project(%Orchestrator{} = orphan, %Projects.Project{} = project) do
+    case set_project(orphan.id, project.id) do
+      {:ok, adopted} -> {:ok, backfill_roster(adopted)}
+      {:error, :not_found} -> insert_for_project(project, project_orchestrator_name(project))
+    end
   end
 
   # Backfill an existing orchestrator's empty roster from the global default (covers
@@ -275,6 +346,60 @@ defmodule RepoBuilder.Orchestrators do
   @spec set_status(Ecto.UUID.t(), Orchestrator.status()) ::
           {:ok, Orchestrator.t()} | {:error, :not_found}
   def set_status(id, status), do: update_fields(id, %{status: status})
+
+  @doc """
+  List orchestrators wedged in a live status (`:running`) whose row hasn't been touched
+  since `stale_before` (issue orchestrator-stuck). These are candidate phantoms: the
+  `LivenessReaper` further filters to those with NO live turn (no `Orchestrator.Server`
+  and no `"orch-<id>-…"` session) before reconciling to `:idle`. The `status` enum
+  defines only `[:idle, :running, :error]`, so `:running` is the sole live state. Order
+  is irrelevant.
+  """
+  @spec list_stuck_running(DateTime.t()) :: [Orchestrator.t()]
+  def list_stuck_running(stale_before) do
+    Repo.all(
+      from(o in Orchestrator,
+        where: o.status == :running and o.updated_at < ^stale_before
+      )
+    )
+  end
+
+  @doc """
+  List orchestrators the autonomous drive loop can advance (self-healing Phase 4): those
+  with an `:active` Task Ledger whose row status is `:idle` or `:error` (a transiently-errored
+  turn is retried — bounded by the ledger stall→escalate ladder). The `Driver` further gates
+  each on a live `Budget.Guard` check + a non-busy Queue. A `:done`/`:escalated`/`:abandoned`
+  ledger is NOT active, so its orchestrator is excluded — the loop stops until the operator
+  re-engages.
+  """
+  @spec list_drivable() :: [Orchestrator.t()]
+  def list_drivable do
+    Repo.all(
+      from(o in Orchestrator,
+        join: l in TaskLedger,
+        on: l.orchestrator_id == o.id and l.status == :active,
+        where: o.status in [:idle, :error]
+      )
+    )
+  end
+
+  @doc "Record the awaiting-human escalation reason for the console banner (self-healing Phase 4)."
+  @spec set_holding_reason(Ecto.UUID.t(), String.t()) ::
+          {:ok, Orchestrator.t()} | {:error, :not_found}
+  def set_holding_reason(id, reason), do: put_metadata_locked(id, "holding_reason", reason)
+
+  @doc "Clear the escalation banner reason (on operator resume / a fresh goal)."
+  @spec clear_holding_reason(Ecto.UUID.t()) :: {:ok, Orchestrator.t()} | {:error, :not_found}
+  def clear_holding_reason(id), do: put_metadata_locked(id, "holding_reason", nil)
+
+  @doc "The current awaiting-human escalation reason, or nil."
+  @spec holding_reason(Orchestrator.t()) :: String.t() | nil
+  def holding_reason(%Orchestrator{metadata: metadata}) do
+    case Map.get(metadata, "holding_reason") do
+      reason when is_binary(reason) and reason != "" -> reason
+      _ -> nil
+    end
+  end
 
   @doc """
   Switch the orchestrator's harness (validated against the registry by the

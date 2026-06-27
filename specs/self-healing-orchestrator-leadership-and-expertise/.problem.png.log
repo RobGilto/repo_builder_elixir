@@ -1,0 +1,11 @@
+Model:      gpt-image-2
+Size:       1536x1024
+Quality:    high
+Format:     png
+Background: auto
+Count:      1
+Prompt:     Three desaturated grey-red worker nodes frozen with a small RUNNING tag and a pause icon doing nothing; a dim sleeping i...
+
+Generating image...
+Saved: /data/1.Projects/repo_builder_elixir/specs/self-healing-orchestrator-leadership-and-expertise/problem.png
+Usage: Usage(input_tokens=193, input_tokens_details=UsageInputTokensDetails(image_tokens=0, text_tokens=193), output_tokens=5488, total_tokens=5681, output_tokens_details=UsageOutputTokensDetails(image_tokens=5488, text_tokens=0))

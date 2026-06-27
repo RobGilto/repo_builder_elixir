@@ -131,11 +131,36 @@ config :repo_builder, :orchestrator,
   turn_idle_ms: 120_000,
   # Per-run tmp root so template tests are hermetic and never touch the real
   # ~/.repo_builder/agents. Each test may further override this via app-env.
-  agents_dir: Path.join(System.tmp_dir!(), "repo_builder_agents_test")
+  agents_dir: Path.join(System.tmp_dir!(), "repo_builder_agents_test"),
+  # Drive loop (self-healing Phase 4): dormant in tests (no boot tick, infinite interval) so
+  # the periodic timer never races the Ecto sandbox — the suite drives `Driver.tick/0`
+  # explicitly, mirroring the LivenessReaper contract. Stall thresholds match prod defaults;
+  # the hard turn deadline stays large so it never fires during sub-second Fake turns
+  # (deadline tests override per-scope). Breaker thresholds match prod.
+  drive_on_boot: false,
+  drive_interval_ms: :infinity,
+  max_stall: 2,
+  escalate_after_stall: 3,
+  turn_deadline_ms: 180_000,
+  breaker_max_failures: 3,
+  breaker_cooldown_ms: 60_000,
+  # Per-run tmp root for self-improving expertise so write tests are hermetic and never touch
+  # the real ~/.repo_builder/experts. Each test may further override this (and the built-in
+  # root) via app-env for full isolation.
+  experts_dir: Path.join(System.tmp_dir!(), "repo_builder_experts_test")
 
 # Don't reap on boot in tests — the suite drives OrphanReaper.reap_node/1 explicitly
 # so it doesn't race the Ecto sandbox.
 config :repo_builder, :orphan_reaper, reap_on_boot: false
+
+# LivenessReaper: don't sweep on boot and keep the interval dormant (`:infinity`) in
+# tests so the periodic timer never races the Ecto sandbox; the suite drives
+# `LivenessReaper.sweep/0` explicitly.
+config :repo_builder, :session_liveness_reaper,
+  sweep_on_boot: false,
+  interval_ms: :infinity,
+  min_stale_ms: 120_000,
+  idle_demotion: true
 
 # Budget.Guard: don't touch the Repo on boot in tests (no default-cap seed, no
 # CostCenter reconcile) so the supervised singleton doesn't race the Ecto sandbox.
@@ -181,5 +206,8 @@ config :repo_builder, :session,
   max_live_sessions: 100,
   max_children: 200,
   idle_ms: 300_000,
+  # Parity with prod (self-healing Phase 1). Large enough that it never fires during the
+  # sub-second worker sessions the suite spawns; quiescence tests override per-scope via opts.
+  quiescence_ms: 90_000,
   max_line_bytes: 1_048_576,
   workspace_base: "priv/workspaces"

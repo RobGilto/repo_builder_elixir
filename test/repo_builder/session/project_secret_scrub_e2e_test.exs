@@ -10,6 +10,7 @@ defmodule RepoBuilder.Session.ProjectSecretScrubE2ETest do
   import Mox
 
   alias RepoBuilder.{Agents, Logs, Projects, Secrets}
+  alias RepoBuilder.Logs.Writer
 
   @mock RepoBuilder.Harness.Mock
   @secret "super-secret-value-9999"
@@ -65,6 +66,10 @@ defmodule RepoBuilder.Session.ProjectSecretScrubE2ETest do
     refute text =~ @secret
 
     assert_receive {:DOWN, ^ref, :process, _, _}, 2_000
+
+    # Persistence is async (off the session hot path) — drain the writer before reading rows
+    # so the assertion never races the in-flight insert.
+    :ok = Writer.drain()
 
     # …and no persisted agent_logs payload contains the value either.
     logs = Logs.list_recent(agent.id)

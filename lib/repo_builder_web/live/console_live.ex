@@ -60,8 +60,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
   alias RepoBuilder.Harness.Event
   alias RepoBuilder.Harness.Pi.Models, as: PiModels
   alias RepoBuilder.Harness.Registry, as: HarnessRegistry
+  alias RepoBuilder.Orchestrator.Ledgers
   alias RepoBuilder.Orchestrator.Queue, as: OrchestratorQueue
   alias RepoBuilder.Orchestrator.Templates
+  alias RepoBuilder.StackLayers
+  alias RepoBuilder.StackLayers.StackLayer
   alias RepoBuilder.Workflows.TitleHumanizer
   alias RepoBuilderWeb.AgentColors
 
@@ -95,6 +98,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
         agent_est_costs: %{},
         orchestrator_id: nil,
         orchestrator_name: nil,
+        # Autonomy panel (self-healing Phase 6): the active orchestrator's Task/Progress Ledger
+        # view (nil ⇒ no goal) + the escalation banner reason (nil ⇒ not escalated).
+        ledger: nil,
+        orchestrator_holding_reason: nil,
         # FIFO turn-queue snapshot (issue message-queue): busy?/current/queued/depth.
         # Safe idle default for the disconnected render; reseeded on the connected mount.
         orchestrator_queue: %{busy?: false, current: nil, queued: [], depth: 0},
@@ -152,6 +159,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
         price_rows: [],
         price_form: to_form(ModelPrice.changeset(%ModelPrice{}, %{}), as: :model_price),
         editing_price_id: nil,
+        # Stack Layers settings tab (stack-layers subsystem). Lazily loaded with the tab.
+        stack_layer_rows: [],
+        stack_layer_form: to_form(StackLayer.changeset(%StackLayer{}, %{}), as: :stack_layer),
+        editing_layer_id: nil,
         regex?: false,
         search: "",
         active_categories: MapSet.new(@categories),
@@ -294,13 +305,15 @@ defmodule RepoBuilderWeb.ConsoleLive do
   # one is selected, else the platform default. Runs AFTER `active_project_id` is assigned
   # so a deep-linked project starts on the right brain. A failure leaves orchestrator_id nil
   # (the manual path still works).
-  # Default the global project scope to the platform project (repo_builder_elixir — the
-  # seeded row whose root_path is the BEAM cwd) on connect, so the console opens on a
-  # concrete project instead of the (now removed) "All / platform" view. A nil result
-  # (before seeding / no projects) leaves the scope unset.
+  # Restore the operator's last-selected project on connect so the console reopens on the
+  # same project after navigating away (e.g. to `/projects` and back) or reloading. Falls
+  # back to the platform project (repo_builder_elixir — the seeded row whose root_path is the
+  # BEAM cwd) when nothing is persisted or the persisted project was since deleted, via
+  # `Projects.active_or_default/1`. A nil result (before seeding / no projects) leaves the
+  # scope unset.
   @spec assign_default_project(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp assign_default_project(socket) do
-    case Projects.default_project() do
+    case Projects.active_or_default(Settings.get_active_project_id()) do
       nil -> socket
       project -> assign(socket, :active_project_id, project.id)
     end
@@ -397,7 +410,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
       orchestrator_default_prompt: Orchestrators.default_system_prompt(orchestrator),
       orchestrator_reasoning_effort: orchestrator.reasoning_effort,
       orchestrator_working_dir: orchestrator.working_dir || "",
-      timezone: Orchestrators.timezone(orchestrator)
+      timezone: Orchestrators.timezone(orchestrator),
+      ledger: Ledgers.view(orchestrator.id),
+      orchestrator_holding_reason: Orchestrators.holding_reason(orchestrator)
     )
   end
 
@@ -1002,6 +1017,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
     active = if id == "", do: nil, else: id
     previous_id = socket.assigns.orchestrator_id
 
+    # Persist the selection so it survives navigation (e.g. → /projects → back) and reloads;
+    # best-effort — a persistence failure must not block the in-session switch.
+    _ = Settings.put_active_project_id(active)
+
     {:noreply,
      socket
      |> assign(:active_project_id, active)
@@ -1581,6 +1600,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
     selected = settings_tab(tab)
     socket = assign(socket, :settings_tab, selected)
     socket = if selected == :cost_center, do: load_cost_center(socket), else: socket
+    socket = if selected == :stack_layers, do: load_stack_layers(socket), else: socket
 
     socket =
       if selected == :default_models,
@@ -1646,6 +1666,64 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
     socket =
       if socket.assigns.editing_price_id == id, do: reset_price_form(socket), else: socket
+
+    {:noreply, socket}
+  end
+
+  # --- stack layers catalog CRUD (stack-layers subsystem) ---
+
+  # Save a catalog layer: `update_layer/2` when an edit is in flight, else `create_layer/1`.
+  # On success re-derive the catalog and reset to create mode; a validation error re-renders
+  # the form with the changeset; a stale id (concurrent delete) falls back to create mode.
+  def handle_event("save_layer", %{"stack_layer" => params}, socket) do
+    result =
+      case socket.assigns.editing_layer_id do
+        nil ->
+          StackLayers.create_layer(params)
+
+        id ->
+          case StackLayers.get_layer(id) do
+            nil -> {:error, :not_found}
+            layer -> StackLayers.update_layer(layer, params)
+          end
+      end
+
+    case result do
+      {:ok, _layer} ->
+        {:noreply, socket |> load_stack_layers() |> reset_layer_form()}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply, assign(socket, :stack_layer_form, to_form(changeset, as: :stack_layer))}
+
+      {:error, :not_found} ->
+        {:noreply, socket |> load_stack_layers() |> reset_layer_form()}
+    end
+  end
+
+  def handle_event("edit_layer", %{"id" => id}, socket) do
+    case StackLayers.get_layer(id) do
+      nil ->
+        {:noreply, socket}
+
+      %StackLayer{} = layer ->
+        {:noreply,
+         assign(socket,
+           editing_layer_id: layer.id,
+           stack_layer_form: to_form(StackLayer.changeset(layer, %{}), as: :stack_layer)
+         )}
+    end
+  end
+
+  def handle_event("cancel_layer_edit", _params, socket) do
+    {:noreply, reset_layer_form(socket)}
+  end
+
+  def handle_event("delete_layer", %{"id" => id}, socket) do
+    _ = StackLayers.delete_layer(id)
+    socket = load_stack_layers(socket)
+
+    socket =
+      if socket.assigns.editing_layer_id == id, do: reset_layer_form(socket), else: socket
 
     {:noreply, socket}
   end
@@ -1997,6 +2075,27 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   def handle_event("close_explain", _params, socket),
     do: {:noreply, assign(socket, :explain, %{status: :idle, request_id: nil, count: 0})}
+
+  # Operator resume from the escalation banner (self-healing Phase 6): clear the holding reason
+  # and re-engage the orchestrator with one operator turn so it resumes from the ledger checkpoint.
+  def handle_event("resume_orchestrator", _params, socket) do
+    case socket.assigns.orchestrator_id do
+      nil ->
+        {:noreply, socket}
+
+      orchestrator_id ->
+        _ = Orchestrators.clear_holding_reason(orchestrator_id)
+
+        socket =
+          socket
+          |> assign(:orchestrator_holding_reason, nil)
+          |> run_orchestrator(
+            "Resume driving toward the goal — reassess the ledger and continue."
+          )
+
+        {:noreply, socket}
+    end
+  end
 
   defp launch_adw_builder(steps, name, harness, socket) do
     step_list =
@@ -2620,6 +2719,17 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   def handle_info({:definitions_changed, :adw, list}, socket) do
     {:noreply, assign(socket, :adws, list)}
+  end
+
+  # The active orchestrator's Task/Progress Ledger changed (self-healing Phase 6): refresh the
+  # autonomy panel live. Scoped to the active orchestrator; other orchestrators' updates are
+  # ignored (matching the queue/agent handlers).
+  def handle_info({:ledger_updated, orchestrator_id, view}, socket) do
+    if orchestrator_id == socket.assigns.orchestrator_id do
+      {:noreply, assign(socket, :ledger, view)}
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_info({:orchestrator_updated, orchestrator}, socket) do
@@ -3537,6 +3647,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
             </:messages>
           </.command_panel>
 
+          <.autonomy_panel ledger={@ledger} holding_reason={@orchestrator_holding_reason} />
+
           <.queued_messages
             busy?={@orchestrator_queue.busy?}
             depth={@orchestrator_queue.depth}
@@ -3620,6 +3732,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
         price_rows={@price_rows}
         price_form={@price_form}
         editing_price_id={@editing_price_id}
+        stack_layer_rows={@stack_layer_rows}
+        stack_layer_form={@stack_layer_form}
+        editing_layer_id={@editing_layer_id}
         default_model_rows={@default_model_rows}
         default_model_saved={@default_model_saved}
       />
@@ -4037,6 +4152,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
           | :prompt
           | :templates
           | :cost_center
+          | :stack_layers
           | :default_models
           | :logs
   defp settings_tab("appearance"), do: :appearance
@@ -4044,6 +4160,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
   defp settings_tab("prompt"), do: :prompt
   defp settings_tab("templates"), do: :templates
   defp settings_tab("cost_center"), do: :cost_center
+  defp settings_tab("stack_layers"), do: :stack_layers
   defp settings_tab("default_models"), do: :default_models
   defp settings_tab("logs"), do: :logs
   defp settings_tab(_other), do: :general
@@ -4090,6 +4207,19 @@ defmodule RepoBuilderWeb.ConsoleLive do
     assign(socket,
       editing_price_id: nil,
       price_form: to_form(ModelPrice.changeset(%ModelPrice{}, %{}), as: :model_price)
+    )
+  end
+
+  @spec load_stack_layers(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp load_stack_layers(socket) do
+    assign(socket, :stack_layer_rows, StackLayers.list_layers())
+  end
+
+  @spec reset_layer_form(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp reset_layer_form(socket) do
+    assign(socket,
+      editing_layer_id: nil,
+      stack_layer_form: to_form(StackLayer.changeset(%StackLayer{}, %{}), as: :stack_layer)
     )
   end
 

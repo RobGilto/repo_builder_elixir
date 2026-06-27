@@ -6,8 +6,10 @@ defmodule RepoBuilder.Orchestrator.Template do
   the typed domain value plus the frontmatter PARSE/SERIALIZE/VALIDATE pair; ALL
   filesystem I/O lives in `RepoBuilder.Orchestrator.Templates`.
 
-  The `tools` frontmatter field from the reference format is intentionally dropped —
-  our workers inherit harness-default tools (per-worker allowlisting is out of scope).
+  The `tools` frontmatter field (reference role-template format) is a per-worker capability
+  ALLOWLIST (self-healing Phase 5): it is recorded onto the worker's config at `create_agent`
+  time so a harness binding can scope the worker's tools to it. An empty list means "inherit
+  harness-default tools" (back-compatible — the original behavior before re-introduction).
   """
   use TypedStruct
 
@@ -23,6 +25,8 @@ defmodule RepoBuilder.Orchestrator.Template do
     field :model, String.t() | nil, default: nil
     field :category, String.t() | nil, default: nil
     field :harness, String.t() | nil, default: nil
+    # Per-worker capability allowlist (self-healing Phase 5); [] ⇒ inherit harness defaults.
+    field :tools, [String.t()], default: []
     field :version, pos_integer()
     field :author, author()
     field :updated_at, DateTime.t()
@@ -63,7 +67,7 @@ defmodule RepoBuilder.Orchestrator.Template do
   """
   @spec to_markdown(t()) :: String.t()
   def to_markdown(%__MODULE__{} = template) do
-    lines =
+    scalars =
       [
         {"name", template.name},
         {"description", template.description},
@@ -75,10 +79,33 @@ defmodule RepoBuilder.Orchestrator.Template do
         {"harness", template.harness}
       ]
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)
-      |> Enum.map_join("\n", fn {key, value} -> "#{key}: #{yaml_scalar(value)}" end)
+      |> Enum.map(fn {key, value} -> "#{key}: #{yaml_scalar(value)}" end)
 
+    tools_line =
+      case template.tools do
+        [] -> []
+        [_ | _] = tools -> ["tools: [#{Enum.map_join(tools, ", ", &yaml_scalar/1)}]"]
+        _other -> []
+      end
+
+    lines = Enum.join(scalars ++ tools_line, "\n")
     "---\n#{lines}\n---\n\n#{template.body}\n"
   end
+
+  @doc """
+  Normalize a frontmatter `tools` value (a YAML list, a comma-separated string, or nil) into a
+  trimmed list of non-empty strings — the per-worker capability allowlist.
+  """
+  @spec normalize_tools(term()) :: [String.t()]
+  def normalize_tools(tools) when is_list(tools) do
+    tools |> Enum.map(&to_string/1) |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+  end
+
+  def normalize_tools(tools) when is_binary(tools) do
+    tools |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+  end
+
+  def normalize_tools(_tools), do: []
 
   @doc """
   Validate a string-keyed attrs map: `name` kebab-case + non-empty, `description`

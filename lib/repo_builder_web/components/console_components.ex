@@ -15,6 +15,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
 
   alias RepoBuilder.Agents.Agent
   alias RepoBuilder.Orchestrator.ContextWindow
+  alias RepoBuilder.StackLayers.StackLayer
 
   # A normalized prompt-palette chip. `:status` is optional — file-derived chips
   # (slash/agents/adws) omit it; live-agent chips carry the worker's runtime status
@@ -992,6 +993,61 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     """
   end
 
+  # --- autonomy panel (self-healing Phase 6) --------------------------------
+
+  attr :ledger, :map, default: nil, doc: "the Orchestrator.Ledgers.view/1 map, or nil"
+  attr :holding_reason, :string, default: nil, doc: "escalation banner reason, or nil"
+
+  @doc """
+  The autonomy panel (self-healing Phase 6): the active orchestrator's goal, definition-of-done,
+  lifecycle status, stall gauge, and latest progress — plus a loud "Escalated — awaiting human"
+  banner with a one-click resume when the leader has escalated. Renders nothing when there is no
+  goal and no escalation (back-compatible).
+  """
+  @spec autonomy_panel(map()) :: Phoenix.LiveView.Rendered.t()
+  def autonomy_panel(assigns) do
+    ~H"""
+    <div
+      :if={@ledger || @holding_reason}
+      id="autonomy-panel"
+      class="space-y-1 border-t px-3 py-2 text-[0.7rem]"
+      style="border-color: var(--cns-border)"
+    >
+      <div
+        :if={@holding_reason}
+        id="escalation-banner"
+        class="rounded px-2 py-1 font-semibold"
+        style="background: #f6dede; color: #b23b3b"
+      >
+        ⚠ Escalated — awaiting human: {@holding_reason}
+        <button
+          type="button"
+          id="resume-orchestrator"
+          phx-click="resume_orchestrator"
+          class="ml-2 underline"
+        >
+          Resume
+        </button>
+      </div>
+      <div :if={@ledger}>
+        <div id="ledger-goal" class="font-semibold" style="color: var(--cns-text)">
+          Goal: {@ledger.goal}
+        </div>
+        <div id="ledger-dod" style="color: var(--cns-text-2)">
+          Done when: {@ledger.definition_of_done}
+        </div>
+        <div class="flex items-center gap-2">
+          <span id="ledger-status" class="cns-chip">{to_string(@ledger.status)}</span>
+          <span id="ledger-stall" class="cns-chip">stall {@ledger.stall_count}</span>
+        </div>
+        <div :if={@ledger.progress} id="ledger-progress" style="color: var(--cns-text-2)">
+          Last: {@ledger.progress.summary || "(no summary)"}
+        </div>
+      </div>
+    </div>
+    """
+  end
+
   # --- orchestrator message queue strip -------------------------------------
 
   attr :busy?, :boolean, default: false, doc: "a turn is currently in flight"
@@ -1251,6 +1307,9 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   attr :price_rows, :list, default: []
   attr :price_form, :any, default: nil
   attr :editing_price_id, :any, default: nil
+  attr :stack_layer_rows, :list, default: []
+  attr :stack_layer_form, :any, default: nil
+  attr :editing_layer_id, :any, default: nil
   attr :default_model_rows, :list, default: []
   attr :default_model_saved, :boolean, default: false
 
@@ -1289,6 +1348,11 @@ defmodule RepoBuilderWeb.ConsoleComponents do
             <.settings_tab_button tab={:prompt} active={@settings_tab} label="System Prompt" />
             <.settings_tab_button tab={:templates} active={@settings_tab} label="Agent Templates" />
             <.settings_tab_button tab={:cost_center} active={@settings_tab} label="Cost Center" />
+            <.settings_tab_button
+              tab={:stack_layers}
+              active={@settings_tab}
+              label="Stack Layers"
+            />
             <.settings_tab_button
               tab={:default_models}
               active={@settings_tab}
@@ -1687,6 +1751,14 @@ defmodule RepoBuilderWeb.ConsoleComponents do
                 rows={@price_rows}
                 form={@price_form}
                 editing_price_id={@editing_price_id}
+              />
+            </div>
+
+            <div :if={@settings_tab == :stack_layers} class="flex flex-col gap-4">
+              <.stack_layers_table
+                rows={@stack_layer_rows}
+                form={@stack_layer_form}
+                editing_layer_id={@editing_layer_id}
               />
             </div>
 
@@ -2214,6 +2286,132 @@ defmodule RepoBuilderWeb.ConsoleComponents do
       </table>
     </div>
     """
+  end
+
+  # --- stack layers catalog (stack-layers subsystem) ---
+
+  attr :rows, :list, required: true
+  attr :form, :any, required: true
+  attr :editing_layer_id, :any, default: nil
+
+  @doc """
+  Editable Stack Layers catalog (stack-layers subsystem): a create/edit form plus the
+  current typed layers with per-row Edit + (confirmed) Delete. Each layer's `reasoning`
+  is the worker-facing guardrail injected into the stack contract. Operator edits persist
+  to `stack_layers` and mark the row `:manual` (preserved across re-seed).
+  """
+  @spec stack_layers_table(map()) :: Phoenix.LiveView.Rendered.t()
+  def stack_layers_table(assigns) do
+    ~H"""
+    <div class="flex flex-col gap-2">
+      <div class="text-[0.625rem] font-semibold uppercase" style="color: var(--cns-text-2)">
+        Stack layers (typed, mix &amp; match per project)
+      </div>
+
+      <.form
+        :if={@form}
+        id="stack-layer-form"
+        for={@form}
+        phx-submit="save_layer"
+        class="flex flex-wrap items-end gap-2"
+      >
+        <div
+          class="w-full text-[0.625rem] font-semibold uppercase"
+          style="color: var(--cns-text-2)"
+        >
+          <span :if={@editing_layer_id}>Editing {@form[:name].value}</span>
+          <span :if={!@editing_layer_id}>New layer</span>
+        </div>
+        <.input :if={@editing_layer_id} field={@form[:id]} type="hidden" />
+        <.input
+          field={@form[:layer_type]}
+          label="Type"
+          type="select"
+          options={layer_type_options()}
+          class="cns-input w-28"
+        />
+        <.input field={@form[:name]} label="Name" class="cns-input w-36" />
+        <.input field={@form[:language]} label="Language" class="cns-input w-28" />
+        <.input
+          field={@form[:reasoning]}
+          label="Reasoning (worker guardrail)"
+          type="textarea"
+          class="cns-input w-full"
+        />
+        <button id="stack-layer-form-submit" type="submit" class="cns-chip">Save</button>
+        <button
+          :if={@editing_layer_id}
+          id="stack-layer-cancel"
+          type="button"
+          phx-click="cancel_layer_edit"
+          class="cns-chip"
+        >
+          Cancel
+        </button>
+      </.form>
+
+      <table id="stack-layers-table" class="w-full text-[0.6875rem]">
+        <thead>
+          <tr style="color: var(--cns-text-2)">
+            <th class="py-1 pr-2 text-left font-medium">Type</th>
+            <th class="py-1 pr-2 text-left font-medium">Name</th>
+            <th class="py-1 pr-2 text-left font-medium">Language</th>
+            <th class="py-1 pr-2 text-left font-medium">Reasoning</th>
+            <th class="py-1 pr-2 text-right font-medium">Source</th>
+            <th class="py-1"><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            :for={l <- @rows}
+            id={"stack-layer-row-#{l.id}"}
+            style="border-top: 1px solid var(--cns-border)"
+          >
+            <td class="py-1 pr-2">{l.layer_type}</td>
+            <td class="py-1 pr-2">{l.name}</td>
+            <td class="py-1 pr-2">{l.language}</td>
+            <td class="py-1 pr-2">{reasoning_excerpt(l.reasoning)}</td>
+            <td class="py-1 pr-2 text-right">{l.source}</td>
+            <td class="py-1 text-right">
+              <button
+                type="button"
+                id={"stack-layer-edit-#{l.id}"}
+                phx-click="edit_layer"
+                phx-value-id={l.id}
+                class="cns-chip"
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                id={"stack-layer-delete-#{l.id}"}
+                phx-click="delete_layer"
+                phx-value-id={l.id}
+                data-confirm="Delete this layer? It is removed from every project that selected it."
+                class="cns-chip"
+              >
+                ✕
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    """
+  end
+
+  @spec layer_type_options() :: [{String.t(), String.t()}]
+  defp layer_type_options do
+    Enum.map(StackLayer.layer_types(), fn type ->
+      {type |> Atom.to_string() |> String.capitalize(), Atom.to_string(type)}
+    end)
+  end
+
+  @spec reasoning_excerpt(String.t() | nil) :: String.t()
+  defp reasoning_excerpt(nil), do: ""
+
+  defp reasoning_excerpt(reasoning) when is_binary(reasoning) do
+    if String.length(reasoning) > 80, do: String.slice(reasoning, 0, 80) <> "…", else: reasoning
   end
 
   # --- budget guardrails (issue-budget-guardrails) ---

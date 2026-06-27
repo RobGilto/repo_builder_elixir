@@ -49,6 +49,15 @@ defmodule RepoBuilder.Session.Server do
     typedstruct enforce: true do
       field :agent_id, String.t()
       field :agent_db_id, Ecto.UUID.t(), enforce: false
+      # The owning orchestrator of a WORKER session, captured from the spawn opts
+      # (issue worker-terminal: orchestrator misses finished workers). Authoritative
+      # source for the worker-terminal re-engage broadcast — so it no longer depends
+      # on the agent row still existing at terminal time. nil for orchestrator sessions
+      # and unscoped/back-compat workers.
+      field :orchestrator_id, Ecto.UUID.t(), enforce: false
+      # The worker's display name for the worker-terminal payload, captured at spawn so
+      # the broadcast needs no terminal-time DB read. nil ⇒ best-effort DB fallback.
+      field :agent_name, String.t(), enforce: false
       field :session_id, String.t()
       field :harness, atom()
       field :adapter, module()
@@ -78,6 +87,13 @@ defmodule RepoBuilder.Session.Server do
       field :buf, binary(), default: ""
       field :idle_ref, reference(), enforce: false
       field :idle_ms, non_neg_integer()
+      # Soft quiescence timer (self-healing Phase 1): a SEPARATE, SHORTER timer than the
+      # `idle_ms` hard-kill. It resets on MEANINGFUL events (normalized harness frames in
+      # `dispatch/2`), not raw stdout bytes; when a live WORKER session goes quiet past
+      # `quiescence_ms` it is demoted `:running → :idle` while staying ALIVE + resumable
+      # (no `:exec.stop`, no terminal). Armed only for worker sessions — nil otherwise.
+      field :quiescence_ref, reference(), enforce: false
+      field :quiescence_ms, non_neg_integer(), default: 90_000
       field :max_line_bytes, pos_integer()
       field :saw_output?, boolean(), default: false
       field :saw_terminal?, boolean(), default: false
@@ -161,6 +177,8 @@ defmodule RepoBuilder.Session.Server do
     %State{
       agent_id: to_string(opts[:agent_id]),
       agent_db_id: opts[:agent_db_id],
+      orchestrator_id: opts[:orchestrator_id],
+      agent_name: opts[:agent_name],
       session_id: session_id,
       harness: String.to_atom(harness),
       adapter: Map.fetch!(config, :module),
@@ -177,6 +195,7 @@ defmodule RepoBuilder.Session.Server do
       worktree: worktree,
       marker: generate_token(),
       idle_ms: cfg_value(opts, cfg, :idle_ms, 300_000),
+      quiescence_ms: cfg_value(opts, cfg, :quiescence_ms, 90_000),
       max_line_bytes: cfg_value(opts, cfg, :max_line_bytes, 1_048_576),
       project_id: opts[:project_id],
       orchestrator_ctx: opts[:orchestrator_ctx],
@@ -378,7 +397,7 @@ defmodule RepoBuilder.Session.Server do
             # the open erlexec pipe and never emits a terminal event (§6 headless rule).
             _ = :exec.send(os_pid, :eof)
             state = %{state | exec_pid: exec_pid, os_pid: os_pid, session_ctx: ctx}
-            {:noreply, arm_idle(state)}
+            {:noreply, state |> arm_idle() |> arm_quiescence()}
 
           {:error, _changeset} ->
             _ = :exec.stop(os_pid)
@@ -466,6 +485,20 @@ defmodule RepoBuilder.Session.Server do
 
       {:stop, :normal, state}
     end
+  end
+
+  def handle_info(:quiescence, %State{} = state) do
+    # Soft demotion (self-healing Phase 1): a live worker that went quiet on MEANINGFUL
+    # events becomes `:idle` but is KEPT ALIVE + resumable — no `:exec.stop`, no terminal,
+    # so the next `command_agent` re-engages it with one message. A blocking command
+    # (e.g. `phx.server`) is legitimately long-running and is left `:running` for the
+    # `idle_ms` hard backstop to police; orchestrator/ephemeral sessions never demote.
+    _ =
+      if worker_session?(state) and not state.blocking_command? do
+        demote_to_idle_quietly(state)
+      end
+
+    {:noreply, %{state | quiescence_ref: nil}}
   end
 
   def handle_info({:DOWN, os_pid, :process, _pid, reason}, %State{os_pid: os_pid} = state) do
@@ -591,6 +624,15 @@ defmodule RepoBuilder.Session.Server do
 
     %{state | saw_output?: true, saw_terminal?: state.saw_terminal? or terminal?(event)}
     |> track_context(event)
+    |> maybe_reset_quiescence(event)
+  end
+
+  # Reset the soft quiescence timer on every MEANINGFUL (normalized) event — this is the
+  # work signal that keeps an actively-progressing worker out of the `:idle` demotion. A
+  # terminal event needs no reset: the process is about to stop and its timers die with it.
+  @spec maybe_reset_quiescence(State.t(), Event.t()) :: State.t()
+  defp maybe_reset_quiescence(state, event) do
+    if terminal?(event), do: state, else: reset_quiescence(state)
   end
 
   # Scrub the project-secret values out of an event (its `raw` map + `text`/`message`
@@ -727,8 +769,8 @@ defmodule RepoBuilder.Session.Server do
   defp maybe_emit_worker_terminal(event, %State{agent_db_id: agent_id} = state)
        when is_binary(agent_id) do
     if terminal?(event) do
-      case Agents.get_agent(agent_id) do
-        %{orchestrator_id: orchestrator_id, name: name} when is_binary(orchestrator_id) ->
+      case resolve_worker_owner(state) do
+        {orchestrator_id, name} when is_binary(orchestrator_id) ->
           # A held Done is still ok: true (a clean stop); the Queue keys the holding branch
           # off `holding?`, not `ok?` (issue holding-status-for-blocked-agents).
           ok? = match?(%Event.Done{ok: true}, event)
@@ -762,6 +804,28 @@ defmodule RepoBuilder.Session.Server do
   end
 
   defp maybe_emit_worker_terminal(_event, _state), do: :ok
+
+  # Resolve `{orchestrator_id, name}` for the worker-terminal broadcast, PREFERRING the
+  # values captured from the spawn opts (issue worker-terminal) so re-engagement no longer
+  # depends on the agent row still existing/binding at terminal time. A best-effort agent-row
+  # read fills only whichever piece the opts didn't carry (back-compat for callers that don't
+  # pass `orchestrator_id`/`agent_name`); a missing row just leaves the captured value(s) —
+  # and a still-nil `orchestrator_id` is a no-op at the call site.
+  @spec resolve_worker_owner(State.t()) :: {Ecto.UUID.t() | nil, String.t() | nil}
+  defp resolve_worker_owner(%State{orchestrator_id: orch, agent_name: name})
+       when is_binary(orch) and is_binary(name),
+       do: {orch, name}
+
+  defp resolve_worker_owner(%State{
+         orchestrator_id: orch,
+         agent_name: name,
+         agent_db_id: agent_id
+       }) do
+    case Agents.get_agent(agent_id) do
+      %{orchestrator_id: db_orch, name: db_name} -> {orch || db_orch, name || db_name}
+      _ -> {orch, name}
+    end
+  end
 
   # Publish a swimlane update on lifecycle transitions only (start/terminal), §9.
   @spec maybe_broadcast_lane(Event.t(), State.t()) :: :ok
@@ -897,6 +961,53 @@ defmodule RepoBuilder.Session.Server do
   defp reset_idle(%State{idle_ref: ref} = state) do
     _ = if ref, do: Process.cancel_timer(ref)
     arm_idle(state)
+  end
+
+  # --- quiescence timer (soft idle demotion) ---
+
+  # Armed only for worker sessions; an orchestrator/ephemeral session leaves `quiescence_ref`
+  # nil and never demotes. The window is SHORTER than `idle_ms` (soften before you kill).
+  @spec arm_quiescence(State.t()) :: State.t()
+  defp arm_quiescence(%State{quiescence_ms: ms} = state) do
+    if worker_session?(state) do
+      %{state | quiescence_ref: Process.send_after(self(), :quiescence, ms)}
+    else
+      state
+    end
+  end
+
+  @spec reset_quiescence(State.t()) :: State.t()
+  defp reset_quiescence(%State{quiescence_ref: ref} = state) do
+    _ = if ref, do: Process.cancel_timer(ref)
+    arm_quiescence(state)
+  end
+
+  # A WORKER session owns a durable agent row (`agent_db_id`) and is NOT an orchestrator
+  # turn (`orchestrator_db_id` nil). Only these are subject to the soft `:idle` demotion;
+  # an orchestrator turn's lifecycle is the turn itself (governed by `turn_idle_ms`).
+  @spec worker_session?(State.t()) :: boolean()
+  defp worker_session?(%State{agent_db_id: id, orchestrator_db_id: nil}) when is_binary(id),
+    do: true
+
+  defp worker_session?(_state), do: false
+
+  # Demote a quiescent worker `:running → :idle` WITHOUT killing it: set status, flip the
+  # console card via `agent_updated`, and leave the process + resumable session intact.
+  # Only ever called for worker sessions (the caller guards `worker_session?/1`, so
+  # `agent_db_id` is always a binary). Fail-soft — a DB/PubSub hiccup must not crash the
+  # live session.
+  @spec demote_to_idle_quietly(State.t()) :: :ok
+  defp demote_to_idle_quietly(%State{agent_db_id: id}) when is_binary(id) do
+    case Agents.set_status(id, :idle) do
+      {:ok, agent} -> RepoBuilder.Dashboard.broadcast_agent_updated(agent)
+      _ -> :ok
+    end
+
+    :ok
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
   end
 
   # --- helpers ---

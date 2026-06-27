@@ -35,6 +35,8 @@ defmodule RepoBuilder.Orchestrator.Queue do
   alias RepoBuilder.Agents.Holding
   alias RepoBuilder.Dashboard
   alias RepoBuilder.Logs
+  alias RepoBuilder.Orchestrator.Breaker
+  alias RepoBuilder.Orchestrator.Ledgers
   alias RepoBuilder.Orchestrator.Server
   alias RepoBuilder.Orchestrator.Tools
   alias RepoBuilder.Orchestrators
@@ -42,7 +44,7 @@ defmodule RepoBuilder.Orchestrator.Queue do
   @registry RepoBuilder.OrchestratorQueueRegistry
   @sup RepoBuilder.OrchestratorQueueSupervisor
 
-  @type kind :: :operator | :auto_resume
+  @type kind :: :operator | :auto_resume | :drive
   @type item :: %{id: String.t(), prompt: String.t(), kind: kind()}
   @type snapshot :: %{
           busy?: boolean(),
@@ -82,6 +84,15 @@ defmodule RepoBuilder.Orchestrator.Queue do
       # the orchestrator to waste turns dismissing "already handled" wakeups. Cleared
       # only when an operator message arrives (which represents a new dispatch context).
       field :seen_worker_ids, MapSet.t()
+      # Monitored dispatched workers (self-healing Phase 2): `worker_id => %{ref, saw_terminal?}`.
+      # `Process.monitor` pushes a `:DOWN` the instant a worker pid dies; a DOWN for a worker
+      # whose row is still optimistically `:running` (no terminal landed) is authoritative
+      # proof of an un-signaled death, so the Queue synthesizes `worker_terminal{ok?: false}`
+      # immediately — milliseconds, not a ≤60 s reaper sweep. In-memory only: a Queue/BEAM
+      # restart loses the monitors, which is exactly the reaper's surviving backstop role.
+      field :workers, %{optional(String.t()) => %{ref: reference(), saw_terminal?: boolean()}},
+        default: %{}
+
       # The pluggable tool entrypoint for handover side effects (wind-down `command_agent`
       # + self-delete `delete_agent`). Defaults to `Tools.call/3` (the same logged path the
       # brain uses, so budget/session/cwd handling + system-log rows come for free); tests
@@ -143,6 +154,36 @@ defmodule RepoBuilder.Orchestrator.Queue do
     end
   end
 
+  @doc """
+  Register a freshly-dispatched worker so the Queue `Process.monitor`s its pid (self-healing
+  Phase 2). A subsequent `:DOWN` with no preceding worker-terminal — and a row still
+  optimistically `:running` — is authoritative proof of an un-signaled death; the Queue then
+  synthesizes `worker_terminal{ok?: false}` instantly. Fire-and-forget cast so the dispatching
+  turn never blocks; a no-op when the Queue isn't running (the reaper covers that path).
+  """
+  @spec monitor_worker(Ecto.UUID.t(), Ecto.UUID.t(), pid()) :: :ok
+  def monitor_worker(orchestrator_id, worker_id, pid) when is_pid(pid) do
+    case whereis(orchestrator_id) do
+      nil -> :ok
+      qpid -> GenServer.cast(qpid, {:monitor_worker, worker_id, pid})
+    end
+  end
+
+  def monitor_worker(_orchestrator_id, _worker_id, _pid), do: :ok
+
+  @doc """
+  Enqueue ONE autonomous drive turn (self-healing Phase 4) — but ONLY when the queue is idle.
+  A drive turn never piles up: if a turn is already in flight or queued the call returns
+  `{:ok, :skipped}` and the next Driver tick re-evaluates. Starts the queue on demand.
+  """
+  @spec enqueue_drive(Ecto.UUID.t(), String.t()) ::
+          {:ok, :started, String.t()} | {:ok, :skipped} | {:error, term()}
+  def enqueue_drive(orchestrator_id, prompt) do
+    with {:ok, pid} <- start_or_get(orchestrator_id) do
+      GenServer.call(pid, {:enqueue_drive, prompt})
+    end
+  end
+
   @doc "Cancel a still-queued item by id (never the in-flight turn)."
   @spec cancel(Ecto.UUID.t(), String.t()) :: {:ok, snapshot()} | {:error, :not_found}
   def cancel(orchestrator_id, id) do
@@ -188,6 +229,7 @@ defmodule RepoBuilder.Orchestrator.Queue do
       pending_resume?: false,
       pending_info: nil,
       seen_worker_ids: MapSet.new(),
+      workers: %{},
       tools: opts[:tools] || (&Tools.call/3)
     }
 
@@ -225,6 +267,24 @@ defmodule RepoBuilder.Orchestrator.Queue do
     end
   end
 
+  def handle_call({:enqueue_drive, prompt}, _from, %State{} = state) do
+    # Drive turns are issued only when fully idle and never queued — a backlog of stale drive
+    # turns would defeat the "one inner-loop iteration per tick" contract.
+    if idle?(state) do
+      case start_item(state, build_item(prompt, :drive)) do
+        {:started, agent_id, state} ->
+          log(state, "drive", "started drive turn #{agent_id}")
+          broadcast(state)
+          {:reply, {:ok, :started, agent_id}, state}
+
+        {:error, reason, state} ->
+          {:reply, {:error, reason}, state}
+      end
+    else
+      {:reply, {:ok, :skipped}, state}
+    end
+  end
+
   def handle_call({:cancel, id}, _from, %State{} = state) do
     list = :queue.to_list(state.queue)
 
@@ -244,6 +304,18 @@ defmodule RepoBuilder.Orchestrator.Queue do
   end
 
   @impl true
+  def handle_cast({:monitor_worker, worker_id, pid}, %State{} = state)
+      when is_binary(worker_id) do
+    # Re-dispatch: drop any prior monitor for this worker so we track only the live pid.
+    state = demonitor_worker(state, worker_id)
+    ref = Process.monitor(pid)
+    workers = Map.put(state.workers, worker_id, %{ref: ref, saw_terminal?: false})
+    {:noreply, %{state | workers: workers}}
+  end
+
+  def handle_cast({:monitor_worker, _worker_id, _pid}, %State{} = state), do: {:noreply, state}
+
+  @impl true
   def handle_info(
         {:DOWN, ref, :process, _down_pid, _reason},
         %State{current: {_pid, ref, _id}} = state
@@ -256,12 +328,29 @@ defmodule RepoBuilder.Orchestrator.Queue do
     {:noreply, state}
   end
 
-  # A dangling monitor (e.g. after a queue-process restart) — ignore, never wedge.
-  def handle_info({:DOWN, _ref, :process, _pid, _reason}, %State{} = state) do
-    {:noreply, state}
+  # A monitored WORKER pid died (self-healing Phase 2), or a dangling monitor fired.
+  def handle_info({:DOWN, ref, :process, _down_pid, reason}, %State{} = state) do
+    case pop_worker_by_ref(state, ref) do
+      # Clean exit: a real worker-terminal already drove the resume; the DOWN is just the
+      # pid dying. Drop the monitor entry, nothing else to do.
+      {_worker_id, %{saw_terminal?: true}, state} ->
+        {:noreply, state}
+
+      # Death with no terminal seen — synthesize one IFF the row is still `:running`.
+      {worker_id, %{saw_terminal?: false}, state} ->
+        {:noreply, maybe_synthesize_worker_terminal(state, worker_id, reason)}
+
+      # Dangling monitor (e.g. after a queue-process restart) — ignore, never wedge.
+      :error ->
+        {:noreply, state}
+    end
   end
 
   def handle_info({:worker_terminal, info}, %State{} = state) do
+    # A real terminal landed: mark the monitored worker so its trailing `:DOWN` does not
+    # also synthesize one (de-dup with the Phase 2 push-liveness path), and feed the breaker.
+    state = mark_terminal_seen(state, Map.get(info, :worker_id))
+    _ = record_breaker_outcome(info)
     {:noreply, maybe_auto_resume(state, info)}
   end
 
@@ -350,6 +439,134 @@ defmodule RepoBuilder.Orchestrator.Queue do
           true -> state
         end
     end
+  end
+
+  # --- push liveness (self-healing Phase 2) ---
+
+  # Find the monitored worker whose ref matches `ref` and pop it out of the tracking map.
+  # `workers` holds only the few in-flight dispatched workers, so the linear scan is cheap.
+  @spec pop_worker_by_ref(State.t(), reference()) ::
+          {String.t(), %{ref: reference(), saw_terminal?: boolean()}, State.t()} | :error
+  defp pop_worker_by_ref(%State{workers: workers} = state, ref) do
+    case Enum.find(workers, fn {_id, %{ref: r}} -> r == ref end) do
+      {worker_id, entry} ->
+        {worker_id, entry, %{state | workers: Map.delete(workers, worker_id)}}
+
+      nil ->
+        :error
+    end
+  end
+
+  # Mark a monitored worker's terminal as SEEN so its trailing `:DOWN` is a no-op. A worker
+  # not currently monitored (reaper-fired / workflow-resume terminal) is left untouched.
+  @spec mark_terminal_seen(State.t(), term()) :: State.t()
+  defp mark_terminal_seen(%State{workers: workers} = state, worker_id)
+       when is_binary(worker_id) do
+    case Map.get(workers, worker_id) do
+      %{} = entry ->
+        %{state | workers: Map.put(workers, worker_id, %{entry | saw_terminal?: true})}
+
+      nil ->
+        state
+    end
+  end
+
+  defp mark_terminal_seen(%State{} = state, _worker_id), do: state
+
+  # Drop and flush a worker's monitor (re-dispatch / cleanup) so a stale `:DOWN` can't fire.
+  @spec demonitor_worker(State.t(), String.t()) :: State.t()
+  defp demonitor_worker(%State{workers: workers} = state, worker_id) do
+    case Map.pop(workers, worker_id) do
+      {%{ref: ref}, rest} ->
+        _ = Process.demonitor(ref, [:flush])
+        %{state | workers: rest}
+
+      {nil, _rest} ->
+        state
+    end
+  end
+
+  # A monitored worker died with no terminal seen. The authoritative test for "no terminal
+  # landed" is the agent row: a real Done/Error moved it OFF `:running` (via Logs.Writer), so
+  # a still-`:running` row means the death was un-signaled. Reconcile to `:error` FIRST
+  # (status-flip-first, so a later reaper sweep finds nothing — monitor is authoritative,
+  # reaper a backstop), then feed the SAME synthetic payload the reaper uses into the holding
+  # pattern so the leader re-engages exactly as it would for any failed return.
+  @spec maybe_synthesize_worker_terminal(State.t(), String.t(), term()) :: State.t()
+  defp maybe_synthesize_worker_terminal(%State{} = state, worker_id, reason) do
+    case safe_get_agent(worker_id) do
+      %Agents.Agent{status: :running} = worker ->
+        _ = reconcile_worker_error(worker)
+        _ = breaker_fail(worker)
+        log(state, "worker_down", "synthetic terminal for #{worker_id} (#{inspect(reason)})")
+        maybe_auto_resume(state, synthetic_terminal_info(worker))
+
+      _other ->
+        # A terminal already moved the row off `:running` — nothing to synthesize.
+        state
+    end
+  end
+
+  @spec synthetic_terminal_info(Agents.Agent.t()) :: map()
+  defp synthetic_terminal_info(%Agents.Agent{} = worker) do
+    %{
+      worker_id: worker.id,
+      name: worker.name,
+      ok?: false,
+      holding?: false,
+      holding_reason: nil,
+      context_tokens: 0,
+      final_text: nil
+    }
+  end
+
+  # Flip a still-`:running` worker to `:error` and refresh its console card. Fail-soft
+  # (mirrors the reaper's reconcile_phantom/1): a DB/PubSub hiccup must not crash the Queue.
+  @spec reconcile_worker_error(Agents.Agent.t()) :: :ok
+  defp reconcile_worker_error(%Agents.Agent{} = worker) do
+    case Agents.set_status(worker.id, :error) do
+      {:ok, updated} -> Dashboard.broadcast_agent_updated(updated)
+      _ -> :ok
+    end
+
+    :ok
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
+
+  # Feed the circuit breaker from a worker terminal (self-healing Phase 4): a clean/holding/
+  # handover return (`ok?: true`) closes the harness/model path; a failed return opens it
+  # toward tripping. A non-worker terminal (workflow/legacy signal) is a no-op. Fail-soft.
+  @spec record_breaker_outcome(map()) :: :ok
+  defp record_breaker_outcome(info) do
+    case resolve_worker(info) do
+      %Agents.Agent{} = worker ->
+        key = Breaker.key(worker.harness, worker.model)
+        if Map.get(info, :ok?), do: Breaker.succeed(key), else: Breaker.fail(key)
+
+      _absent ->
+        :ok
+    end
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
+
+  @spec breaker_fail(Agents.Agent.t()) :: :ok
+  defp breaker_fail(%Agents.Agent{} = worker),
+    do: Breaker.fail(Breaker.key(worker.harness, worker.model))
+
+  # `worker_id` is always a binary monitor-map key here; fail-soft so a DB hiccup never crashes
+  # the Queue. Inference-only spec (the success typing narrows the input to a binary).
+  defp safe_get_agent(worker_id) do
+    Agents.get_agent(worker_id)
+  rescue
+    _error -> nil
+  catch
+    _kind, _reason -> nil
   end
 
   # Branch 0: a worker is HOLDING (blocked pending external input). NEVER reap it and
@@ -585,7 +802,7 @@ defmodule RepoBuilder.Orchestrator.Queue do
 
   @spec start_auto_resume(State.t(), map()) :: State.t()
   defp start_auto_resume(%State{} = state, info) do
-    item = build_item(auto_resume_prompt(info), :auto_resume)
+    item = build_item(auto_resume_prompt(state.orchestrator_id, info), :auto_resume)
 
     case start_item(state, item) do
       {:started, agent_id, state} ->
@@ -598,26 +815,66 @@ defmodule RepoBuilder.Orchestrator.Queue do
     end
   end
 
-  @spec auto_resume_prompt(map()) :: String.t()
-  defp auto_resume_prompt(%{resume_prompt: prompt}) when is_binary(prompt), do: prompt
+  # A handover/holding path supplies a specific `resume_prompt` — pass it through untouched.
+  @spec auto_resume_prompt(Ecto.UUID.t(), map()) :: String.t()
+  defp auto_resume_prompt(_orchestrator_id, %{resume_prompt: prompt}) when is_binary(prompt),
+    do: prompt
 
-  defp auto_resume_prompt(info) do
+  # The generic worker-return resume, now SEEDED WITH INTENT (self-healing Phase 3): when a
+  # goal is set, lead with the goal + definition-of-done + last progress so the leader resumes
+  # reconciling against the ledger instead of re-deriving intent from CLI memory.
+  defp auto_resume_prompt(orchestrator_id, info) do
     name = Map.get(info, :name) || "a worker"
     outcome = if Map.get(info, :ok?), do: "completed successfully", else: "finished with errors"
 
-    "Worker #{name} #{outcome} and returned. Review its work and decide the next steps " <>
-      "(report back, dispatch follow-up work, or stop)."
+    base =
+      "Worker #{name} #{outcome} and returned. Review its work and decide the next steps " <>
+        "(report back, dispatch follow-up work, or stop)."
+
+    prepend_goal_context(orchestrator_id, base)
   end
 
-  # Operator items go to the back, but ahead of any pending auto-resume item(s):
-  # drop pending auto-resume entries (they re-trigger when idle) so operators win.
+  @spec prepend_goal_context(Ecto.UUID.t(), String.t()) :: String.t()
+  defp prepend_goal_context(orchestrator_id, base) do
+    case Ledgers.current(orchestrator_id) do
+      %{goal: goal, definition_of_done: dod} ->
+        progress = Ledgers.latest_progress(orchestrator_id)
+
+        """
+        GOAL: #{goal}
+        DEFINITION OF DONE: #{dod}
+        #{progress_line(progress)}
+        #{base}
+        Reconcile against the goal: record_progress this turn, verify against the actual tree \
+        with inspect_repo, and report_complete only once the definition of done is met.
+        """
+        |> String.trim()
+
+      _none ->
+        base
+    end
+  rescue
+    _error -> base
+  catch
+    _kind, _reason -> base
+  end
+
+  # Inference-only spec — the input narrows to the ledger/progress map below the contract.
+  defp progress_line(%{summary: summary}) when is_binary(summary) and summary != "",
+    do: "LAST PROGRESS: " <> summary
+
+  defp progress_line(_progress), do: "LAST PROGRESS: (none recorded yet)"
+
+  # Operator items go to the back, but ahead of any pending auto-resume / drive item(s):
+  # drop pending auto-resume + drive entries (they re-trigger when idle) so operators win.
   @spec append_with_priority(item(), :queue.queue()) :: :queue.queue()
-  defp append_with_priority(%{kind: :auto_resume} = item, queue), do: :queue.in(item, queue)
+  defp append_with_priority(%{kind: kind} = item, queue) when kind in [:auto_resume, :drive],
+    do: :queue.in(item, queue)
 
   defp append_with_priority(%{kind: :operator} = item, queue) do
     queue
     |> :queue.to_list()
-    |> Enum.reject(&(&1.kind == :auto_resume))
+    |> Enum.reject(&(&1.kind in [:auto_resume, :drive]))
     |> :queue.from_list()
     |> then(&:queue.in(item, &1))
   end

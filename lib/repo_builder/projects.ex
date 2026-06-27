@@ -12,6 +12,7 @@ defmodule RepoBuilder.Projects do
 
   alias RepoBuilder.Projects.{Capabilities, ContextPrimer, Profiler, Project}
   alias RepoBuilder.Repo
+  alias RepoBuilder.StackLayers
 
   @spec list_projects() :: [Project.t()]
   def list_projects do
@@ -87,7 +88,20 @@ defmodule RepoBuilder.Projects do
     attrs
     |> Map.merge(profile_attrs(profile), fn _k, operator, _profiled -> operator end)
     |> create_project()
+    |> seed_stack_layers(profile.stack)
   end
+
+  # Best-effort auto-seed of the project's stack-layer selection from the detected stack
+  # (stack-layers subsystem). Never blocks registration and never clobbers an existing
+  # selection — a failure or no-match simply leaves the project unseeded.
+  @spec seed_stack_layers({:ok, Project.t()} | {:error, Ecto.Changeset.t()}, map() | nil) ::
+          {:ok, Project.t()} | {:error, Ecto.Changeset.t()}
+  defp seed_stack_layers({:ok, %Project{} = project} = result, stack) do
+    _ = StackLayers.seed_project_from_stack(project.id, stack)
+    result
+  end
+
+  defp seed_stack_layers({:error, _changeset} = result, _stack), do: result
 
   # Create the target folder (mkdir -p) when the operator opted in and it doesn't exist.
   # On failure, surface an Ecto changeset error on :root_path so the UI can render it.
@@ -128,7 +142,11 @@ defmodule RepoBuilder.Projects do
   """
   @spec refresh_profile(Project.t()) :: {:ok, Project.t()} | {:error, Ecto.Changeset.t()}
   def refresh_profile(%Project{root_path: root} = project) when is_binary(root) do
-    update_project(project, profile_attrs(Profiler.profile(root)))
+    profile = Profiler.profile(root)
+
+    project
+    |> update_project(profile_attrs(profile))
+    |> seed_stack_layers(profile.stack)
   end
 
   # Profile → the changeset attrs it populates (string keys, since the changeset and

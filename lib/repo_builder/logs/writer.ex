@@ -120,7 +120,16 @@ defmodule RepoBuilder.Logs.Writer do
     # Worker path: status follows lifecycle (always), the row persists only for events
     # that finalize (TextDelta partials never persist — `persist?/1`).
     update_status_quietly(event, ctx.agent_id)
-    if persist?(event), do: persist_quietly(:agent, event, ctx)
+
+    if persist?(event) do
+      # Liveness heartbeat (self-healing Phase 1): a persisted normalized event is real
+      # progress — bump `heartbeat_at` so the quiescence/idle-demotion passes track WORK,
+      # not raw stdout chatter. Bound to `persist?/1` so it fires once per meaningful event
+      # (tool use / message / usage / terminal), NOT once per streamed token. Quiet: a bump
+      # failure must never break persistence.
+      touch_heartbeat_quietly(ctx.agent_id)
+      persist_quietly(:agent, event, ctx)
+    end
   end
 
   defp persist_and_status(%Record{persist: {:orchestrator, ctx}, event: event}) do
@@ -164,6 +173,17 @@ defmodule RepoBuilder.Logs.Writer do
       nil
   catch
     _kind, _reason -> nil
+  end
+
+  # Liveness bump, fail-soft (self-healing Phase 1). Mirrors persist_quietly/2's contract:
+  # a DB hiccup degrades to a no-op and never crashes the writer.
+  @spec touch_heartbeat_quietly(Ecto.UUID.t()) :: :ok
+  defp touch_heartbeat_quietly(agent_id) do
+    Agents.touch_heartbeat(agent_id)
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
   end
 
   @spec update_status_quietly(Event.t(), Ecto.UUID.t()) :: :ok

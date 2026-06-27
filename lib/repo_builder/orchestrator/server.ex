@@ -26,7 +26,7 @@ defmodule RepoBuilder.Orchestrator.Server do
   alias RepoBuilder.{Dashboard, Logs, Orchestrators, Session}
   alias RepoBuilder.Harness.Event
   alias RepoBuilder.Harness.Registry, as: HarnessRegistry
-  alias RepoBuilder.Orchestrator.{Queue, SystemPrompt, Tools}
+  alias RepoBuilder.Orchestrator.{Ledgers, Queue, SystemPrompt, Tools}
 
   @sup RepoBuilder.OrchestratorSupervisor
   @pubsub RepoBuilder.PubSub
@@ -56,6 +56,10 @@ defmodule RepoBuilder.Orchestrator.Server do
       # Guards against a double flush: set once a terminal event flushed, so the
       # terminate/2 crash-safety flush becomes a no-op.
       field :flushed?, boolean(), default: false
+      # When this turn started (self-healing Phase 3): the auto-record backstop writes a
+      # minimal Progress entry on flush IFF the brain recorded none since this instant, so
+      # the ledger never gaps regardless of harness (in-process Fake or out-of-band MCP).
+      field :turn_started_at, DateTime.t(), enforce: false
     end
   end
 
@@ -181,7 +185,8 @@ defmodule RepoBuilder.Orchestrator.Server do
       agent_id: Keyword.fetch!(opts, :agent_id),
       prompt: Keyword.fetch!(opts, :prompt),
       harness: orchestrator.harness,
-      in_process?: not function_exported?(adapter, :orchestrator_spawn, 2)
+      in_process?: not function_exported?(adapter, :orchestrator_spawn, 2),
+      turn_started_at: DateTime.utc_now()
     }
 
     {:ok, {state, orchestrator}, {:continue, :launch}}
@@ -223,6 +228,11 @@ defmodule RepoBuilder.Orchestrator.Server do
 
     case Session.Supervisor.start_session(opts) do
       {:ok, _pid} ->
+        # Hard per-turn ceiling (self-healing Phase 4): a turn that trickles keep-alive bytes
+        # never trips the byte-idle `turn_idle_ms` watchdog, so arm a HARD deadline from turn
+        # start (NOT reset per frame). On fire we force-flush to :error and stop the session so
+        # the Driver re-engages. The process dying cancels the timer on a normal terminal.
+        _ = arm_turn_deadline()
         {:noreply, state}
 
       {:error, reason} ->
@@ -275,11 +285,30 @@ defmodule RepoBuilder.Orchestrator.Server do
 
     state = %State{state | acc_cost: Decimal.add(state.acc_cost, delta)}
     _ = flush(state, if(event.ok, do: :idle, else: :error))
+    _ = auto_record_progress(state, if(event.ok, do: :ok, else: :error))
     {:stop, :normal, %State{state | flushed?: true}}
   end
 
   def handle_info({:harness_event, %Event.Error{}}, %State{} = state) do
     _ = flush(state, :error)
+    _ = auto_record_progress(state, :error)
+    {:stop, :normal, %State{state | flushed?: true}}
+  end
+
+  # Hard turn-deadline fired (self-healing Phase 4): a turn already flushed is a no-op; an
+  # in-flight turn is force-flushed to :error and its harness session stopped so it can't keep
+  # running. The Driver re-engages the orchestrator (now :error, still drivable) on its next tick.
+  def handle_info(:turn_deadline, %State{flushed?: true} = state), do: {:noreply, state}
+
+  def handle_info(:turn_deadline, %State{} = state) do
+    _ = Session.Supervisor.stop_session(state.agent_id)
+    _ = flush(state, :error)
+    _ = auto_record_progress(state, :error)
+
+    Logger.warning(
+      "orchestrator turn #{state.agent_id} hit the hard turn deadline; force-flushed"
+    )
+
     {:stop, :normal, %State{state | flushed?: true}}
   end
 
@@ -287,14 +316,27 @@ defmodule RepoBuilder.Orchestrator.Server do
   def handle_info(_msg, %State{} = state), do: {:noreply, state}
 
   @impl true
+  # Pre-launch crash safety: a turn that dies while still inside `handle_continue(:launch)`
+  # carries init's `{state, orchestrator}` continue payload as its GenServer state, which the
+  # bare-`%State{}` clauses below don't match (a FunctionClauseError during sandbox-teardown
+  # races). Unwrap to the State so the flush/reconcile still runs.
+  def terminate(reason, {%State{} = state, _orchestrator}), do: terminate(reason, state)
+
   def terminate(_reason, %State{flushed?: true}), do: :ok
 
   def terminate(_reason, %State{} = state) do
     # Crash safety (issue hot-path-writes Part B): a turn that dies before a terminal
     # event still persists its accumulated cost — matching the old incremental-write
     # durability. Best-effort + guarded so a flush failure never masks the original
-    # crash reason; status is left as-is (no terminal seen ⇒ no status change).
-    _ = flush(state, nil)
+    # crash reason.
+    #
+    # Status reconcile (issue orchestrator-stuck): a turn that reaches terminate/2
+    # WITHOUT having flushed a terminal `:idle|:error` (the `flushed?: true` clause
+    # above short-circuits those) has, by definition, no live turn left — the harness
+    # session died silently or this Server was stopped. Reconcile to `:idle` so the
+    # `orchestrators` row never wedges at `:running`; the orchestrator stays usable and
+    # can auto-resume again. Cost/usage still flush exactly as before.
+    _ = flush(state, :idle)
     :ok
   rescue
     _error -> :ok
@@ -320,6 +362,21 @@ defmodule RepoBuilder.Orchestrator.Server do
       })
 
     :ok
+  end
+
+  # Backstop the Progress Ledger (self-healing Phase 3): if the brain recorded no progress
+  # entry since this turn started, write a minimal one so the ledger never gaps. A no-op when
+  # no goal is set, or when the brain already recorded explicitly. Best-effort.
+  @spec auto_record_progress(State.t(), :ok | :error) :: :ok
+  defp auto_record_progress(%State{turn_started_at: nil}, _outcome), do: :ok
+
+  defp auto_record_progress(%State{} = state, outcome) do
+    Ledgers.auto_record_progress(
+      state.orchestrator_id,
+      state.agent_id,
+      outcome,
+      state.turn_started_at
+    )
   end
 
   # Mirror Orchestrators.add_usage's nil/negative-safe token clamp so coalescing keeps
@@ -363,6 +420,17 @@ defmodule RepoBuilder.Orchestrator.Server do
   @spec orchestrator_idle_ms() :: pos_integer()
   defp orchestrator_idle_ms do
     Application.get_env(:repo_builder, :orchestrator, [])[:turn_idle_ms] || 120_000
+  end
+
+  # Hard per-turn ceiling (self-healing Phase 4). Armed ONCE at turn start (not per frame);
+  # `nil`/`:infinity` config disables it (no timer). Default 180 s — longer than the byte-idle
+  # `turn_idle_ms` (120 s), so it only catches a turn that stays byte-active but never finishes.
+  @spec arm_turn_deadline() :: reference() | nil
+  defp arm_turn_deadline do
+    case Application.get_env(:repo_builder, :orchestrator, [])[:turn_deadline_ms] || 180_000 do
+      ms when is_integer(ms) -> Process.send_after(self(), :turn_deadline, ms)
+      _disabled -> nil
+    end
   end
 
   @spec adapter_for(String.t()) :: module()

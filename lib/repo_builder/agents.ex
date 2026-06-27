@@ -144,6 +144,56 @@ defmodule RepoBuilder.Agents do
     end
   end
 
+  @doc """
+  List non-archived agents wedged in a live status (`:running`/`:holding`) whose row
+  hasn't been touched since `stale_before` (issue worker-terminal Part B). These are
+  candidate phantoms: the `LivenessReaper` further filters to those with NO live
+  `SessionRegistry` process before reconciling. Order is irrelevant.
+  """
+  @spec list_stuck_running(DateTime.t()) :: [Agent.t()]
+  def list_stuck_running(stale_before) do
+    Repo.all(
+      from(a in Agent,
+        where:
+          a.archived == false and a.status in [:running, :holding] and
+            a.updated_at < ^stale_before
+      )
+    )
+  end
+
+  @doc """
+  List non-archived workers still `:running` whose `heartbeat_at` is older than
+  `stale_before` (self-healing Phase 1) — live-but-quiescent candidates. Distinct from
+  `list_stuck_running/1` (which targets phantoms by `updated_at`): this keys off the
+  meaningful-event `heartbeat_at`, and the `LivenessReaper` further filters to those WITH
+  a live `SessionRegistry` process before demoting them to `:idle`. Rows that never emitted
+  an event (NULL `heartbeat_at`) are excluded — they fall to the phantom pass instead.
+  """
+  @spec list_stale_live_running(DateTime.t()) :: [Agent.t()]
+  def list_stale_live_running(stale_before) do
+    Repo.all(
+      from(a in Agent,
+        where:
+          a.archived == false and a.status == :running and
+            not is_nil(a.heartbeat_at) and a.heartbeat_at < ^stale_before
+      )
+    )
+  end
+
+  @doc """
+  Cheap, conflict-free liveness bump (self-healing Phase 1). Sets `heartbeat_at` to now via
+  a targeted `update_all` — it does NOT load the row, does NOT change `status`, and does NOT
+  touch `updated_at`. Keeping `updated_at` untouched is load-bearing: the phantom reaper keys
+  off `updated_at` while the live-stale pass keys off `heartbeat_at`, so the two staleness
+  signals stay independent. A missing row is a no-op (`{0, nil}`).
+  """
+  @spec touch_heartbeat(Ecto.UUID.t()) :: :ok
+  def touch_heartbeat(agent_id) do
+    now = DateTime.utc_now()
+    _ = Repo.update_all(from(a in Agent, where: a.id == ^agent_id), set: [heartbeat_at: now])
+    :ok
+  end
+
   @doc "List all workers owned by one orchestrator (newest first)."
   @spec list_for_orchestrator(Ecto.UUID.t()) :: [Agent.t()]
   def list_for_orchestrator(orchestrator_id) do

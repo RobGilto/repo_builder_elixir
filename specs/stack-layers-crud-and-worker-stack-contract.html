@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan: Stack Layers — CRUD, Mix &amp; Match, and the Worker Stack Contract</title>
+<style>
+  :root {
+    /* Layered-strata identity — frontend / backend / database as colored layers */
+    --ink:       #14161f;
+    --paper:     #f6f7fa;
+    --panel:     #ffffff;
+    --muted:     #5c6373;
+    --line:      #dde1ea;
+    --frontend:  #128a8a;   /* teal */
+    --backend:   #4f46b8;   /* indigo */
+    --database:  #b9791b;   /* amber */
+    --accent:    #4f46b8;
+    --accent-2:  #128a8a;
+    --ok:        #2e8b6f;
+    --warn:      #b9791b;
+    --stop:      #b23b3b;
+    --code-bg:   #161826;
+    --code-fg:   #e6e8f5;
+    --radius:    12px;
+    --shadow:    0 1px 2px rgba(20,22,31,.06), 0 8px 24px rgba(20,22,31,.07);
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Inter", "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--sans); line-height: 1.6; font-size: 16px; }
+  main { max-width: 980px; margin: 0 auto; padding: 3rem 1.5rem 6rem; }
+  header h1 { font-size: 2.0rem; line-height: 1.15; margin: 0 0 .75rem; letter-spacing: -.02em; }
+  h2 { font-size: 1.5rem; margin: 2.6rem 0 .9rem; letter-spacing: -.01em; padding-bottom: .4rem; border-bottom: 2px solid var(--line); }
+  h3 { font-size: 1.18rem; margin: 1.5rem 0 .6rem; }
+  h4 { font-size: 1.0rem; margin: 1.2rem 0 .4rem; color: var(--accent); }
+  p { margin: .5rem 0; }
+  a { color: var(--accent); }
+  code { font-family: var(--mono); font-size: .88em; background: #eceaf7; color: #322c63; padding: .1em .38em; border-radius: 5px; }
+  pre { background: var(--code-bg); color: var(--code-fg); padding: 1rem 1.1rem; border-radius: var(--radius); overflow-x: auto; font-size: .82rem; line-height: 1.55; }
+  pre code { background: none; color: inherit; padding: 0; }
+  section { scroll-margin-top: 1rem; }
+
+  details.meta { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: .5rem 1rem; margin: 1rem 0 0; box-shadow: var(--shadow); }
+  details.meta summary { cursor: pointer; font-weight: 600; color: var(--muted); }
+  details.meta dl { display: grid; grid-template-columns: max-content 1fr; gap: .3rem 1.2rem; margin: .8rem 0 .3rem; font-size: .85rem; }
+  details.meta dt { color: var(--muted); font-variant: small-caps; letter-spacing: .03em; }
+  details.meta dd { margin: 0; font-family: var(--mono); font-size: .8rem; word-break: break-word; }
+
+  figure { margin: 1.6rem 0; text-align: center; }
+  figure img { max-width: 100%; height: auto; border-radius: var(--radius); border: 1px solid var(--line); box-shadow: var(--shadow); }
+  figcaption { color: var(--muted); font-size: .85rem; margin-top: .6rem; font-style: italic; }
+  .img-todo { border: 1px dashed var(--line); border-radius: var(--radius); padding: 2rem 1rem; color: var(--muted); background: repeating-linear-gradient(45deg, #fff, #fff 12px, #eef0f6 12px, #eef0f6 24px); font-size: .85rem; }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem 1.2rem; box-shadow: var(--shadow); }
+  .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 720px) { .twocol { grid-template-columns: 1fr; } }
+  .layer { border-left: 4px solid var(--line); padding-left: .8rem; margin: .5rem 0; }
+  .layer.fe { border-color: var(--frontend); } .layer.be { border-color: var(--backend); } .layer.db { border-color: var(--database); }
+  .pill { display:inline-block; font-size:.66rem; font-weight:700; text-transform:uppercase; letter-spacing:.04em; padding:.12em .5em; border-radius:999px; color:#fff; }
+  .pill.fe { background: var(--frontend); } .pill.be { background: var(--backend); } .pill.db { background: var(--database); }
+
+  .files ul { list-style: none; padding: 0; }
+  .files li { padding: .35rem 0; border-bottom: 1px dashed var(--line); }
+  .tag { display: inline-block; font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: .12em .5em; border-radius: 999px; vertical-align: middle; margin-right: .35rem; }
+  .tag.existing { background: #e3e2f4; color: var(--backend); }
+  .tag.new { background: #d9f0ee; color: var(--frontend); }
+
+  .phase { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: var(--radius); padding: 1.2rem 1.4rem; margin: 1.4rem 0; box-shadow: var(--shadow); }
+  .phase h3 { margin-top: .2rem; }
+  code.status { background: var(--ink); color: #fff; font-weight: 700; padding: .05em .45em; border-radius: 5px; }
+  ul.checklist { list-style: none; padding-left: 0; }
+  ul.checklist li { padding: .28rem 0; }
+  ul.checklist li code.status { margin-right: .5rem; }
+  .loop { margin-top: .9rem; padding: .7rem .9rem; background: #fbf4e6; border: 1px solid #eedcb4; border-radius: 8px; font-size: .9rem; }
+
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .9rem; }
+  th, td { text-align: left; padding: .55rem .7rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: #eceaf7; font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+
+  #notes details { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: .6rem 1rem; margin: .6rem 0; box-shadow: var(--shadow); }
+  #notes summary { cursor: pointer; font-weight: 600; }
+  .qa-answer { color: var(--muted); margin-top: .6rem; }
+</style>
+</head>
+<body>
+<main>
+
+  <!-- ===== HEADER + UPDATABLE METADATA ===== -->
+  <header>
+    <h1>Stack Layers — CRUD, Mix &amp; Match, and the Worker Stack Contract</h1>
+    <p class="panel">Give the operator a managed catalog of <strong>typed tech-stack layers</strong> (frontend / backend / database), each carrying its own <strong>reasoning &amp; guardrails</strong>. Compose a project from one layer per type (mix &amp; match), then inject that composition — the <em>stack contract</em> — into every worker the orchestrator spawns, so a worker <strong>never builds in the wrong language</strong> and always focuses on the correct stack.</p>
+    <details class="meta">
+      <summary>Metadata</summary>
+      <dl>
+        <dt>created</dt>      <dd>2026-06-26</dd>
+        <dt>modified</dt>     <dd>2026-06-26</dd>
+        <dt>commits</dt>      <dd>—</dd>
+        <dt>agent name</dt>   <dd>claude-opus-4-8</dd>
+        <dt>session id</dt>   <dd>planf3-stack-layers-2026-06-26</dd>
+        <dt>back refs</dt>    <dd>ai_docs/agentic-layer-adaptor.md, specs/godot-elixir-command-pack-stack.html, specs/agentic-layer-adaptor-and-planning-wizard.html</dd>
+        <dt>forward refs</dt> <dd>—</dd>
+      </dl>
+    </details>
+  </header>
+
+  <!-- Hero image — synced to the :root identity. -->
+  <figure>
+    <img src="stack-layers-crud-and-worker-stack-contract/hero.png" alt="Three colored layers — frontend, backend, database — composing into a stack contract card handed to a worker robot">
+
+    <figcaption>Typed layers mix &amp; match into a per-project stack contract that travels with every worker.</figcaption>
+  </figure>
+
+  <!-- ===== PURPOSE / PROBLEM / SOLUTION ===== -->
+  <section id="purpose">
+    <h2>Purpose</h2>
+    <p>Today a project's "stack" is a single auto-detected language string plus a flat capability map (commands). There is no operator-managed notion of <em>composable, typed layers</em>, no place to record <em>why</em> a layer was chosen or <em>how</em> to build within it, and — most importantly — none of that reaches the <strong>worker</strong> at spawn time. This plan introduces a first-class <strong>Stack Layers</strong> subsystem and wires its composed reasoning into the worker's persisted system prompt, exactly where it becomes load-bearing.</p>
+    <div class="panel">
+      <div class="layer be"><span class="pill be">backend</span> <strong>Phoenix (Elixir)</strong> — typed contexts only touch <code>Repo</code>; <code>@spec</code> on every public fn.</div>
+      <div class="layer fe"><span class="pill fe">frontend</span> <strong>Svelte (TypeScript)</strong> — components in <code>src/</code>; no inline server calls.</div>
+      <div class="layer db"><span class="pill db">database</span> <strong>PostgreSQL</strong> — migrations are reversible; money is <code>numeric</code>.</div>
+      <p style="margin:.6rem 0 0; color:var(--muted); font-size:.9rem">A worker spawned for this project receives all three as a non-negotiable contract — "build only within these layers."</p>
+    </div>
+  </section>
+
+  <section id="problem">
+    <h2>Problem</h2>
+    <p>Three concrete gaps make workers drift off-stack:</p>
+    <ul>
+      <li><strong>No CRUD, no typing, no reasoning.</strong> Per-stack knowledge lives in hard-coded module attributes (<code>Profiler.@markers</code>, <code>Capabilities.@defaults</code>). The operator can't create/edit/delete layers, can't classify them by type (frontend/backend/database), and has nowhere to record the <em>reasoning</em> a worker should follow.</li>
+      <li><strong>No composition.</strong> A real app is multiple layers at once (a Phoenix backend + a Svelte frontend + Postgres). The current model collapses a repo to one detected language, so "mix &amp; match by type" is impossible.</li>
+      <li><strong>The worker is flying blind.</strong> The detected stack and <code>project.context_primer</code> are injected into the <em>orchestrator</em> prompt and forge prompts — but <strong>never into a worker's prompt</strong>. The worker session opts carry <em>no</em> system-prompt channel; a worker's only durable charter is the <code>agents.system_prompt</code> column written once at <code>create_agent/2</code> (<code>tools.ex:130</code>), which today contains only the task body + a generic reporting clause. Nothing tells the worker which language/stack it must stay within.</li>
+    </ul>
+    <figure>
+      <img src="stack-layers-crud-and-worker-stack-contract/problem.png" alt="An orchestrator hands a worker a bare task prompt while the project's stack-layer chips drift away, disconnected">
+
+      <figcaption>The stack reaches the orchestrator but never the worker — so workers guess the language.</figcaption>
+    </figure>
+  </section>
+
+  <section id="solution">
+    <h2>Solution</h2>
+    <p>A persisted, operator-CRUDable <strong>Stack Layers catalog</strong>; a <strong>project↔layer composition</strong> (mix &amp; match, one per type); a pure <strong>contract renderer</strong>; and injection of that contract into both the <strong>worker</strong> (the load-bearing fix) and the <strong>orchestrator</strong> prompt.</p>
+    <table>
+      <thead><tr><th>Piece</th><th>What it is</th><th>Where</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Catalog</strong></td><td>DB table of typed layers <code>{layer_type, name, language, reasoning, enabled}</code> — full CRUD.</td><td><code>stack_layers</code> + <code>RepoBuilder.StackLayers</code></td></tr>
+        <tr><td><strong>Composition</strong></td><td>Join table selecting layers per project (mix &amp; match by type).</td><td><code>project_stack_layers</code></td></tr>
+        <tr><td><strong>Contract renderer</strong></td><td>Pure fn: project → a markdown "build ONLY within this stack" block (mirrors <code>ContextPrimer.render/1</code>).</td><td><code>StackLayers.Contract.render/1</code></td></tr>
+        <tr><td><strong>Worker injection</strong> ⭐</td><td>Fold the contract into the persisted worker <code>system_prompt</code> at the one chokepoint every worker passes.</td><td><code>tools.ex:130</code></td></tr>
+        <tr><td><strong>Orchestrator injection</strong></td><td>Surface the same contract in the orchestrator prompt so it frames tasks/worker-creation on-stack.</td><td><code>system_prompt.ex</code></td></tr>
+        <tr><td><strong>Auto-seed</strong></td><td>On register/refresh, pre-select layers matching the detected stack language (operator can re-mix).</td><td><code>projects.ex</code></td></tr>
+        <tr><td><strong>UI</strong></td><td>Settings → Stack Layers (catalog CRUD) + <code>/projects/:id</code> per-type picker.</td><td>console + projects LiveViews</td></tr>
+      </tbody>
+    </table>
+    <figure>
+      <img src="stack-layers-crud-and-worker-stack-contract/solution.png" alt="Three-step flow: layer catalog, then per-type selection, then a stack contract injected into the worker's prompt">
+
+      <figcaption>CRUD the catalog, compose per project, inject the contract where the worker actually reads it.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== RELEVANT FILES ===== -->
+  <section id="files" class="files">
+    <h2>Relevant Files</h2>
+
+    <h3>Existing Files</h3>
+    <ul>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/tools.ex</code> — ⭐ worker-spawn chokepoint. <code>create_agent/2</code> line 130 writes <code>params["system_prompt"]</code> via <code>with_reporting_clause/1</code>; <code>orchestrator_project_id/1</code> is already computed at line 129. Inject the stack contract here.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/system_prompt.ex</code> — <code>project_primer_block/1</code> (line 228) interpolated at line 108. Add a sibling <code>project_stack_block/1</code>.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/projects/context_primer.ex</code> — the canonical "typed data → markdown block" renderer to mirror for the contract.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/projects.ex</code> — <code>profile_and_create/2</code> (line ~89) + <code>refresh_profile/1</code> (line ~131): post-insert hooks to auto-seed a project's layer selection from <code>profile.stack</code>.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/cost_center.ex</code> — catalog CRUD pattern (<code>upsert</code>/<code>update</code>/<code>delete</code> + key immutability) to mirror for <code>StackLayers</code>.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/live/console_live.ex</code> — settings-tab events + <code>settings_tab/1</code> router (line ~4039). Add the Stack Layers tab + CRUD events.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/components/console_components.ex</code> — <code>price_catalog_table/1</code> (line ~2100) + tab nav (line ~1287): clone for the layers catalog table/form.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/live/projects_live.ex</code> — mirror the worker-models roster card (built in the per-project-models work) for a per-type layer picker.</li>
+      <li><span class="tag existing">existing</span> <code>priv/repo/seeds.exs</code> — seed a starter layer catalog (or call <code>StackLayers.seed_default_layers/0</code>).</li>
+      <li><span class="tag existing">existing</span> <code>ai_docs/agentic-layer-adaptor.md</code> — document Stack Layers alongside Capabilities/Command-packs (and note: the contract is reasoning/guardrails; capabilities remain the command values).</li>
+    </ul>
+
+    <h3>New Files</h3>
+    <ul>
+      <li><span class="tag new">new</span> <code>priv/repo/migrations/&lt;ts&gt;_create_stack_layers.exs</code> — catalog table (binary_id PK, unique <code>(layer_type, name)</code>).</li>
+      <li><span class="tag new">new</span> <code>priv/repo/migrations/&lt;ts&gt;_create_project_stack_layers.exs</code> — join table (two FKs <code>on_delete: :delete_all</code>, unique <code>(project_id, stack_layer_id)</code>, indexes).</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/stack_layers/stack_layer.ex</code> — <code>StackLayer</code> Ecto schema (typed catalog row).</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/stack_layers/project_stack_layer.ex</code> — join schema.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/stack_layers.ex</code> — context (the only <code>Repo</code> caller for both tables): catalog CRUD + per-project selection + grouped reads + auto-seed.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/stack_layers/contract.ex</code> — pure <code>render/1</code> (project/layers → the stack-contract markdown block).</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/stack_layers_test.exs</code> — CRUD, selection, contract render, language auto-seed.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/orchestrator/worker_stack_contract_test.exs</code> — ⭐ a spawned worker's <code>system_prompt</code> carries the contract; none when no layers.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder_web/live/stack_layers_settings_test.exs</code> — catalog CRUD via the settings tab.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder_web/live/project_stack_layers_test.exs</code> — per-project mix &amp; match + contract preview.</li>
+    </ul>
+  </section>
+
+  <!-- ===== IMPLEMENTATION PHASES ===== -->
+  <section id="phases">
+    <h2>Implementation Phases</h2>
+    <p><strong>IMPORTANT:</strong> Execute every phase and task step by step, in order, top to bottom.</p>
+    <p>Status markers: <code>[]</code> idle · <code>[wip]</code> in progress · <code>[x]</code> complete · <code>[f]</code> failed. All start as <code>[]</code>; the Build Plan workflow updates them as it works.</p>
+
+    <!-- PHASE 1 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 1: Data foundation — catalog + composition</h3>
+      <p>Persist typed layers and the per-project selection, behind a single context. No UI, no injection yet — the seam everything else stands on.</p>
+
+      <h4>1. Migrations</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>create_stack_layers</code>: binary_id PK; <code>layer_type :string null: false</code>, <code>name :string null: false</code>, <code>language :string null: false</code>, <code>reasoning :text</code>, <code>enabled :boolean default: true</code>, <code>source :string default: "seed"</code>, timestamps. <code>create unique_index(:stack_layers, [:layer_type, :name])</code>.</li>
+        <li><code class="status">[]</code> <code>create_project_stack_layers</code>: binary_id PK; <code>project_id references(:projects, type: :binary_id, on_delete: :delete_all)</code>; <code>stack_layer_id references(:stack_layers, type: :binary_id, on_delete: :delete_all)</code>; timestamps. Index both FKs; <code>create unique_index(:project_stack_layers, [:project_id, :stack_layer_id])</code> (mirrors <code>project_plugins</code>).</li>
+        <li><code class="status">[]</code> <code>mix ecto.migrate &amp;&amp; mix ecto.rollback &amp;&amp; mix ecto.migrate</code> — reversible.</li>
+      </ul>
+
+      <h4>2. Schemas</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>StackLayer</code> (<code>use RepoBuilder.Schema</code>): hand-written <code>@type t</code>; <code>@layer_types ~w(frontend backend database tooling)a</code> as <code>Ecto.Enum</code>; <code>source</code> enum <code>[:seed, :manual]</code>; <code>changeset/2</code> casts all, <code>validate_required([:layer_type, :name, :language])</code>, <code>unique_constraint([:layer_type, :name])</code>.</li>
+        <li><code class="status">[]</code> <code>ProjectStackLayer</code>: <code>project_id</code>/<code>stack_layer_id</code> binary_id fields; <code>changeset/2</code> with both <code>foreign_key_constraint</code>s + <code>unique_constraint([:project_id, :stack_layer_id])</code>.</li>
+      </ul>
+
+      <h4>3. Context (only <code>Repo</code> caller)</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Catalog CRUD: <code>list_layers/0</code>, <code>list_layers_by_type/0</code> (→ <code>%{type =&gt; [layer]}</code>), <code>get_layer/1</code>, <code>create_layer/1</code>, <code>update_layer/2</code>, <code>delete_layer/1</code> — mirror <code>CostCenter</code> shapes, all <code>@spec</code>'d, tagged tuples.</li>
+        <li><code class="status">[]</code> Per-project selection: <code>layers_for_project/1</code> (enabled layers, ordered by type), <code>select_layer/2</code>, <code>deselect_layer/2</code>, <code>set_project_layers/2</code> (replace the set), <code>seed_project_from_stack/2</code> (best-effort: select catalog layers whose <code>language</code> matches <code>stack["language"]</code> / <code>build_tool</code>, only when the project has no selection yet).</li>
+        <li><code class="status">[]</code> <code>seed_default_layers/0</code> — idempotent starter catalog (Phoenix/Elixir, LiveView/Elixir, Svelte/TS, React/TS, FastAPI/Python, Node/JS, Go/Go, PostgreSQL/SQL, SQLite/SQL, Godot/GDScript) each with a one-paragraph <code>reasoning</code>.</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>ExUnit (DataCase, <code>async: true</code>): CRUD round-trips, unique-key rejection, per-project selection isolation, <code>seed_project_from_stack</code> language match, <code>seed_default_layers</code> idempotency.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/stack_layers_test.exs</code> — CRUD + selection pass.</li>
+        <li><code class="status">[]</code> <code>mix compile --warnings-as-errors</code> — clean.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- PHASE 2 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 2: The stack contract &amp; its injection ⭐</h3>
+      <p>The load-bearing phase: render the composition into a contract and put it where the worker actually reads it (its persisted <code>system_prompt</code>), and where the orchestrator can frame work on-stack.</p>
+
+      <figure>
+        <img src="stack-layers-crud-and-worker-stack-contract/phase2.png" alt="A worker prompt document stacked top to bottom: stack contract, then task, then reporting">
+
+        <figcaption>The contract sits first in the worker's charter — top of mind for every turn.</figcaption>
+      </figure>
+
+      <h4>1. Contract renderer</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>StackLayers.Contract.render/1</code> — pure, mirrors <code>ContextPrimer.render/1</code>. Given a project id (or <code>nil</code>), read <code>layers_for_project/1</code> and emit:
+<pre><code>## Project stack — build ONLY within this stack
+- Backend: Phoenix (elixir) — &lt;reasoning&gt;
+- Frontend: Svelte (typescript) — &lt;reasoning&gt;
+- Database: PostgreSQL (sql) — &lt;reasoning&gt;
+
+Rules:
+- Use only the language/framework named for each layer; never introduce another for a listed layer.
+- If a task needs a layer not listed above, STOP and report back rather than guessing.</code></pre>
+        Return <code>""</code> when the project is <code>nil</code> or has no layers (fully back-compatible).</li>
+      </ul>
+
+      <h4>2. Worker injection (the chokepoint)</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> In <code>tools.ex create_agent/2</code>, fold the contract into the persisted prompt at line 130, <em>before</em> the reporting clause so it leads the charter:
+<pre><code>project_id = orchestrator_project_id(orchestrator_id)
+# ...
+"system_prompt" =&gt;
+  args["system_prompt"]
+  |&gt; blank_to_nil()
+  |&gt; prepend_stack_contract(project_id)
+  |&gt; with_reporting_clause(),
+
+@spec prepend_stack_contract(String.t() | nil, Ecto.UUID.t() | nil) :: String.t() | nil
+defp prepend_stack_contract(prompt, project_id) do
+  case StackLayers.Contract.render(project_id) do
+    "" -&gt; prompt
+    contract when is_binary(prompt) -&gt; contract &lt;&gt; "\n\n" &lt;&gt; prompt
+    contract -&gt; contract
+  end
+end</code></pre>
+        Result order in the stored <code>agents.system_prompt</code>: <strong>contract → template/explicit body → reporting clause</strong>.</li>
+        <li><code class="status">[]</code> Keep it drift-proof: every worker (template-based or ad-hoc) passes line 130, so no spawn path can bypass the contract.</li>
+      </ul>
+
+      <h4>3. Orchestrator injection</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> In <code>system_prompt.ex</code>, add <code>project_stack_block/1</code> (resolve project via the existing <code>resolve_project/1</code>, return <code>Contract.render(project.id)</code>) and interpolate it next to <code>project_primer_block/1</code> (~line 108) so the orchestrator sees the stack and creates the right workers.</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>ExUnit: spawn a worker via <code>Tools.call("create_agent", …)</code> for a project with a selected backend layer; read the persisted <code>agents.system_prompt</code> and assert it contains the contract header, the backend language, and the off-stack guardrail — and that a project with no layers yields no contract (just the reporting clause). Plus a pure render unit test and an orchestrator-prompt assertion.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/worker_stack_contract_test.exs</code> — worker prompt carries the contract; absent when no layers.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/stack_layers_test.exs</code> — <code>Contract.render/1</code> content + empty cases.</li>
+        <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — no regression in existing <code>tools</code>/<code>system_prompt</code> tests.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- PHASE 3 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 3: Catalog CRUD UI (Settings → Stack Layers)</h3>
+      <p>Operator manages the layer catalog from the console, mirroring the Cost Center price catalog.</p>
+
+      <h4>1. Settings tab + events</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>console_live.ex</code>: add <code>:stack_layers</code> to <code>settings_tab/1</code>; lazy-load layers when the tab opens; add <code>save_stack_layer</code> (upsert/update via <code>editing_layer_id</code>), <code>edit_stack_layer</code>, <code>cancel_edit_stack_layer</code>, <code>delete_stack_layer</code> events (mirror the price-catalog events).</li>
+        <li><code class="status">[]</code> mount assigns: <code>stack_layer_rows</code>, <code>stack_layer_form</code> (<code>to_form/2</code>), <code>editing_layer_id</code>.</li>
+      </ul>
+
+      <h4>2. Components</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>console_components.ex</code>: add a <code>&lt;.settings_tab_button tab={:stack_layers} …/&gt;</code>, a <code>:stack_layers</code> panel, and a <code>stack_layers_table/1</code> (type pill, name, language, reasoning excerpt, Edit/Delete) + inline <code>&lt;.form phx-submit="save_stack_layer"&gt;</code> with a <code>layer_type</code> select, name/language inputs, reasoning textarea.</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p><code>Phoenix.LiveViewTest</code>: open the tab, submit the form to create a layer, assert it persisted + renders; edit then delete.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder_web/live/stack_layers_settings_test.exs</code> — create/edit/delete via UI.</li>
+        <li><code class="status">[]</code> <code>mix format --check-formatted &amp;&amp; mix credo --strict</code> — style + <code>@spec</code> gate.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- PHASE 4 -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 4: Per-project mix &amp; match + auto-seed</h3>
+      <p>Compose a project's stack from the catalog by type, auto-seeded from detection, with a live contract preview — the operator's mix-and-match surface.</p>
+
+      <figure>
+        <img src="stack-layers-crud-and-worker-stack-contract/phase4.png" alt="Three per-type dropdowns — frontend, backend, database — feeding a live stack contract preview pane">
+
+        <figcaption>One pick per type composes the contract the workers will receive.</figcaption>
+      </figure>
+
+      <h4>1. Auto-seed on profile</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> In <code>projects.ex</code>, after the project row exists in <code>profile_and_create/2</code> and <code>refresh_profile/1</code>, call <code>StackLayers.seed_project_from_stack(project.id, profile.stack)</code> (best-effort; never blocks registration; never clobbers an existing selection).</li>
+      </ul>
+
+      <h4>2. Project page card</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>projects_live.ex</code> show: load <code>list_layers_by_type/0</code> + <code>layers_for_project/1</code>; render one <code>&lt;select&gt;</code> per type (options = layers of that type + "none"), <code>phx-change="select_stack_layer"</code>; show a read-only contract preview (<code>Contract.render/1</code>). Save via <code>select_layer/2</code>/<code>deselect_layer/2</code>; scoped to the project (no <code>Repo</code> in the LiveView). Mirror the worker-models roster card.</li>
+      </ul>
+
+      <h4>3. Docs + seed</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Call <code>StackLayers.seed_default_layers/0</code> from <code>priv/repo/seeds.exs</code>; document the subsystem in <code>ai_docs/agentic-layer-adaptor.md</code> (contract = reasoning/guardrails injected at worker spawn; capabilities/command-packs unchanged).</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p><code>Phoenix.LiveViewTest</code> + context: select a layer per type on <code>/projects/:id</code>, assert <code>layers_for_project/1</code> updates + the preview renders; register a project whose stack matches a seeded layer and assert auto-seed selected it; isolation between two projects.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder_web/live/project_stack_layers_test.exs</code> — mix &amp; match + auto-seed + isolation.</li>
+        <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — full suite green.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+  </section>
+
+  <!-- ===== GLOBAL VALIDATION ===== -->
+  <section id="validation">
+    <h2>Validation Commands</h2>
+    <p>Execute these commands to validate the entire plan is complete:</p>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>mix ecto.migrate</code> — both new tables apply cleanly.</li>
+      <li><code class="status">[]</code> <code>mix test test/repo_builder/stack_layers_test.exs</code> — context CRUD + selection + contract render.</li>
+      <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/worker_stack_contract_test.exs</code> — the worker prompt carries the contract.</li>
+      <li><code class="status">[]</code> <code>mix test test/repo_builder_web/live/stack_layers_settings_test.exs test/repo_builder_web/live/project_stack_layers_test.exs</code> — both UIs.</li>
+      <li><code class="status">[]</code> <code>mix compile --warnings-as-errors</code> — zero warnings.</li>
+      <li><code class="status">[]</code> <code>mix format --check-formatted</code> — formatted.</li>
+      <li><code class="status">[]</code> <code>mix credo --strict</code> — <code>@spec</code> gate + style clean.</li>
+      <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — full suite green.</li>
+      <li><code class="status">[]</code> <code>mix dialyzer</code> — no new warnings (keep existing skip filters).</li>
+    </ul>
+    <div class="loop">🔁 <strong>The plan is not complete until every box is checked and every command passes. If for some reason a step is not possible to complete, mark it with [f] and move on if possible.</strong></div>
+  </section>
+
+  <!-- ===== NOTES ===== -->
+  <section id="notes">
+    <h2>Notes</h2>
+
+    <h3>How this relates to what already exists (and the previous plan)</h3>
+    <p>Three stack-flavoured systems now coexist, with clean responsibilities:</p>
+    <div class="twocol">
+      <div class="panel"><strong>Capabilities + Command packs</strong> (existing) — the <em>commands</em> that vary per stack (<code>{{TEST_COMMAND}}</code> …) and the command bodies that consume them. Unchanged by this plan.</div>
+      <div class="panel"><strong>Stack Layers + Contract</strong> (this plan) — the operator-curated <em>typed composition + reasoning/guardrails</em> injected into the worker so it stays on-stack. The missing "who/why/which-language" layer.</div>
+    </div>
+    <p>This also supersedes the bespoke approach in <code>specs/godot-elixir-command-pack-stack.html</code>: "Godot + Elixir" becomes simply two catalog layers (a <span class="pill fe">frontend</span> <em>Godot/GDScript</em> engine layer + a <span class="pill be">backend</span> <em>Elixir</em> layer) mixed on one project — no bespoke pack or detection heuristic required. Keep that plan as the command-prose reference; this one is the general mechanism.</p>
+
+    <h3>Key design decisions (resolved here; revisit if needed)</h3>
+    <ul>
+      <li><strong>Join table over JSONB.</strong> <code>project_stack_layers</code> gives referential integrity, "which projects use layer X" queries, and clean cascade — mirroring <code>project_plugins</code>. JSONB on the project would duplicate ids and lose FK safety.</li>
+      <li><strong>One pick per type in the UI, many allowed in the model.</strong> The schema permits multiple layers of a type (e.g. two databases); the picker offers one-per-type for simplicity. No artificial DB constraint blocks a future multi-select.</li>
+      <li><strong>Contract leads the worker charter.</strong> Order is contract → body → reporting clause, so the language guardrail is the first thing the worker reads. The reporting clause stays last (unchanged behaviour).</li>
+      <li><strong>Persisted-at-create, not per-turn.</strong> The contract lands in <code>agents.system_prompt</code> at <code>create_agent</code> (the only worker system-prompt channel — session opts carry none), so it travels across every <code>command_agent</code> turn for that worker's life. Re-mixing a project's layers affects <em>future</em> workers; existing workers keep the charter they were born with (document this; a "re-issue contract" action is possible future work).</li>
+      <li><strong>Reasoning is worker-facing prose.</strong> <code>layer.reasoning</code> is guidance/constraints written for the agent ("only Tailwind utility classes", "no raw SQL in contexts"), not internal notes — it is injected verbatim.</li>
+      <li><strong>Layer type: enum, extensible.</strong> Start with <code>frontend|backend|database|tooling</code>; adding a type is a one-line enum change. Open strings were rejected to keep the per-type UI grouping well-defined.</li>
+    </ul>
+
+    <h3>Edge cases &amp; safety</h3>
+    <ul>
+      <li>Platform orchestrator (<code>project_id: nil</code>) or a project with no layers → <code>Contract.render/1</code> returns <code>""</code>; worker prompts are exactly today's (no regression).</li>
+      <li>Deleting a catalog layer cascades its <code>project_stack_layers</code> rows (<code>on_delete: :delete_all</code>) — a project simply loses that selection; the contract re-renders without it.</li>
+      <li>A repo's own <code>.claude/commands</code> / <code>AGENTS.md</code> still win for command bodies; the contract is additive guidance, never overriding repo-local truth.</li>
+      <li>Auto-seed is best-effort and idempotent — a missing matching layer just leaves the type unselected for the operator to fill.</li>
+    </ul>
+
+    <h3>Out of scope (clean follow-ups)</h3>
+    <ul>
+      <li>Sourcing the project's <em>capability commands</em> from the selected backend layer (converging Capabilities into Stack Layers).</li>
+      <li>A "re-issue contract to existing workers" action; per-layer version pinning; importing layers from a remote catalog.</li>
+      <li>Enforcing the contract at tool-call time (e.g. blocking a file write in a disallowed language) — this plan is prompt-level guidance, not a hard sandbox.</li>
+    </ul>
+
+    <h3>Image generation</h3>
+    <p>Image slots are placeholders. Filling them calls the GPT image API (billed, external) via <code>uv run scripts/generate_gpt_image.py</code> — run the planf3 Image Generation sub-workflow on request.</p>
+  </section>
+
+  <!-- ===== AMENDMENTS ===== -->
+  <section id="amendments">
+    <h2>Amendments</h2>
+    <p class="qa-answer">No amendments yet — populated by the Update Plan / Update References workflows after first execution.</p>
+  </section>
+
+</main>
+</body>
+</html>

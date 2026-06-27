@@ -11,7 +11,17 @@ defmodule RepoBuilder.Orchestrator.Tools do
   seams: `Agents`, `Session.Supervisor`, `WorkflowEngine`, `Logs`, and the
   `Dashboard` console feed.
   """
-  alias RepoBuilder.{Agents, Budget, Logs, Orchestrators, Session, WorkflowEngine, Workflows}
+  alias RepoBuilder.{
+    Agents,
+    Budget,
+    Commands,
+    Logs,
+    Orchestrators,
+    Session,
+    WorkflowEngine,
+    Workflows
+  }
+
   alias RepoBuilder.Agents.Handover
   alias RepoBuilder.Agents.Holding
   alias RepoBuilder.Budget.Scope
@@ -22,10 +32,22 @@ defmodule RepoBuilder.Orchestrator.Tools do
   alias RepoBuilder.Harness.Pi.Models, as: PiModels
   alias RepoBuilder.Harness.Redact
   alias RepoBuilder.Harness.Registry
-  alias RepoBuilder.Orchestrator.{ContextWindow, Orchestrator, Template, Templates}
+
+  alias RepoBuilder.Orchestrator.{
+    Breaker,
+    ContextWindow,
+    Ledgers,
+    Orchestrator,
+    Queue,
+    Reflections,
+    Template,
+    Templates
+  }
+
   alias RepoBuilder.Projects
   alias RepoBuilder.Projects.Project
   alias RepoBuilder.Secrets
+  alias RepoBuilder.StackLayers
   alias RepoBuilder.WorkflowEngine.Catalog
   alias RepoBuilder.Workflows.TitleHumanizer
 
@@ -47,6 +69,12 @@ defmodule RepoBuilder.Orchestrator.Tools do
   # issue-log-2389). A request wider than this is clamped (first N after sort) and flagged
   # `capped` so the orchestrator can narrow/paginate rather than silently lose data.
   @max_log_lookup 100
+
+  # Caps for the read-only `inspect_repo` tool (self-healing Phase 3): bound the returned
+  # text so a large file / huge diff can never overflow the orchestrator's stdout framing
+  # (same rationale as `@worker_text_cap` — see issue-log-2389).
+  @inspect_read_cap 8_000
+  @inspect_files_cap 200
 
   # Changeset failures are stringified at the boundary (`changeset_reason/1`), so a
   # reason that escapes a tool is always an atom or a string.
@@ -108,6 +136,19 @@ defmodule RepoBuilder.Orchestrator.Tools do
   defp dispatch("get_agent_template", _orchestrator_id, args), do: get_agent_template(args)
   defp dispatch("save_agent_template", _orchestrator_id, args), do: save_agent_template(args)
 
+  # Leadership / ledger tools (self-healing Phase 3).
+  defp dispatch("set_goal", orchestrator_id, args), do: set_goal(orchestrator_id, args)
+
+  defp dispatch("record_progress", orchestrator_id, args),
+    do: record_progress(orchestrator_id, args)
+
+  defp dispatch("get_ledger", orchestrator_id, _args), do: get_ledger(orchestrator_id)
+
+  defp dispatch("report_complete", orchestrator_id, args),
+    do: report_complete(orchestrator_id, args)
+
+  defp dispatch("inspect_repo", orchestrator_id, args), do: inspect_repo(orchestrator_id, args)
+
   defp dispatch(_tool, _orchestrator_id, _args), do: {:error, :unknown_tool}
 
   # --- tools ---
@@ -119,6 +160,8 @@ defmodule RepoBuilder.Orchestrator.Tools do
          {:ok, tools} <- resolve_tools(args),
          args = apply_template_args(args, template),
          {:ok, spec} <- resolve_agent_spec(orchestrator_id, args) do
+      project_id = orchestrator_project_id(orchestrator_id)
+
       params = %{
         "name" => name,
         "harness" => spec.harness,
@@ -126,8 +169,16 @@ defmodule RepoBuilder.Orchestrator.Tools do
         # Pin the worker to the commanding orchestrator's project (orchestrator↔project
         # binding): a worker spawned for repo A is permanently scoped to repo A and stays
         # on its roster. A platform orchestrator (project_id: nil) still spawns nil workers.
-        "project_id" => orchestrator_project_id(orchestrator_id),
-        "system_prompt" => with_reporting_clause(blank_to_nil(args["system_prompt"])),
+        "project_id" => project_id,
+        # The stack contract (stack-layers subsystem) leads the worker charter so the
+        # language/stack guardrail is the first thing the worker reads, then the task
+        # body, then the reporting clause. Empty contract (no project / no layers) ⇒
+        # exactly today's prompt (back-compatible).
+        "system_prompt" =>
+          args["system_prompt"]
+          |> blank_to_nil()
+          |> prepend_stack_contract(project_id)
+          |> with_reporting_clause(),
         # The worker's `provider` column is a closed enum that can't hold pi's open
         # provider set, so the real provider rides in `config` and is threaded into
         # the session at command time. Template provenance (name+version) rides here too;
@@ -228,7 +279,17 @@ defmodule RepoBuilder.Orchestrator.Tools do
     provider
     |> provider_config()
     |> Map.merge(%{"template_name" => template.name, "template_version" => template.version})
+    |> maybe_put_allowed_tools(template.tools)
   end
+
+  # Record the template's per-worker capability allowlist (self-healing Phase 5) onto the
+  # worker config so a harness binding can scope its tools to it. Empty ⇒ inherit defaults
+  # (no key written, back-compatible). Distinct from config["tools"] (the firecrawl grant).
+  # Inference-only spec — the concrete config map narrows below a hand-written `map()` range.
+  defp maybe_put_allowed_tools(config, [_ | _] = tools),
+    do: Map.put(config, "allowed_tools", tools)
+
+  defp maybe_put_allowed_tools(config, _tools), do: config
 
   # Resolve an optional `subagent_template` to its current version; nil when absent.
   # An unknown name returns a helpful error listing the available template names.
@@ -295,7 +356,8 @@ defmodule RepoBuilder.Orchestrator.Tools do
          {:ok, prompt} <- fetch_string(args, "prompt"),
          {:ok, worker} <- Agents.get_by_name_for_orchestrator(orchestrator_id, name),
          :ok <- ensure_worker_model(worker),
-         :ok <- check_budget(orchestrator_id) do
+         :ok <- check_budget(orchestrator_id),
+         :ok <- check_breaker(worker) do
       # First-dispatch only (no prior session): record the original ask as the worker's
       # handover receipt, so a later wind-down directive / retirement notice can quote it
       # verbatim (issue graceful-agent-handover). Subsequent turns leave it untouched.
@@ -312,6 +374,7 @@ defmodule RepoBuilder.Orchestrator.Tools do
       opts = [
         agent_id: worker.id,
         agent_db_id: worker.id,
+        agent_name: worker.name,
         session_id: session_id,
         harness: worker.harness,
         prompt: prompt,
@@ -329,8 +392,13 @@ defmodule RepoBuilder.Orchestrator.Tools do
       ]
 
       case Session.Supervisor.start_session(opts) do
-        {:ok, _pid} ->
+        {:ok, pid} ->
           _ = Agents.set_status(worker.id, :running)
+          # Push liveness (self-healing Phase 2): the owning Queue `Process.monitor`s this
+          # worker pid, so a `:DOWN` with no preceding worker-terminal (hard kill / brutal
+          # shutdown) synthesizes the worker-terminal instantly — the leader re-engages in
+          # milliseconds instead of after a ≤60 s reaper sweep. No-op when no Queue is running.
+          _ = Queue.monitor_worker(orchestrator_id, worker.id, pid)
           {:ok, %{"status" => "dispatched", "agent_id" => worker.id, "name" => worker.name}}
 
         {:error, :at_capacity} ->
@@ -341,6 +409,283 @@ defmodule RepoBuilder.Orchestrator.Tools do
       end
     end
   end
+
+  # --- leadership / ledger tools (self-healing Phase 3) ---
+
+  @spec set_goal(Ecto.UUID.t(), map()) :: result()
+  defp set_goal(orchestrator_id, args) do
+    with {:ok, goal} <- fetch_string(args, "goal"),
+         {:ok, dod} <- fetch_string(args, "definition_of_done") do
+      attrs = %{
+        goal: goal,
+        definition_of_done: dod,
+        plan: args["plan"],
+        project_id: orchestrator_project_id(orchestrator_id)
+      }
+
+      case Ledgers.upsert_goal(orchestrator_id, attrs) do
+        {:ok, ledger} ->
+          _ = broadcast_ledger(orchestrator_id)
+          {:ok, %{"status" => "goal_set", "ledger_id" => ledger.id, "goal" => ledger.goal}}
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          {:error, changeset_reason(changeset)}
+      end
+    end
+  end
+
+  @spec record_progress(Ecto.UUID.t(), map()) :: result()
+  defp record_progress(orchestrator_id, args) do
+    attrs = %{
+      "satisfied" => args["satisfied"],
+      "looping" => args["looping"],
+      "made_progress" => args["made_progress"],
+      "next_agent" => args["next_agent"],
+      "next_instruction" => args["next_instruction"],
+      "summary" => args["summary"]
+    }
+
+    case Ledgers.record_progress(orchestrator_id, attrs) do
+      {:ok, entry} ->
+        _ = broadcast_ledger(orchestrator_id)
+        {:ok, %{"status" => "recorded", "entry_id" => entry.id}}
+
+      {:error, :no_active_ledger} ->
+        {:error, :no_active_ledger}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:error, changeset_reason(changeset)}
+    end
+  end
+
+  @spec get_ledger(Ecto.UUID.t()) :: result()
+  defp get_ledger(orchestrator_id) do
+    case Ledgers.view(orchestrator_id) do
+      nil -> {:ok, %{"status" => "no_goal"}}
+      view -> {:ok, ledger_tool_map(view)}
+    end
+  end
+
+  @spec report_complete(Ecto.UUID.t(), map()) :: result()
+  defp report_complete(orchestrator_id, args) do
+    summary = blank_to_nil(args["summary"])
+    recommendations = blank_to_nil(args["recommendations"])
+    # Capture the goal BEFORE marking done (mark_done deactivates the ledger) so the reflection
+    # can be scoped to it.
+    goal = current_goal(orchestrator_id)
+
+    case Ledgers.mark_done(orchestrator_id) do
+      {:ok, _ledger} ->
+        _ = broadcast_ledger(orchestrator_id)
+        _ = notify_complete(orchestrator_id, summary, recommendations)
+        _ = record_completion_reflection(orchestrator_id, goal, summary)
+        {:ok, %{"status" => "done", "summary" => summary}}
+
+      {:error, :no_active_ledger} ->
+        {:error, :no_active_ledger}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:error, changeset_reason(changeset)}
+    end
+  end
+
+  # Read-only repo inspection scoped to the orchestrator's working_dir (path-jailed, capped),
+  # so the leader can verify "done" against the ACTUAL tree, not a worker's self-report.
+  @spec inspect_repo(Ecto.UUID.t(), map()) :: result()
+  defp inspect_repo(orchestrator_id, args) do
+    with {:ok, op} <- fetch_string(args, "op"),
+         {:ok, dir} <- resolve_working_dir(orchestrator_id) do
+      case op do
+        "git_status" -> git_status(dir)
+        "changed_files" -> changed_files(dir)
+        "read_file" -> read_file_jailed(dir, args["path"])
+        _ -> {:error, :invalid_op}
+      end
+    end
+  end
+
+  @spec broadcast_ledger(Ecto.UUID.t()) :: :ok
+  defp broadcast_ledger(orchestrator_id),
+    do: Dashboard.broadcast_ledger_updated(orchestrator_id, Ledgers.view(orchestrator_id))
+
+  @spec current_goal(Ecto.UUID.t()) :: String.t() | nil
+  defp current_goal(orchestrator_id) do
+    case Ledgers.current(orchestrator_id) do
+      %{goal: goal} -> goal
+      _none -> nil
+    end
+  end
+
+  # Capture a verbal lesson on completion (self-healing Phase 5 — Reflexion) so the next run for
+  # this project starts ahead. Fail-soft via Reflections.record/1.
+  @spec record_completion_reflection(Ecto.UUID.t(), String.t() | nil, String.t() | nil) :: :ok
+  defp record_completion_reflection(orchestrator_id, goal, summary) do
+    lesson = summary || "completed goal: #{goal || "(unnamed)"}"
+
+    _ =
+      Reflections.record(%{
+        lesson: lesson,
+        goal: goal,
+        orchestrator_id: orchestrator_id,
+        project_id: orchestrator_project_id(orchestrator_id)
+      })
+
+    :ok
+  end
+
+  # Inference-only spec — the concrete string-keyed map narrows below a `map()` range.
+  defp ledger_tool_map(view) do
+    %{
+      "goal" => view.goal,
+      "definition_of_done" => view.definition_of_done,
+      "status" => to_string(view.status),
+      "stall_count" => view.stall_count,
+      "plan" => view.plan,
+      "progress" => progress_tool_map(view.progress)
+    }
+  end
+
+  # Inference-only spec — the concrete string-keyed map narrows below a hand-written
+  # `map() | nil`, which Dialyzer rejects as a contract supertype (mirrors provider_config/1).
+  defp progress_tool_map(nil), do: nil
+
+  defp progress_tool_map(progress) do
+    %{
+      "satisfied" => progress.satisfied,
+      "on_track" => progress.on_track,
+      "looping" => progress.looping,
+      "made_progress" => progress.made_progress,
+      "next_agent" => progress.next_agent,
+      "next_instruction" => progress.next_instruction,
+      "summary" => progress.summary
+    }
+  end
+
+  @spec notify_complete(Ecto.UUID.t(), String.t() | nil, String.t() | nil) :: :ok
+  defp notify_complete(orchestrator_id, summary, recommendations) do
+    message = "orchestrator reported goal complete" <> if(summary, do: ": #{summary}", else: "")
+
+    _ =
+      Logs.create_system_log(%{
+        level: :info,
+        message: message,
+        metadata: %{
+          "orchestrator_id" => orchestrator_id,
+          "action" => "report_complete",
+          "recommendations" => recommendations
+        }
+      })
+
+    :ok
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
+
+  # The orchestrator's working_dir, validated to exist (inspect_repo needs a real tree).
+  @spec resolve_working_dir(Ecto.UUID.t()) :: {:ok, String.t()} | {:error, reason()}
+  defp resolve_working_dir(orchestrator_id) do
+    case Orchestrators.fetch(orchestrator_id) do
+      {:ok, %{working_dir: dir}} when is_binary(dir) and dir != "" ->
+        if File.dir?(dir), do: {:ok, dir}, else: {:error, :working_dir_missing}
+
+      {:ok, _orchestrator} ->
+        {:error, :no_working_dir}
+
+      {:error, :not_found} ->
+        {:error, :orchestrator_not_found}
+    end
+  end
+
+  @spec git_status(String.t()) :: result()
+  defp git_status(dir) do
+    case run_git(dir, ["status", "--short", "--branch"]) do
+      {:ok, output} -> {:ok, %{"op" => "git_status", "output" => cap_text(output)}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @spec changed_files(String.t()) :: result()
+  defp changed_files(dir) do
+    case run_git(dir, ["status", "--porcelain"]) do
+      {:ok, output} ->
+        files =
+          output
+          |> String.split("\n", trim: true)
+          |> Enum.take(@inspect_files_cap)
+          |> Enum.map(&parse_porcelain/1)
+
+        {:ok, %{"op" => "changed_files", "files" => files, "count" => length(files)}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @spec parse_porcelain(String.t()) :: %{String.t() => String.t()}
+  defp parse_porcelain(line) do
+    %{
+      "status" => line |> String.slice(0, 2) |> String.trim(),
+      "path" => line |> String.slice(3..-1//1) |> to_string() |> String.trim()
+    }
+  end
+
+  # Read a file STRICTLY under `dir` (path-jailed): reject any path that escapes the working
+  # dir or descends into `.git`, cap the returned content, and refuse non-regular files.
+  @spec read_file_jailed(String.t(), term()) :: result()
+  defp read_file_jailed(_dir, path) when not is_binary(path) or path == "",
+    do: {:error, "missing required argument: path"}
+
+  defp read_file_jailed(dir, path) do
+    base = Path.expand(dir)
+    target = Path.expand(path, base)
+    rel = Path.relative_to(target, base)
+
+    cond do
+      not jailed?(target, base) -> {:error, :path_outside_working_dir}
+      ".git" in Path.split(rel) -> {:error, :path_forbidden}
+      not File.regular?(target) -> {:error, :not_a_file}
+      true -> read_capped(path, target)
+    end
+  end
+
+  @spec jailed?(String.t(), String.t()) :: boolean()
+  defp jailed?(target, base), do: target == base or String.starts_with?(target, base <> "/")
+
+  @spec read_capped(String.t(), String.t()) :: result()
+  defp read_capped(path, target) do
+    case File.read(target) do
+      {:ok, content} ->
+        {:ok,
+         %{
+           "op" => "read_file",
+           "path" => path,
+           "content" => cap_text(content),
+           "truncated" => byte_size(content) > @inspect_read_cap
+         }}
+
+      {:error, reason} ->
+        {:error, to_string(reason)}
+    end
+  end
+
+  # Run a git subcommand in `dir`, returning trimmed stdout or a normalized error string.
+  # Never raises (a missing git / bad dir is surfaced as an error, not a tool crash).
+  @spec run_git(String.t(), [String.t()]) :: {:ok, String.t()} | {:error, String.t()}
+  defp run_git(dir, args) do
+    case System.cmd("git", args, cd: dir, stderr_to_stdout: true) do
+      {output, 0} -> {:ok, output}
+      {output, _status} -> {:error, output |> String.trim() |> cap_text()}
+    end
+  rescue
+    error -> {:error, Exception.message(error)}
+  catch
+    _kind, reason -> {:error, inspect(reason)}
+  end
+
+  @spec cap_text(String.t()) :: String.t()
+  defp cap_text(text) when is_binary(text), do: String.slice(text, 0, @inspect_read_cap)
 
   @spec list_agents(Ecto.UUID.t()) :: result()
   defp list_agents(orchestrator_id) do
@@ -407,6 +752,28 @@ defmodule RepoBuilder.Orchestrator.Tools do
     end
   end
 
+  # Circuit breaker (self-healing Phase 4): if this worker's harness/model path has tripped
+  # (repeated failures), fail FAST so the leader reroutes to another roster tier instead of
+  # burning budget on a broken path. A surfaced `{:ok, map}` short-circuits the `with` chain
+  # with a brain-readable "circuit open" result (not a silent spawn); `:ok` proceeds.
+  # Inference-only spec — the concrete tool-result map narrows below `{:ok, map()}`.
+  defp check_breaker(worker) do
+    case Breaker.ask(Breaker.key(worker.harness, worker.model)) do
+      :ok ->
+        :ok
+
+      {:error, :open} ->
+        {:ok,
+         %{
+           "status" => "circuit_open",
+           "harness" => worker.harness,
+           "model" => worker.model,
+           "message" =>
+             "circuit breaker open for #{Breaker.key(worker.harness, worker.model)} after repeated failures; reroute to another tier/model or wait for the cooldown"
+         }}
+    end
+  end
+
   @spec interrupt_agent(Ecto.UUID.t(), map()) :: result()
   defp interrupt_agent(orchestrator_id, args) do
     with {:ok, name} <- fetch_string(args, "name"),
@@ -463,6 +830,12 @@ defmodule RepoBuilder.Orchestrator.Tools do
   defp start_adw_via_adapter(orchestrator_id, harness, input, args) do
     with {:ok, cwd} <- adw_working_dir(orchestrator_id, args),
          {:ok, adw} <- resolve_discovered_adw(orchestrator_id, cwd, args) do
+      # Seed the resolved, token-filled command bodies into the target repo's
+      # `.claude/commands/` BEFORE spawning (issue-adw-portable-commands), so the Python
+      # pre-flight and the SDK both resolve `/plan`,`/build`,… on a foster repo that ships
+      # none. Fail-soft: a miss falls through to the Python pre-flight's loud error.
+      provision_adw_commands(orchestrator_id, cwd, adw)
+
       name = "orch-adw-#{System.unique_integer([:positive])}"
       adw_id = generate_adw_id()
 
@@ -515,6 +888,74 @@ defmodule RepoBuilder.Orchestrator.Tools do
   defp adw_working_dir_error(dir) do
     "working_dir #{dir} is not the bound project / a registered project; register it on " <>
       "the Projects page first, or omit working_dir to run the ADW against your own project"
+  end
+
+  # Provision the ADW's slash commands into the target repo's `.claude/commands/` so the
+  # portable Python harness + SDK resolve them on a foster repo (issue-adw-portable-commands).
+  # Recovers the `%Project{}` for `cwd` (the same lookup `adw_working_dir/2` validated; the
+  # default binding falls back to the orchestrator's project) and seeds it. Never blocks the
+  # launch — no project, an unresolved cwd, or `{:error, _}` all degrade to the Python
+  # pre-flight backstop. Logs a concise note of what was seeded via the existing system log.
+  @spec provision_adw_commands(Ecto.UUID.t(), String.t() | nil, Definitions.Adw.t()) :: :ok
+  defp provision_adw_commands(orchestrator_id, cwd, adw) do
+    case adw_target_project(orchestrator_id, cwd) do
+      %Project{} = project ->
+        result = Commands.provision_adw_commands(project, adw)
+        log_provisioning(orchestrator_id, adw, result)
+
+      nil ->
+        :ok
+    end
+
+    :ok
+  rescue
+    _error -> :ok
+  end
+
+  # The registered `%Project{}` an ADW runs against: the project owning `cwd`, or — when
+  # `cwd` came from the orchestrator's default binding — the orchestrator's bound project.
+  @spec adw_target_project(Ecto.UUID.t(), String.t() | nil) :: Project.t() | nil
+  defp adw_target_project(orchestrator_id, cwd) do
+    with nil <- cwd && Projects.get_by_root_path(cwd),
+         project_id when is_binary(project_id) <- orchestrator_project_id(orchestrator_id) do
+      Projects.get_project(project_id)
+    else
+      %Project{} = project -> project
+      _ -> nil
+    end
+  end
+
+  @spec log_provisioning(
+          Ecto.UUID.t(),
+          Definitions.Adw.t(),
+          {:ok, [String.t()]} | {:error, term()}
+        ) ::
+          :ok
+  defp log_provisioning(orchestrator_id, adw, {:ok, names}) do
+    _ =
+      Logs.create_system_log(%{
+        level: :info,
+        message:
+          "provisioned #{length(names)} ADW command(s) for #{adw.name}: #{Enum.join(names, ", ")}",
+        metadata: %{
+          "orchestrator_id" => orchestrator_id,
+          "adw" => adw.name,
+          "provisioned" => names
+        }
+      })
+
+    :ok
+  end
+
+  defp log_provisioning(orchestrator_id, adw, {:error, reason}) do
+    _ =
+      Logs.create_system_log(%{
+        level: :warn,
+        message: "ADW command provisioning skipped for #{adw.name}: #{inspect(reason)}",
+        metadata: %{"orchestrator_id" => orchestrator_id, "adw" => adw.name}
+      })
+
+    :ok
   end
 
   @spec spawn_adw_session(Agents.Agent.t(), String.t(), Definitions.Adw.t(), String.t() | nil) ::
@@ -1347,6 +1788,18 @@ defmodule RepoBuilder.Orchestrator.Tools do
 
   # Append the standard reporting clause to a worker's system prompt (issue-2541).
   # Uses the clause alone when the orchestrator passes no prompt.
+  # Fold the project's stack contract (stack-layers subsystem) onto the front of a
+  # worker's charter so the language/stack guardrail leads. An empty contract (platform
+  # orchestrator or a project with no selected layers) returns the prompt unchanged.
+  @spec prepend_stack_contract(String.t() | nil, Ecto.UUID.t() | nil) :: String.t() | nil
+  defp prepend_stack_contract(prompt, project_id) do
+    case StackLayers.Contract.render(project_id) do
+      "" -> prompt
+      contract when is_binary(prompt) -> contract <> "\n\n" <> prompt
+      contract -> contract
+    end
+  end
+
   @spec with_reporting_clause(String.t() | nil) :: String.t()
   defp with_reporting_clause(nil), do: String.trim(worker_reporting_clause())
 

@@ -98,6 +98,7 @@ defmodule RepoBuilder.Orchestrator.Templates do
         model: blank(attrs["model"]),
         category: blank(attrs["category"]),
         harness: blank(attrs["harness"]),
+        tools: Template.normalize_tools(attrs["tools"]),
         version: 1,
         author: author(attrs["author"]),
         updated_at: DateTime.utc_now()
@@ -123,6 +124,7 @@ defmodule RepoBuilder.Orchestrator.Templates do
         "model" => source.model,
         "category" => source.category,
         "harness" => source.harness,
+        "tools" => source.tools,
         "author" => source.author
       })
     end
@@ -228,6 +230,7 @@ defmodule RepoBuilder.Orchestrator.Templates do
          model: blank(attrs["model"]),
          category: blank(attrs["category"]),
          harness: blank(attrs["harness"]),
+         tools: Template.normalize_tools(attrs["tools"]),
          version: version,
          author: author(attrs["author"]),
          updated_at: parse_datetime(attrs["updated_at"])
