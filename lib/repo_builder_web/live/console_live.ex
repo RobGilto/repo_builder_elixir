@@ -63,6 +63,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
   alias RepoBuilder.Orchestrator.Ledgers
   alias RepoBuilder.Orchestrator.Queue, as: OrchestratorQueue
   alias RepoBuilder.Orchestrator.Templates
+  alias RepoBuilder.Orchestrator.Workstreams
   alias RepoBuilder.StackLayers
   alias RepoBuilder.StackLayers.StackLayer
   alias RepoBuilder.Workflows.TitleHumanizer
@@ -101,6 +102,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
         # Autonomy panel (self-healing Phase 6): the active orchestrator's Task/Progress Ledger
         # view (nil ⇒ no goal) + the escalation banner reason (nil ⇒ not escalated).
         ledger: nil,
+        # Workstreams panel (orchestration-adw-loop): the active orchestrator's durable
+        # workstreams as full records (phases + stage state), [] ⇒ none.
+        workstreams: [],
         orchestrator_holding_reason: nil,
         # FIFO turn-queue snapshot (issue message-queue): busy?/current/queued/depth.
         # Safe idle default for the disconnected render; reseeded on the connected mount.
@@ -412,6 +416,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
       orchestrator_working_dir: orchestrator.working_dir || "",
       timezone: Orchestrators.timezone(orchestrator),
       ledger: Ledgers.view(orchestrator.id),
+      workstreams: Workstreams.list_records(orchestrator.id),
       orchestrator_holding_reason: Orchestrators.holding_reason(orchestrator)
     )
   end
@@ -2732,6 +2737,16 @@ defmodule RepoBuilderWeb.ConsoleLive do
     end
   end
 
+  # The active orchestrator's Workstreams changed (orchestration-adw-loop): refresh the
+  # Workstreams panel live. Scoped to the active orchestrator (matching the ledger handler).
+  def handle_info({:workstreams_updated, orchestrator_id, records}, socket) do
+    if orchestrator_id == socket.assigns.orchestrator_id do
+      {:noreply, assign(socket, :workstreams, records)}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_info({:orchestrator_updated, orchestrator}, socket) do
     if orchestrator.id == socket.assigns.orchestrator_id do
       # A timezone change from another tab/session must re-format already-rendered rows.
@@ -3648,6 +3663,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
           </.command_panel>
 
           <.autonomy_panel ledger={@ledger} holding_reason={@orchestrator_holding_reason} />
+
+          <.workstreams_panel workstreams={@workstreams} context_tokens={@orchestrator_context} />
 
           <.queued_messages
             busy?={@orchestrator_queue.busy?}

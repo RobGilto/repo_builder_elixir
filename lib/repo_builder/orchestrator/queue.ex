@@ -39,12 +39,13 @@ defmodule RepoBuilder.Orchestrator.Queue do
   alias RepoBuilder.Orchestrator.Ledgers
   alias RepoBuilder.Orchestrator.Server
   alias RepoBuilder.Orchestrator.Tools
+  alias RepoBuilder.Orchestrator.Workstreams
   alias RepoBuilder.Orchestrators
 
   @registry RepoBuilder.OrchestratorQueueRegistry
   @sup RepoBuilder.OrchestratorQueueSupervisor
 
-  @type kind :: :operator | :auto_resume | :drive
+  @type kind :: :operator | :auto_resume | :drive | :compact
   @type item :: %{id: String.t(), prompt: String.t(), kind: kind()}
   @type snapshot :: %{
           busy?: boolean(),
@@ -66,6 +67,19 @@ defmodule RepoBuilder.Orchestrator.Queue do
       field :queue, :queue.queue()
       # The in-flight turn: {per-turn pid, monitor ref, agent_id}, or nil when idle.
       field :current, {pid(), reference(), String.t()} | nil
+      # The kind of the in-flight turn (nil when idle) — lets the compact-turn terminal
+      # trigger the rehydrate continuation (orchestration-adw-loop).
+      field :current_kind, :operator | :auto_resume | :drive | :compact | nil, default: nil
+      # Rehydrate-on-resume (orchestration-adw-loop, task 9): a compaction happened, so the
+      # NEXT non-compact turn must be SEEDED with the `list_workstreams` index so the brain
+      # wakes oriented. Consumed (and prepended) by the next turn's start; a no-op when there
+      # are no active workstreams (back-compat).
+      field :rehydrate_owed?, boolean(), default: false
+      # `compact_self` (task 8): after the scheduled `/compact` turn finishes, auto-enqueue
+      # ONE continuation turn so the brain resumes from the rehydrated index without an
+      # operator. Set by `request_compaction/1`; cleared once the continuation is started (or
+      # superseded by a queued operator turn).
+      field :auto_continue_after_compact?, boolean(), default: false
       # The pluggable turn launcher (defaults to Server.start_turn/2; tests inject a
       # controllable starter so the busy/idle state machine is fully deterministic).
       field :starter, (Ecto.UUID.t(), String.t() -> {:ok, pid(), String.t()} | {:error, term()})
@@ -184,6 +198,19 @@ defmodule RepoBuilder.Orchestrator.Queue do
     end
   end
 
+  @doc """
+  Request that the orchestrator compact its OWN context (orchestration-adw-loop, task 8).
+  Schedules a `/compact` turn on the orchestrator's resumable session and arms the
+  rehydrate-on-resume seed + a continuation turn, so the brain wakes re-oriented from its
+  durable workstreams. Starts the queue on demand; returns `:ok` once scheduled.
+  """
+  @spec request_compaction(Ecto.UUID.t()) :: :ok | {:error, term()}
+  def request_compaction(orchestrator_id) do
+    with {:ok, pid} <- start_or_get(orchestrator_id) do
+      GenServer.call(pid, :request_compaction)
+    end
+  end
+
   @doc "Cancel a still-queued item by id (never the in-flight turn)."
   @spec cancel(Ecto.UUID.t(), String.t()) :: {:ok, snapshot()} | {:error, :not_found}
   def cancel(orchestrator_id, id) do
@@ -285,6 +312,32 @@ defmodule RepoBuilder.Orchestrator.Queue do
     end
   end
 
+  def handle_call(:request_compaction, _from, %State{} = state) do
+    # Arm rehydrate-on-resume + the post-compact continuation, then schedule the `/compact`
+    # turn. Called mid-turn (the brain compacts during its turn), so the compact item is
+    # normally appended and runs when the current turn drains; if idle it starts now.
+    item = build_item(compact_prompt(), :compact)
+    state = %{state | rehydrate_owed?: true, auto_continue_after_compact?: true}
+
+    state =
+      if idle?(state) do
+        case start_item(state, item) do
+          {:started, agent_id, state} ->
+            log(state, "compact_self", "started compaction turn #{agent_id}")
+            state
+
+          {:error, _reason, state} ->
+            state
+        end
+      else
+        log(state, "compact_self", "queued compaction turn")
+        %{state | queue: :queue.in(item, state.queue)}
+      end
+
+    broadcast(state)
+    {:reply, :ok, state}
+  end
+
   def handle_call({:cancel, id}, _from, %State{} = state) do
     list = :queue.to_list(state.queue)
 
@@ -310,7 +363,12 @@ defmodule RepoBuilder.Orchestrator.Queue do
     state = demonitor_worker(state, worker_id)
     ref = Process.monitor(pid)
     workers = Map.put(state.workers, worker_id, %{ref: ref, saw_terminal?: false})
-    {:noreply, %{state | workers: workers}}
+    # A fresh dispatch is a NEW work cycle (issue quiescent-worker-reengages-orchestrator):
+    # drop the worker from the dedup set so its next idle/terminal can re-engage the leader
+    # again. Without this, a worker re-dispatched after an idle/terminal follow-up stays
+    # stranded on cycle ≥ 2 — a latent gap that also affected the terminal path.
+    seen = MapSet.delete(state.seen_worker_ids, worker_id)
+    {:noreply, %{state | workers: workers, seen_worker_ids: seen}}
   end
 
   def handle_cast({:monitor_worker, _worker_id, _pid}, %State{} = state), do: {:noreply, state}
@@ -321,9 +379,17 @@ defmodule RepoBuilder.Orchestrator.Queue do
         %State{current: {_pid, ref, _id}} = state
       ) do
     # The in-flight turn finished dispatching (Server stopped on Done/Error). Advance,
-    # then honour any holding-pattern resume owed from a mid-turn worker return.
-    state = %{state | current: nil}
-    state = state |> advance() |> maybe_consume_pending_resume()
+    # then honour any holding-pattern resume owed from a mid-turn worker return, and — when
+    # the finished turn was a `/compact` — the post-compaction rehydrate continuation.
+    finished_kind = state.current_kind
+    state = %{state | current: nil, current_kind: nil}
+
+    state =
+      state
+      |> advance()
+      |> maybe_consume_pending_resume()
+      |> maybe_continue_after_compact(finished_kind)
+
     broadcast(state)
     {:noreply, state}
   end
@@ -385,15 +451,119 @@ defmodule RepoBuilder.Orchestrator.Queue do
   @spec start_item(State.t(), item()) ::
           {:started, String.t(), State.t()} | {:error, term(), State.t()}
   defp start_item(%State{} = state, item) do
+    # Rehydrate-on-resume: seed the first non-compact turn after a compaction with the
+    # workstream index so the brain wakes oriented (no-op when no active workstreams).
+    {item, state} = maybe_seed_rehydrate(state, item)
+
     case state.starter.(state.orchestrator_id, item.prompt) do
       {:ok, pid, agent_id} ->
         ref = Process.monitor(pid)
-        {:started, agent_id, %{state | current: {pid, ref, agent_id}}}
+        # A `/compact` turn arms the rehydrate seed for the NEXT turn (covers operator
+        # `/compact` too, not just `compact_self`).
+        state = if compact_turn?(item), do: %{state | rehydrate_owed?: true}, else: state
+        {:started, agent_id, %{state | current: {pid, ref, agent_id}, current_kind: item.kind}}
 
       {:error, reason} ->
         log(state, "error", "turn failed to start: #{inspect(reason)}")
         {:error, reason, state}
     end
+  end
+
+  # Prepend the compact workstream index to the next non-compact turn after a compaction, then
+  # clear the owed flag. The compact turn itself is skipped (it is the trigger). When there are
+  # no active workstreams the seed is empty, so the prompt is unchanged (back-compat).
+  @spec maybe_seed_rehydrate(State.t(), item()) :: {item(), State.t()}
+  defp maybe_seed_rehydrate(%State{rehydrate_owed?: true} = state, %{kind: kind} = item)
+       when kind != :compact do
+    case rehydrate_seed(state.orchestrator_id) do
+      "" -> {item, %{state | rehydrate_owed?: false}}
+      seed -> {%{item | prompt: seed <> "\n\n" <> item.prompt}, %{state | rehydrate_owed?: false}}
+    end
+  end
+
+  defp maybe_seed_rehydrate(%State{} = state, item), do: {item, state}
+
+  # After a `/compact` turn finishes, auto-start ONE continuation turn so the brain resumes
+  # from its rehydrated workstream index without needing an operator message. Skipped when an
+  # operator/next turn already drained (it carries the seed instead), or when there are no
+  # active workstreams (nothing to rehydrate — back-compat).
+  @spec maybe_continue_after_compact(State.t(), kind() | nil) :: State.t()
+  defp maybe_continue_after_compact(%State{auto_continue_after_compact?: true} = state, :compact) do
+    state = %{state | auto_continue_after_compact?: false}
+
+    if idle?(state) and has_active_workstreams?(state.orchestrator_id) do
+      item = build_item(compact_continue_prompt(), :auto_resume)
+
+      case start_item(state, item) do
+        {:started, agent_id, state} ->
+          log(state, "rehydrate", "post-compaction resume #{agent_id}")
+          state
+
+        {:error, _reason, state} ->
+          state
+      end
+    else
+      state
+    end
+  end
+
+  defp maybe_continue_after_compact(%State{} = state, _kind), do: state
+
+  @spec compact_prompt() :: String.t()
+  defp compact_prompt, do: "/compact"
+
+  @spec compact_continue_prompt() :: String.t()
+  defp compact_continue_prompt,
+    do:
+      "Resuming after compacting your context. Re-read your workstream index below and " <>
+        "continue advancing the ready workstream(s)."
+
+  @spec compact_turn?(item()) :: boolean()
+  defp compact_turn?(%{kind: :compact}), do: true
+  defp compact_turn?(%{prompt: prompt}), do: String.trim(prompt) == compact_prompt()
+
+  @spec has_active_workstreams?(Ecto.UUID.t()) :: boolean()
+  defp has_active_workstreams?(orchestrator_id) do
+    orchestrator_id
+    |> Workstreams.list_workstreams()
+    |> Enum.any?(&(&1.status in [:running, :blocked]))
+  rescue
+    _error -> false
+  end
+
+  # The compact workstream index seeded into a post-compaction turn (orchestration-adw-loop).
+  # "" when no active workstreams, so the seed is a no-op for a single-track orchestrator.
+  @spec rehydrate_seed(Ecto.UUID.t()) :: String.t()
+  defp rehydrate_seed(orchestrator_id) do
+    rows =
+      orchestrator_id
+      |> Workstreams.list_workstreams()
+      |> Enum.filter(&(&1.status in [:running, :blocked]))
+
+    case rows do
+      [] ->
+        ""
+
+      rows ->
+        lines = Enum.map_join(rows, "\n", &rehydrate_line/1)
+
+        """
+        [Memory rehydration — your durable workstreams survived compaction]
+        #{lines}
+        Re-read get_workstream(id) for the one you advance next, then continue from its next_action.
+        """
+        |> String.trim()
+    end
+  rescue
+    _error -> ""
+  end
+
+  @spec rehydrate_line(Workstreams.index_row()) :: String.t()
+  defp rehydrate_line(row) do
+    stage = if row.current_stage, do: to_string(row.current_stage), else: "—"
+
+    "- #{row.title} (#{row.id}) [#{row.status}] phase #{row.phase} stage #{stage} — " <>
+      "next: #{row.next_action}"
   end
 
   # Holding pattern (event-driven, coalesced single-resume): a worker returned.
@@ -820,6 +990,22 @@ defmodule RepoBuilder.Orchestrator.Queue do
   defp auto_resume_prompt(_orchestrator_id, %{resume_prompt: prompt}) when is_binary(prompt),
     do: prompt
 
+  # The idle-demotion flavor (issue quiescent-worker-reengages-orchestrator): a dispatched
+  # worker went quiet and was soft-demoted `:running → :idle` WITHOUT a clean terminal. Frame
+  # the resume so the leader harvests the stranded output and decides next steps, rather than
+  # the generic "completed successfully" wording (which would imply a clean finish). The
+  # worker is still ALIVE + resumable, so `command_agent` re-engages it in place.
+  defp auto_resume_prompt(orchestrator_id, %{idle?: true} = info) do
+    name = Map.get(info, :name) || "a worker"
+
+    base =
+      "Worker #{name} went IDLE after producing output (it did not emit a clean completion). " <>
+        "Review its work and decide next steps: harvest its report, resume it via " <>
+        "command_agent if more is needed, or move on."
+
+    prepend_resume_context(orchestrator_id, info, base)
+  end
+
   # The generic worker-return resume, now SEEDED WITH INTENT (self-healing Phase 3): when a
   # goal is set, lead with the goal + definition-of-done + last progress so the leader resumes
   # reconciling against the ledger instead of re-deriving intent from CLI memory.
@@ -831,7 +1017,39 @@ defmodule RepoBuilder.Orchestrator.Queue do
       "Worker #{name} #{outcome} and returned. Review its work and decide the next steps " <>
         "(report back, dispatch follow-up work, or stop)."
 
-    prepend_goal_context(orchestrator_id, base)
+    prepend_resume_context(orchestrator_id, info, base)
+  end
+
+  # Workstream-tagged return routing (orchestration-adw-loop): when the returning worker was
+  # advancing a workstream, lead the resume with THAT workstream's title + next_action so the
+  # brain resumes the right scratchpad. Falls back to the single-goal ledger context otherwise.
+  @spec prepend_resume_context(Ecto.UUID.t(), map(), String.t()) :: String.t()
+  defp prepend_resume_context(orchestrator_id, info, base) do
+    case workstream_resume_context(orchestrator_id, info) do
+      nil -> prepend_goal_context(orchestrator_id, base)
+      header -> header <> "\n" <> base
+    end
+  end
+
+  # The header naming the worker's tagged workstream, or nil when untagged / unresolvable.
+  @spec workstream_resume_context(Ecto.UUID.t(), map()) :: String.t() | nil
+  defp workstream_resume_context(orchestrator_id, info) do
+    case Map.get(info, :workstream_id) do
+      id when is_binary(id) ->
+        case Workstreams.get_workstream(orchestrator_id, id) do
+          {:ok, record} ->
+            "WORKSTREAM: #{record.title} (#{record.id})\n" <>
+              "STATUS: #{record.status}, next: #{record.next_action}"
+
+          {:error, _reason} ->
+            nil
+        end
+
+      _absent ->
+        nil
+    end
+  rescue
+    _error -> nil
   end
 
   @spec prepend_goal_context(Ecto.UUID.t(), String.t()) :: String.t()

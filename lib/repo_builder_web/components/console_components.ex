@@ -1048,6 +1048,117 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     """
   end
 
+  # --- workstreams panel (orchestration-adw-loop) ---------------------------
+
+  attr :workstreams, :list,
+    default: [],
+    doc: "the Orchestrator.Workstreams.list_records/1 list (full records), or []"
+
+  attr :context_tokens, :integer, default: 0, doc: "the brain's latest-turn context occupancy"
+
+  @doc """
+  The Workstreams panel (orchestration-adw-loop): one row per workstream → its phases → four
+  stage chips (spec|implement|test|review), the current phase/stage highlighted, an overall
+  done/total count, and the brain's context occupancy. Renders nothing when there are no
+  workstreams (back-compatible).
+  """
+  @spec workstreams_panel(map()) :: Phoenix.LiveView.Rendered.t()
+  def workstreams_panel(assigns) do
+    ~H"""
+    <div
+      :if={@workstreams != []}
+      id="workstreams-panel"
+      class="space-y-2 border-t px-3 py-2 text-[0.7rem]"
+      style="border-color: var(--cns-border)"
+    >
+      <div class="flex items-center justify-between">
+        <span class="font-semibold" style="color: var(--cns-text)">Workstreams</span>
+        <span id="workstreams-context" class="cns-chip" title="brain context occupancy">
+          ctx {@context_tokens}
+        </span>
+      </div>
+      <div
+        :for={ws <- @workstreams}
+        id={"workstream-#{ws.id}"}
+        class="space-y-1 rounded px-2 py-1"
+        style="background: var(--cns-surface-2)"
+      >
+        <div class="flex items-center gap-2">
+          <span class="font-semibold" style="color: var(--cns-text)">{ws.title}</span>
+          <span class="cns-chip">{to_string(ws.status)}</span>
+          <span class="cns-chip">{workstream_done_count(ws)}</span>
+        </div>
+        <div :if={ws.next_action} style="color: var(--cns-text-2)">next: {ws.next_action}</div>
+        <div
+          :for={phase <- ws.phases}
+          id={"workstream-#{ws.id}-phase-#{phase.position}"}
+          class="flex items-center gap-1"
+          data-phase-status={to_string(phase.status)}
+        >
+          <span
+            class="w-28 shrink-0 truncate"
+            style={phase_label_style(phase, ws)}
+            title={phase.title}
+          >
+            {phase.position}. {phase.title}
+          </span>
+          <span
+            :for={stage <- ~w(spec implement test review)}
+            id={"workstream-#{ws.id}-phase-#{phase.position}-#{stage}"}
+            class="cns-chip"
+            data-stage-status={stage_status(phase, stage)}
+            style={stage_chip_style(phase, stage)}
+          >
+            {stage_glyph(stage)}
+          </span>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  # "done/total" phases completed for a workstream. Inference-only spec — the success typing
+  # narrows below a hand-written `map()`/`String.t()` (the record always carries `:phases`).
+  defp workstream_done_count(%{phases: phases}) do
+    done = Enum.count(phases, &(&1.status == :done))
+    "#{done}/#{length(phases)}"
+  end
+
+  # Highlight the workstream's CURRENT phase (the one at current_phase_position).
+  @spec phase_label_style(map(), map()) :: String.t()
+  defp phase_label_style(%{position: position}, %{current_phase_position: position}),
+    do: "color: var(--cns-text); font-weight: 600"
+
+  defp phase_label_style(_phase, _ws), do: "color: var(--cns-text-2)"
+
+  # One stage's recorded status for this phase: "passed"/"failed"/"blocked" from the JSONB
+  # stages map, "current" when it is the phase's active stage, else "pending".
+  @spec stage_status(map(), String.t()) :: String.t()
+  defp stage_status(phase, stage) do
+    case get_in(phase.stages, [stage, "status"]) do
+      status when is_binary(status) -> status
+      _ -> if to_string(phase.current_stage) == stage, do: "current", else: "pending"
+    end
+  end
+
+  @spec stage_chip_style(map(), String.t()) :: String.t()
+  defp stage_chip_style(phase, stage) do
+    case stage_status(phase, stage) do
+      "passed" -> "background: #2f7d4f; color: #fff"
+      "failed" -> "background: #b23b3b; color: #fff"
+      "blocked" -> "background: #8a6d1f; color: #fff"
+      "current" -> "outline: 1px solid var(--cns-accent); color: var(--cns-text)"
+      _ -> "color: var(--cns-text-2)"
+    end
+  end
+
+  @spec stage_glyph(String.t()) :: String.t()
+  defp stage_glyph("spec"), do: "S"
+  defp stage_glyph("implement"), do: "I"
+  defp stage_glyph("test"), do: "T"
+  defp stage_glyph("review"), do: "R"
+  defp stage_glyph(other), do: other
+
   # --- orchestrator message queue strip -------------------------------------
 
   attr :busy?, :boolean, default: false, doc: "a turn is currently in flight"

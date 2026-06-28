@@ -186,6 +186,96 @@ defmodule RepoBuilder.Orchestrator.QueueHoldingPatternTest do
     assert prompt =~ "w1"
   end
 
+  test "an idle-flavored signal enqueues exactly one review-flavored resume when idle" do
+    enable_auto_resume()
+    {id, pid} = start_queue(controllable_starter(self()))
+
+    worker_id = Ecto.UUID.generate()
+
+    send(
+      pid,
+      {:worker_terminal, %{worker_id: worker_id, name: "mech-builder", ok?: true, idle?: true}}
+    )
+
+    assert_receive {:turn_started, prompt, turn}, 1_000
+    # The idle flavor — review/harvest, NOT the generic "completed successfully".
+    assert prompt =~ "mech-builder"
+    assert prompt =~ "IDLE"
+    assert prompt =~ "Review"
+    refute prompt =~ "completed successfully"
+
+    finish_turn(turn)
+    refute_receive {:turn_started, _prompt, _}, 200
+    assert %{busy?: false, depth: 0} = Queue.snapshot(id)
+  end
+
+  test "an idle-flavored mid-turn signal coalesces to one pending resume" do
+    enable_auto_resume()
+    {id, pid} = start_queue(controllable_starter(self()))
+
+    assert {:ok, :started, _} = Queue.enqueue(id, "operator")
+    assert_receive {:turn_started, "operator", turn}, 1_000
+
+    worker_id = Ecto.UUID.generate()
+    send(pid, {:worker_terminal, %{worker_id: worker_id, name: "idler", ok?: true, idle?: true}})
+    refute_receive {:turn_started, _prompt, _}, 200
+
+    finish_turn(turn)
+    assert_receive {:turn_started, prompt, _resume}, 1_000
+    assert prompt =~ "idler"
+    assert prompt =~ "IDLE"
+  end
+
+  test "a holding signal is still routed to the holding resume, not the idle flavor" do
+    enable_auto_resume()
+    {_id, pid} = start_queue(controllable_starter(self()))
+
+    worker_id = Ecto.UUID.generate()
+
+    send(
+      pid,
+      {:worker_terminal,
+       %{
+         worker_id: worker_id,
+         name: "blocked-worker",
+         ok?: true,
+         holding?: true,
+         holding_reason: "waiting on login"
+       }}
+    )
+
+    assert_receive {:turn_started, prompt, _turn}, 1_000
+    assert prompt =~ "blocked-worker"
+    assert prompt =~ "HOLDING"
+    refute prompt =~ "went IDLE"
+  end
+
+  test "a re-dispatched worker can re-engage again after a prior idle follow-up" do
+    enable_auto_resume()
+    {id, pid} = start_queue(controllable_starter(self()))
+
+    worker_id = Ecto.UUID.generate()
+    send(pid, {:worker_terminal, %{worker_id: worker_id, name: "w1", ok?: true, idle?: true}})
+    assert_receive {:turn_started, _prompt, turn1}, 1_000
+    finish_turn(turn1)
+
+    # A duplicate idle signal within the same context is suppressed (dedup).
+    send(pid, {:worker_terminal, %{worker_id: worker_id, name: "w1", ok?: true, idle?: true}})
+    refute_receive {:turn_started, _prompt, _}, 200
+
+    # Re-dispatch the SAME worker — a fresh work cycle clears it from the dedup set.
+    redispatched = spawn(fn -> receive(do: (:stop -> :ok)) end)
+    :ok = Queue.monitor_worker(id, worker_id, redispatched)
+
+    # Its next idle/terminal can re-engage the orchestrator again.
+    send(pid, {:worker_terminal, %{worker_id: worker_id, name: "w1", ok?: true, idle?: true}})
+    assert_receive {:turn_started, prompt, _turn2}, 1_000
+    assert prompt =~ "w1"
+    assert prompt =~ "IDLE"
+
+    send(redispatched, :stop)
+  end
+
   test "different worker_ids are not deduped" do
     enable_auto_resume()
     {_id, pid} = start_queue(controllable_starter(self()))

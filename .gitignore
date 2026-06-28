@@ -74,3 +74,8 @@ __pycache__/
 
 # Forge generation scratch workspaces (forge-meta-artifact-generation)
 /priv/forge_scratch/
+
+# Local app secret key — must never be committed.
+/.secret_key
+# understand-anything analysis artifacts.
+/.understand-anything/

@@ -66,7 +66,12 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
           "type" => "object",
           "properties" => %{
             "name" => %{"type" => "string", "description" => "Target worker name."},
-            "prompt" => %{"type" => "string", "description" => "The task to run."}
+            "prompt" => %{"type" => "string", "description" => "The task to run."},
+            "workstream" => %{
+              "type" => "string",
+              "description" =>
+                "Optional workstream id or title this dispatch advances. Tags the worker so its return resumes the right workstream scratchpad (spec-driven phased orchestration)."
+            }
           },
           "required" => ["name", "prompt"]
         }
@@ -480,6 +485,170 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
           },
           "required" => ["op"]
         }
+      },
+      %{
+        name: "record_reflection",
+        description:
+          "Bank a durable verbal lesson you learned this run into your project memory so " <>
+            "the NEXT run for this project starts ahead. Use it the moment you learn " <>
+            "something generalizable (a wasted step, a non-obvious gotcha, a workflow that " <>
+            "worked) — don't wait for `report_complete`. `lesson` is one or two sentences, " <>
+            "imperative and concrete. Optional `goal` ties it to what you were driving " <>
+            "(defaults to your active goal). Persisted, project-scoped, and injected into " <>
+            "future runs' prompts.",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "lesson" => %{
+              "type" => "string",
+              "description" =>
+                "The lesson to carry forward (imperative, concrete, 1–2 sentences)."
+            },
+            "goal" => %{
+              "type" => "string",
+              "description" =>
+                "Optional goal this lesson came from (defaults to your active goal)."
+            }
+          },
+          "required" => ["lesson"]
+        }
+      },
+      %{
+        name: "create_workstream",
+        description:
+          "Create a durable WORKSTREAM — an independent objective you deliver as right-sized " <>
+            "phases (spec→implement→test→review). A workstream is your EXTERNAL MEMORY: its " <>
+            "goal/definition-of-done and per-phase state persist across turns and a restart, so " <>
+            "you can hold several in parallel and `compact_self` safely. Returns its " <>
+            "`workstream_id`. Next: spawn the `work-decomposer` and call `plan_phases`.",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "title" => %{"type" => "string", "description" => "Short workstream title."},
+            "goal" => %{"type" => "string", "description" => "The objective to deliver."},
+            "definition_of_done" => %{
+              "type" => "string",
+              "description" => "Concrete, checkable completion criteria."
+            }
+          },
+          "required" => ["title", "goal"]
+        }
+      },
+      %{
+        name: "plan_phases",
+        description:
+          "Persist the work-decomposer's right-sized PHASE breakdown for a workstream. Each " <>
+            "phase is delivered spec→implement→test→review and sized so ONE worker can carry it " <>
+            "without exhausting its context. Replaces any existing phases (a re-plan); phase 1 " <>
+            "starts running at the spec stage. `workstream` selects by id or title.",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "workstream" => %{
+              "type" => "string",
+              "description" => "Workstream id or title."
+            },
+            "phases" => %{
+              "type" => "array",
+              "description" => "Ordered phases (by dependency).",
+              "items" => %{
+                "type" => "object",
+                "properties" => %{
+                  "title" => %{"type" => "string"},
+                  "description" => %{"type" => "string"},
+                  "definition_of_done" => %{"type" => "string"}
+                },
+                "required" => ["title"]
+              }
+            }
+          },
+          "required" => ["workstream", "phases"]
+        }
+      },
+      %{
+        name: "record_stage",
+        description:
+          "Record the CURRENT phase's stage outcome and ADVANCE the machine. VERIFY first with " <>
+            "`inspect_repo` — do not trust a worker's self-report. On `passed` the stage " <>
+            "advances (spec→implement→test→review→done); a passed review completes the phase and " <>
+            "promotes the next one. A `failed` review enters the fix branch (re-review after the " <>
+            "fix); `blocked` blocks the phase. Pass the spec stage's `spec_path` as `artifact` so " <>
+            "`get_workstream` can always reconstruct what remains.",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "workstream" => %{"type" => "string", "description" => "Workstream id or title."},
+            "stage" => %{
+              "type" => "string",
+              "enum" => ["spec", "implement", "test", "review"],
+              "description" => "Which stage of the current phase this outcome is for."
+            },
+            "outcome" => %{
+              "type" => "string",
+              "enum" => ["passed", "failed", "blocked"],
+              "description" => "The verified outcome."
+            },
+            "artifact" => %{
+              "type" => "string",
+              "description" =>
+                "Stage artifact, e.g. the `specs/…md` path for the spec stage (becomes spec_path)."
+            },
+            "worker" => %{"type" => "string", "description" => "Worker that ran the stage."},
+            "note" => %{"type" => "string", "description" => "One-line note for this stage."}
+          },
+          "required" => ["workstream", "stage", "outcome"]
+        }
+      },
+      %{
+        name: "list_workstreams",
+        description:
+          "Read your durable MEMORY INDEX — one compact row per workstream (id, title, status, " <>
+            "phase k/n, current stage, next_action, stall_count). Call this at the START of every " <>
+            "turn to re-orient, then `get_workstream` the one you're about to advance.",
+        input_schema: %{"type" => "object", "properties" => %{}, "required" => []}
+      },
+      %{
+        name: "get_workstream",
+        description:
+          "Read the FULL rehydration record for one workstream: goal/definition-of-done, every " <>
+            "phase with its `spec_path`, completed vs remaining stages, the current pointer, and " <>
+            "the single `next_action`. This is how you reconstruct enough state to continue after " <>
+            "compaction. `workstream` selects by id or title.",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "workstream" => %{"type" => "string", "description" => "Workstream id or title."}
+          },
+          "required" => ["workstream"]
+        }
+      },
+      %{
+        name: "close_workstream",
+        description:
+          "Close a workstream `done` (objective delivered + verified) or `abandoned` (dropped). " <>
+            "`workstream` selects by id or title.",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "workstream" => %{"type" => "string", "description" => "Workstream id or title."},
+            "status" => %{
+              "type" => "string",
+              "enum" => ["done", "abandoned"],
+              "description" => "Closing status."
+            }
+          },
+          "required" => ["workstream", "status"]
+        }
+      },
+      %{
+        name: "compact_self",
+        description:
+          "Compact your OWN context window. Your workstreams are durable external memory, so " <>
+            "compacting is SAFE — the platform reseeds the next turn with your `list_workstreams` " <>
+            "index (rehydrate-on-resume) and you wake re-oriented. Use it when `report_cost` shows " <>
+            "high context usage instead of degrading or stalling. Returns once compaction is " <>
+            "scheduled; in-flight workers keep running and return by workstream.",
+        input_schema: %{"type" => "object", "properties" => %{}, "required" => []}
       }
     ]
   end

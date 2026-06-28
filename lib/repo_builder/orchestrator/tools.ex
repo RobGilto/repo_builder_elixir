@@ -40,8 +40,10 @@ defmodule RepoBuilder.Orchestrator.Tools do
     Orchestrator,
     Queue,
     Reflections,
+    Server,
     Template,
-    Templates
+    Templates,
+    Workstreams
   }
 
   alias RepoBuilder.Projects
@@ -75,6 +77,10 @@ defmodule RepoBuilder.Orchestrator.Tools do
   # (same rationale as `@worker_text_cap` — see issue-log-2389).
   @inspect_read_cap 8_000
   @inspect_files_cap 200
+
+  # Soft cap on concurrently-active workstreams (orchestration-adw-loop): past this the brain
+  # is warned (not refused) so it consolidates rather than over-committing its own context.
+  @active_workstream_cap 5
 
   # Changeset failures are stringified at the boundary (`changeset_reason/1`), so a
   # reason that escapes a tool is always an atom or a string.
@@ -142,12 +148,33 @@ defmodule RepoBuilder.Orchestrator.Tools do
   defp dispatch("record_progress", orchestrator_id, args),
     do: record_progress(orchestrator_id, args)
 
+  defp dispatch("record_reflection", orchestrator_id, args),
+    do: record_reflection(orchestrator_id, args)
+
   defp dispatch("get_ledger", orchestrator_id, _args), do: get_ledger(orchestrator_id)
 
   defp dispatch("report_complete", orchestrator_id, args),
     do: report_complete(orchestrator_id, args)
 
   defp dispatch("inspect_repo", orchestrator_id, args), do: inspect_repo(orchestrator_id, args)
+
+  # Workstream tools (spec-driven phased orchestration).
+  defp dispatch("create_workstream", orchestrator_id, args),
+    do: create_workstream(orchestrator_id, args)
+
+  defp dispatch("plan_phases", orchestrator_id, args), do: plan_phases(orchestrator_id, args)
+  defp dispatch("record_stage", orchestrator_id, args), do: record_stage(orchestrator_id, args)
+
+  defp dispatch("list_workstreams", orchestrator_id, _args),
+    do: list_workstreams(orchestrator_id)
+
+  defp dispatch("get_workstream", orchestrator_id, args),
+    do: get_workstream(orchestrator_id, args)
+
+  defp dispatch("close_workstream", orchestrator_id, args),
+    do: close_workstream(orchestrator_id, args)
+
+  defp dispatch("compact_self", orchestrator_id, _args), do: compact_self(orchestrator_id)
 
   defp dispatch(_tool, _orchestrator_id, _args), do: {:error, :unknown_tool}
 
@@ -362,6 +389,10 @@ defmodule RepoBuilder.Orchestrator.Tools do
       # handover receipt, so a later wind-down directive / retirement notice can quote it
       # verbatim (issue graceful-agent-handover). Subsequent turns leave it untouched.
       _ = maybe_record_original_ask(worker, prompt)
+      # Workstream-tagged return routing (orchestration-adw-loop): when this dispatch advances
+      # a workstream, tag the worker so its terminal carries the workstream_id and the Queue
+      # resumes the right scratchpad.
+      worker = maybe_tag_workstream(orchestrator_id, worker, args)
       session_id = worker.session_id || generate_session_id()
       _ = Agents.set_session(worker.id, session_id)
 
@@ -407,6 +438,20 @@ defmodule RepoBuilder.Orchestrator.Tools do
         {:error, reason} ->
           {:error, normalize_reason(reason)}
       end
+    end
+  end
+
+  # Tag a worker with the workstream it is advancing (orchestration-adw-loop) so its terminal
+  # routes the resume to the right scratchpad. An absent/unresolvable `workstream` leaves the
+  # worker untouched (back-compat). Returns the (possibly config-updated) worker.
+  @spec maybe_tag_workstream(Ecto.UUID.t(), Agents.Agent.t(), map()) :: Agents.Agent.t()
+  defp maybe_tag_workstream(orchestrator_id, worker, args) do
+    with ref when is_binary(ref) <- blank_to_nil(args["workstream"]),
+         {:ok, workstream} <- Workstreams.resolve(orchestrator_id, ref),
+         {:ok, updated} <- Agents.merge_config(worker, %{"workstream_id" => workstream.id}) do
+      updated
+    else
+      _ -> worker
     end
   end
 
@@ -508,6 +553,225 @@ defmodule RepoBuilder.Orchestrator.Tools do
   defp broadcast_ledger(orchestrator_id),
     do: Dashboard.broadcast_ledger_updated(orchestrator_id, Ledgers.view(orchestrator_id))
 
+  # --- workstream tools (spec-driven phased orchestration) ---
+
+  @spec create_workstream(Ecto.UUID.t(), map()) :: result()
+  defp create_workstream(orchestrator_id, args) do
+    with {:ok, title} <- fetch_string(args, "title"),
+         {:ok, goal} <- fetch_string(args, "goal") do
+      attrs = %{
+        title: title,
+        goal: goal,
+        definition_of_done: blank_to_nil(args["definition_of_done"])
+      }
+
+      case Workstreams.create_workstream(orchestrator_id, attrs) do
+        {:ok, workstream} ->
+          _ = broadcast_workstreams(orchestrator_id)
+
+          {:ok,
+           %{"status" => "created", "workstream_id" => workstream.id, "title" => workstream.title}
+           |> maybe_warn_active_cap(orchestrator_id)}
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          {:error, changeset_reason(changeset)}
+      end
+    end
+  end
+
+  @spec plan_phases(Ecto.UUID.t(), map()) :: result()
+  defp plan_phases(orchestrator_id, args) do
+    with {:ok, ref} <- fetch_string(args, "workstream"),
+         {:ok, phases} <- normalize_phases(args["phases"]) do
+      case Workstreams.plan_phases(orchestrator_id, ref, phases) do
+        {:ok, workstream} ->
+          _ = broadcast_workstreams(orchestrator_id)
+
+          {:ok,
+           %{"status" => "planned", "workstream_id" => workstream.id, "phases" => length(phases)}}
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          {:error, changeset_reason(changeset)}
+
+        {:error, reason} ->
+          {:error, normalize_reason(reason)}
+      end
+    end
+  end
+
+  @spec record_stage(Ecto.UUID.t(), map()) :: result()
+  defp record_stage(orchestrator_id, args) do
+    with {:ok, ref} <- fetch_string(args, "workstream"),
+         {:ok, stage} <- fetch_string(args, "stage"),
+         {:ok, outcome} <- fetch_string(args, "outcome") do
+      attrs = %{
+        stage: stage,
+        outcome: outcome,
+        artifact: blank_to_nil(args["artifact"]),
+        worker: blank_to_nil(args["worker"]),
+        note: blank_to_nil(args["note"])
+      }
+
+      case Workstreams.record_stage(orchestrator_id, ref, attrs) do
+        {:ok, _workstream} ->
+          _ = broadcast_workstreams(orchestrator_id)
+          {:ok, workstream_record_map(orchestrator_id, ref)}
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          {:error, changeset_reason(changeset)}
+
+        {:error, reason} ->
+          {:error, normalize_reason(reason)}
+      end
+    end
+  end
+
+  @spec list_workstreams(Ecto.UUID.t()) :: result()
+  defp list_workstreams(orchestrator_id) do
+    rows = orchestrator_id |> Workstreams.list_workstreams() |> Enum.map(&index_row_map/1)
+    {:ok, %{"workstreams" => rows, "count" => length(rows)}}
+  end
+
+  @spec get_workstream(Ecto.UUID.t(), map()) :: result()
+  defp get_workstream(orchestrator_id, args) do
+    with {:ok, ref} <- fetch_string(args, "workstream") do
+      case Workstreams.get_workstream(orchestrator_id, ref) do
+        {:ok, record} -> {:ok, record_map(record)}
+        {:error, reason} -> {:error, normalize_reason(reason)}
+      end
+    end
+  end
+
+  @spec close_workstream(Ecto.UUID.t(), map()) :: result()
+  defp close_workstream(orchestrator_id, args) do
+    with {:ok, ref} <- fetch_string(args, "workstream"),
+         {:ok, status} <- fetch_string(args, "status") do
+      case Workstreams.close_workstream(orchestrator_id, ref, status) do
+        {:ok, workstream} ->
+          _ = broadcast_workstreams(orchestrator_id)
+          {:ok, %{"status" => to_string(workstream.status), "workstream_id" => workstream.id}}
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          {:error, changeset_reason(changeset)}
+
+        {:error, reason} ->
+          {:error, normalize_reason(reason)}
+      end
+    end
+  end
+
+  # Compact the orchestrator's OWN context (the brain's durable swap): schedule a `/compact`
+  # turn on its own session; the queue then reseeds the next turn with the workstream index
+  # (rehydrate-on-resume). Delegates to the orchestrator Server (task 8).
+  @spec compact_self(Ecto.UUID.t()) :: result()
+  defp compact_self(orchestrator_id) do
+    case Server.compact_self(orchestrator_id) do
+      {:ok, :compacting} -> {:ok, %{"status" => "compacting"}}
+      {:error, reason} -> {:error, normalize_reason(reason)}
+    end
+  end
+
+  @spec broadcast_workstreams(Ecto.UUID.t()) :: :ok
+  defp broadcast_workstreams(orchestrator_id),
+    do:
+      Dashboard.broadcast_workstreams(orchestrator_id, Workstreams.list_records(orchestrator_id))
+
+  # Active-workstream cap (orchestration-adw-loop edge case): keep the brain from over-committing
+  # its own context. Past the soft cap the workstream is still created, but the result carries a
+  # warning so the brain consolidates rather than spawning yet more parallel scratchpads.
+  # Inference-only spec — the concrete map (optionally with a "warning" key) narrows below `map()`.
+  defp maybe_warn_active_cap(result, orchestrator_id) do
+    active =
+      orchestrator_id
+      |> Workstreams.list_workstreams()
+      |> Enum.count(&(&1.status in [:running, :blocked]))
+
+    if active > @active_workstream_cap do
+      Map.put(
+        result,
+        "warning",
+        "#{active} active workstreams exceeds the soft cap of #{@active_workstream_cap} — " <>
+          "finish or close some before opening more so you don't over-commit your context"
+      )
+    else
+      result
+    end
+  end
+
+  # Re-read the full record after a mutation for the tool result (string-keyed, JSON-encodable).
+  # Inference-only spec — the concrete string-keyed map narrows below a hand-written `map()`.
+  defp workstream_record_map(orchestrator_id, ref) do
+    case Workstreams.get_workstream(orchestrator_id, ref) do
+      {:ok, record} -> record_map(record)
+      {:error, _reason} -> %{"status" => "recorded"}
+    end
+  end
+
+  # Inference-only spec — the concrete string-keyed map narrows below a hand-written `map()`.
+  defp index_row_map(row) do
+    %{
+      "id" => row.id,
+      "title" => row.title,
+      "status" => to_string(row.status),
+      "phase" => row.phase,
+      "current_stage" => row.current_stage && to_string(row.current_stage),
+      "next_action" => row.next_action,
+      "stall_count" => row.stall_count
+    }
+  end
+
+  # Inference-only spec — the concrete string-keyed map narrows below a hand-written `map()`.
+  defp record_map(record) do
+    %{
+      "id" => record.id,
+      "title" => record.title,
+      "goal" => record.goal,
+      "definition_of_done" => record.definition_of_done,
+      "status" => to_string(record.status),
+      "stall_count" => record.stall_count,
+      "current_phase_position" => record.current_phase_position,
+      "next_action" => record.next_action,
+      "phases" => Enum.map(record.phases, &phase_map/1)
+    }
+  end
+
+  # Inference-only spec — the concrete string-keyed map narrows below a hand-written `map()`.
+  defp phase_map(phase) do
+    %{
+      "position" => phase.position,
+      "title" => phase.title,
+      "description" => phase.description,
+      "definition_of_done" => phase.definition_of_done,
+      "spec_path" => phase.spec_path,
+      "status" => to_string(phase.status),
+      "current_stage" => to_string(phase.current_stage),
+      "stages" => phase.stages,
+      "completed" => phase.completed,
+      "remaining" => phase.remaining
+    }
+  end
+
+  # Validate + normalize the `phases` array from the tool args into the context's phase maps.
+  @spec normalize_phases(term()) :: {:ok, [map()]} | {:error, reason()}
+  defp normalize_phases(phases) when is_list(phases) and phases != [] do
+    normalized =
+      Enum.map(phases, fn phase when is_map(phase) ->
+        %{
+          title: blank_to_nil(phase["title"]),
+          description: blank_to_nil(phase["description"]),
+          definition_of_done: blank_to_nil(phase["definition_of_done"])
+        }
+      end)
+
+    if Enum.all?(normalized, &is_binary(&1.title)),
+      do: {:ok, normalized},
+      else: {:error, "each phase requires a title"}
+  rescue
+    _error -> {:error, "phases must be an array of objects"}
+  end
+
+  defp normalize_phases(_phases), do: {:error, "phases must be a non-empty array"}
+
   @spec current_goal(Ecto.UUID.t()) :: String.t() | nil
   defp current_goal(orchestrator_id) do
     case Ledgers.current(orchestrator_id) do
@@ -531,6 +795,28 @@ defmodule RepoBuilder.Orchestrator.Tools do
       })
 
     :ok
+  end
+
+  # On-demand verbal lesson write (self-healing Phase 5 — Reflexion): the LLM-callable
+  # counterpart to the automatic completion/escalation writes, so a lesson learned MID-run
+  # can be banked instead of lost at session end. Scoped to the orchestrator's bound project;
+  # the goal defaults to the active ledger goal when omitted. Fail-soft via Reflections.record/1.
+  @spec record_reflection(Ecto.UUID.t(), map()) :: result()
+  defp record_reflection(orchestrator_id, args) do
+    with {:ok, lesson} <- fetch_string(args, "lesson") do
+      case Reflections.record(%{
+             lesson: lesson,
+             goal: blank_to_nil(args["goal"]) || current_goal(orchestrator_id),
+             orchestrator_id: orchestrator_id,
+             project_id: orchestrator_project_id(orchestrator_id)
+           }) do
+        {:ok, reflection} ->
+          {:ok, %{"status" => "recorded", "reflection_id" => reflection.id}}
+
+        :error ->
+          {:error, :reflection_not_recorded}
+      end
+    end
   end
 
   # Inference-only spec — the concrete string-keyed map narrows below a `map()` range.

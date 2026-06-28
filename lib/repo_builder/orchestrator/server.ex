@@ -82,6 +82,21 @@ defmodule RepoBuilder.Orchestrator.Server do
     end
   end
 
+  @doc """
+  Compact the orchestrator's OWN context (orchestration-adw-loop, task 8) — the brain's
+  durable swap. Analogous to `compact_agent` for workers: it schedules a `/compact` turn on
+  the orchestrator's own resumable session through the `Queue`, which then reseeds the NEXT
+  turn with the `list_workstreams` index (rehydrate-on-resume). Returns `{:ok, :compacting}`
+  once scheduled; safe to call mid-turn (the compact turn runs when the queue next drains).
+  """
+  @spec compact_self(Ecto.UUID.t()) :: {:ok, :compacting} | {:error, term()}
+  def compact_self(orchestrator_id) do
+    case Queue.request_compaction(orchestrator_id) do
+      :ok -> {:ok, :compacting}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   @spec ensure_orchestrating(RepoBuilder.Orchestrator.Orchestrator.t()) ::
           :ok | {:error, :not_orchestrator_capable}
   defp ensure_orchestrating(orchestrator) do

@@ -175,6 +175,24 @@ defmodule RepoBuilder.Dashboard do
     :ok
   end
 
+  @doc """
+  Broadcast that an orchestrator's WORKSTREAMS changed (orchestration-adw-loop) so an open
+  console re-renders the Workstreams panel. Subscribers (on `console:events`, via
+  `subscribe_events/0`) receive `{:workstreams_updated, orchestrator_id, records}` where
+  `records` is the `Orchestrator.Workstreams.list_records/1` list. Additive seam.
+  """
+  @spec broadcast_workstreams(Ecto.UUID.t(), [map()]) :: :ok
+  def broadcast_workstreams(orchestrator_id, records) do
+    _ =
+      Phoenix.PubSub.broadcast(
+        RepoBuilder.PubSub,
+        @events_topic,
+        {:workstreams_updated, orchestrator_id, records}
+      )
+
+    :ok
+  end
+
   @doc "Topic for one orchestrator's FIFO turn-queue snapshots (issue message-queue)."
   @spec orchestrator_queue_topic(Ecto.UUID.t()) :: String.t()
   def orchestrator_queue_topic(orchestrator_id), do: "orchestrator:#{orchestrator_id}:queue"
@@ -237,8 +255,11 @@ defmodule RepoBuilder.Dashboard do
   fields are absent for callers that don't track them (e.g.
   `WorkflowEngine.emit_orchestrator_resume/2`), and the Queue treats them as
   `context_tokens: 0` / `final_text: nil` / `holding?: false` — so those paths are
-  unchanged. Additive seam (issue message-queue; enriched in issue graceful-agent-handover
-  and issue holding-status-for-blocked-agents).
+  unchanged. The OPTIONAL `idle?` field (issue quiescent-worker-reengages-orchestrator)
+  marks a soft quiescence demotion (`ok?: true`, `holding?: false`): the worker went idle
+  after producing output without a clean terminal, so the Queue frames a review-flavored
+  resume rather than a generic completion. Additive seam (issue message-queue; enriched in
+  issue graceful-agent-handover and issue holding-status-for-blocked-agents).
   """
   @spec broadcast_worker_terminal(Ecto.UUID.t(), %{
           required(:worker_id) => Ecto.UUID.t(),
@@ -247,7 +268,9 @@ defmodule RepoBuilder.Dashboard do
           optional(:context_tokens) => non_neg_integer(),
           optional(:final_text) => String.t() | nil,
           optional(:holding?) => boolean(),
-          optional(:holding_reason) => String.t() | nil
+          optional(:holding_reason) => String.t() | nil,
+          optional(:idle?) => boolean(),
+          optional(:workstream_id) => Ecto.UUID.t() | nil
         }) :: :ok
   def broadcast_worker_terminal(orchestrator_id, info) do
     _ =

@@ -116,6 +116,8 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     #{worker_roles_block()}
 
     #{leader_expertise_block()}
+    #{phased_delivery_block()}
+    #{external_memory_block()}
     #{expertise_block(orchestrator)}
     #{reflections_block(orchestrator)}
     Message queue & holding pattern:
@@ -437,7 +439,9 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
       continues the worker's current work (it keeps a summary in-window).
     - At high usage (≈80%+), proactively `clear_context` any worker you're about to
       hand independent new work, `compact_agent` those continuing their current task,
-      and tell the operator they may want to run `/compact` on you.
+      and compact YOUR OWN context with `compact_self` — you no longer need to ask the
+      operator to `/compact` you; your workstreams are durable and the next turn is
+      reseeded with their index (rehydrate-on-resume).
     - GRACEFUL HANDOVER: when a worker hits its own context limit the platform winds it
       down automatically — the worker writes `ai_docs/<name>-handover.md` (a receipt of its
       original ask + what it achieved + what remains), returns a `:handover <path>` signal,
@@ -502,8 +506,65 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
       turn and you'll be re-engaged when there is work to review.
     - REPLAN on stagnation: after two no-progress turns you'll be told to REPLAN — reconsider the
       facts/plan and try a DIFFERENT approach rather than pushing the same step again.
+    - BANK LESSONS as you learn them: the moment you discover something generalizable (a wasted
+      step, a non-obvious gotcha, a workflow that worked), call `record_reflection` — don't wait
+      for `report_complete`. It is persisted per-project and primes your next run.
     - ESCALATE is the last resort: only a genuine blocker with no path forward should reach the
       away operator.
+    """
+    |> String.trim_trailing()
+  end
+
+  @doc """
+  The spec-driven phased-delivery protocol (orchestration-adw-loop). Decompose an objective
+  into a Workstream of right-sized phases, then drive each phase spec→implement→test→review
+  with a fix-on-failure branch and per-stage context hygiene. Public so it can be asserted.
+  """
+  @spec phased_delivery_block() :: String.t()
+  def phased_delivery_block do
+    """
+    Spec-driven phased delivery (per workstream):
+    - DECOMPOSE FIRST: for a non-trivial objective, `create_workstream`, then spawn the
+      `work-decomposer` subagent to break it into right-sized phases and persist them with
+      `plan_phases`. Each phase must be small enough that one worker can spec AND implement it
+      without exhausting its context.
+    - PER PHASE run the stage machine, recording each outcome with `record_stage` (VERIFY with
+      `inspect_repo` first — never trust a self-report):
+        * spec: dispatch `/feature` | `/bug` | `/chore` | `/plan` to produce a `specs/…md`,
+          then `record_stage(stage: "spec", outcome: "passed", artifact: "<spec_path>")`.
+        * implement: dispatch `/implement <spec_path>` (it STOPs without the path — always pass
+          the phase's captured `spec_path`), verify, then `record_stage("implement", "passed")`.
+        * test: dispatch `/test`, then `record_stage("test", "passed")`.
+        * review: dispatch `/review`; on failure record `review`/`failed`, dispatch the fix,
+          then re-`/review` and record `review`/`passed`. A passed review completes the phase and
+          promotes the next one automatically.
+    - CONTEXT HYGIENE per stage: use fresh role workers and `clear_context` before unrelated
+      work; if a worker hands over mid-phase, seed a fresh worker from its handover doc — the
+      phase resumes at its recorded stage.
+    - Run MULTIPLE workstreams in parallel: a single turn may advance several ready workstreams,
+      and their workers run concurrently (bounded by the live-session admission cap). Keep the
+      number of ACTIVE workstreams small (≈5) so you don't over-commit your own context.
+    """
+    |> String.trim_trailing()
+  end
+
+  @doc """
+  The external-memory & compaction protocol (orchestration-adw-loop). Treat Workstreams as the
+  brain's durable swap so its in-window context stays bounded. Public so it can be asserted.
+  """
+  @spec external_memory_block() :: String.t()
+  def external_memory_block do
+    """
+    External memory & compaction (your durable swap):
+    - Your Workstreams ARE your memory. Hold only their IDs in-window; at the START of each turn
+      call `list_workstreams` (the compact index), then `get_workstream(id)` for the one you are
+      about to advance — don't re-derive state from CLI memory.
+    - Watch `report_cost`. At high context usage call `compact_self` — it is SAFE because your
+      workstreams are durable: the platform reseeds your next turn with the `list_workstreams`
+      index (rehydrate-on-resume), so you wake re-oriented and continue. In-flight workers keep
+      running and their returns route back to the right workstream.
+    - Record the `spec_path` and every stage outcome via `record_stage` so `get_workstream` can
+      always reconstruct what's done, what remains, and the single next action after a compaction.
     """
     |> String.trim_trailing()
   end

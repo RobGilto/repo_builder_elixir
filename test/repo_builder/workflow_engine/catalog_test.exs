@@ -7,12 +7,21 @@ defmodule RepoBuilder.WorkflowEngine.CatalogTest do
 
   alias RepoBuilder.WorkflowEngine.Catalog
 
-  test "types/0 lists the three built-in workflow types" do
+  test "types/0 lists the built-in workflow types" do
     slugs = Enum.map(Catalog.types(), & &1.slug)
     assert "plan_build" in slugs
     assert "plan_build_review" in slugs
     assert "plan_build_review_fix" in slugs
-    assert length(slugs) >= 3
+    assert "spec_implement_test_review" in slugs
+    assert length(slugs) >= 4
+  end
+
+  test "spec_implement_test_review is a spec-driven phase shape with a fix branch" do
+    assert {:ok, steps} = Catalog.steps("spec_implement_test_review", "fake")
+    names = Enum.map(steps, & &1["name"])
+    assert names == ["spec", "implement", "test", "review", "fix"]
+    review = Enum.find(steps, &(&1["name"] == "review"))
+    assert review["on_failure"] == "fix"
   end
 
   test "every type carries a slug, label, and description" do

@@ -496,6 +496,7 @@ defmodule RepoBuilder.Session.Server do
     _ =
       if worker_session?(state) and not state.blocking_command? do
         demote_to_idle_quietly(state)
+        maybe_emit_worker_idle(state)
       end
 
     {:noreply, %{state | quiescence_ref: nil}}
@@ -788,7 +789,10 @@ defmodule RepoBuilder.Session.Server do
             # Holding terminal (issue holding-status-for-blocked-agents): the Queue routes a
             # holding-aware resume (no reap) when `holding?` is true.
             holding?: holding?,
-            holding_reason: holding_reason(event)
+            holding_reason: holding_reason(event),
+            # Workstream-tagged return routing (orchestration-adw-loop): the workstream this
+            # worker was advancing (nil when untagged), so the Queue resumes the right scratchpad.
+            workstream_id: worker_workstream_id(agent_id)
           })
 
         _ ->
@@ -804,6 +808,18 @@ defmodule RepoBuilder.Session.Server do
   end
 
   defp maybe_emit_worker_terminal(_event, _state), do: :ok
+
+  # The workstream this worker was tagged to advance (orchestration-adw-loop), read from its
+  # row config. Best-effort: a missing row / unset tag yields nil (untagged, back-compat).
+  @spec worker_workstream_id(Ecto.UUID.t()) :: Ecto.UUID.t() | nil
+  defp worker_workstream_id(agent_id) do
+    case Agents.get_agent(agent_id) do
+      %{config: %{"workstream_id" => id}} when is_binary(id) -> id
+      _ -> nil
+    end
+  rescue
+    _error -> nil
+  end
 
   # Resolve `{orchestrator_id, name}` for the worker-terminal broadcast, PREFERRING the
   # values captured from the spawn opts (issue worker-terminal) so re-engagement no longer
@@ -1001,6 +1017,44 @@ defmodule RepoBuilder.Session.Server do
     case Agents.set_status(id, :idle) do
       {:ok, agent} -> RepoBuilder.Dashboard.broadcast_agent_updated(agent)
       _ -> :ok
+    end
+
+    :ok
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
+
+  # Inform the owning orchestrator that a quiescent worker was soft-demoted to `:idle`
+  # (issue quiescent-worker-reengages-orchestrator). The soft demotion is otherwise a
+  # SILENT status change (only `agent_updated`); without this signal an idle orchestrator
+  # never reviews the stranded output. Reuses the holding-pattern seam the Queue already
+  # consumes — `broadcast_worker_terminal/2` → `orchestrator:<id>:workers` → auto-resume —
+  # but with an `idle?: true` flavor (`ok?: true`, `holding?: false`) so the Queue frames a
+  # "went idle after producing output — review it" resume, NOT the holding flavor and NOT a
+  # generic completion. Mirrors the shape `maybe_emit_worker_terminal/2` builds. Only fires
+  # for an orchestrator-OWNED worker (`resolve_worker_owner/1` yields an orchestrator id);
+  # an unscoped worker is a no-op. Called only where `demote_to_idle_quietly/1` runs (the
+  # `worker_session?/1` guard), so `agent_db_id` is always a binary. Fail-soft — a DB/PubSub
+  # blip must never crash the live session.
+  @spec maybe_emit_worker_idle(State.t()) :: :ok
+  defp maybe_emit_worker_idle(%State{agent_db_id: agent_id} = state) when is_binary(agent_id) do
+    case resolve_worker_owner(state) do
+      {orchestrator_id, name} when is_binary(orchestrator_id) ->
+        RepoBuilder.Dashboard.broadcast_worker_terminal(orchestrator_id, %{
+          worker_id: agent_id,
+          name: name,
+          ok?: true,
+          holding?: false,
+          idle?: true,
+          context_tokens: state.context_tokens,
+          final_text: nil,
+          holding_reason: nil
+        })
+
+      _ ->
+        :ok
     end
 
     :ok

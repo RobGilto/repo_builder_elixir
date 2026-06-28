@@ -48,6 +48,13 @@ defmodule RepoBuilder.WorkflowEngine.Catalog do
         label: "Plan → Build → Review → Fix",
         description:
           "Plan, build, review, and on a failed review branch to a fix step. The default full cycle."
+      },
+      %TypeDef{
+        slug: "spec_implement_test_review",
+        label: "Spec → Implement → Test → Review",
+        description:
+          "Spec-driven phase shape (orchestration-adw-loop): write the spec, implement it, test, " <>
+            "then review with a fix-on-failure branch — one ADW mirroring a workstream phase."
       }
     ]
   end
@@ -128,6 +135,24 @@ defmodule RepoBuilder.WorkflowEngine.Catalog do
          "name" => "review",
          "harness" => harness,
          "prompt_template" => "Review the build: {{build}}",
+         "on_success" => "done",
+         "on_failure" => "fix"
+       },
+       step("fix", harness, "Fix the issues found: {{review}}", "done")
+     ]}
+  end
+
+  def steps("spec_implement_test_review", harness) do
+    {:ok,
+     [
+       step("spec", harness, "Write the spec for: {{input}}", "implement"),
+       step("implement", harness, "Implement from the spec: {{spec}}", "test"),
+       step("test", harness, "Test the implementation: {{implement}}", "review"),
+       # review branches to `fix` on failure, else succeeds to `:done`.
+       %{
+         "name" => "review",
+         "harness" => harness,
+         "prompt_template" => "Review the work: {{test}}",
          "on_success" => "done",
          "on_failure" => "fix"
        },
