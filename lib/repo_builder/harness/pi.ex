@@ -21,7 +21,10 @@ defmodule RepoBuilder.Harness.Pi do
   @behaviour RepoBuilder.Harness
   @behaviour RepoBuilder.Harness.Orchestrating
 
+  alias RepoBuilder.ExternalApis
+  alias RepoBuilder.ExternalApis.Provisioning
   alias RepoBuilder.Harness.{Event, McpTools, Pricing}
+  alias RepoBuilder.Orchestrator.ToolCatalog
 
   # The pi extension that registers the orchestrator tools (pi ships no MCP, §10).
   @pi_extension Path.join(:code.priv_dir(:repo_builder), "orchestrator/pi_extension")
@@ -37,6 +40,16 @@ defmodule RepoBuilder.Harness.Pi do
     # must not touch the filesystem/shell itself — all real work goes to worker agents
     # via the bound meta-tools. Workers NEVER hit `orchestrator_spawn/2`, so they keep
     # pi's built-in coding tools.
+    # pi ships no MCP, so the extension's tool manifest is DERIVED from the single
+    # source of truth (`ToolCatalog.pi_manifest_json/0`) and written to the session
+    # cwd, then handed to the extension via `PI_ORCH_TOOLS_PATH` (absolute path —
+    # the extension reads it at load). Mirrors how Claude writes `.mcp.json`, and
+    # keeps the pi tool surface from drifting from the MCP `tools/list` path.
+    cwd = Path.expand(ctx.cwd)
+    tools_path = Path.join(cwd, ".pi-orch-tools.json")
+    File.mkdir_p!(cwd)
+    File.write!(tools_path, ToolCatalog.pi_manifest_json())
+
     args =
       ["-e", @pi_extension, "--no-builtin-tools"] ++
         [system_prompt_flag(ctx.system_prompt_mode), ctx.system_prompt] ++
@@ -44,7 +57,8 @@ defmodule RepoBuilder.Harness.Pi do
 
     env = [
       {"PI_ORCH_BASE_URL", "#{ctx.mcp_base_url}/orchestrator/#{ctx.orchestrator_id}/mcp"},
-      {"PI_ORCH_TOKEN", ctx.token}
+      {"PI_ORCH_TOKEN", ctx.token},
+      {"PI_ORCH_TOOLS_PATH", tools_path}
     ]
 
     {args, env}
@@ -111,16 +125,22 @@ defmodule RepoBuilder.Harness.Pi do
     if orchestrator_config?(config) do
       []
     else
-      case McpTools.enabled(config["tools"]) do
-        [] ->
-          ["--no-extensions"]
+      # MERGE the static firecrawl catalog with the dynamic, operator-registered API
+      # registry (issue-external-api-mcp-provisioning), scoped to the worker's project.
+      # pi has no `--allowedTools`, so only the servers fragment merges. Both empty ⇒
+      # `--no-extensions` (a plain worker is byte-for-byte unchanged).
+      tools = McpTools.enabled(config["tools"])
+      apis = ExternalApis.fetch_by_names(opts[:project_id], config["apis"] || [])
+      servers = Map.merge(McpTools.mcp_servers(tools), Provisioning.mcp_servers(apis))
 
-        tools ->
-          cwd = Path.expand(opts.cwd)
-          path = Path.join(cwd, ".pi-mcp.json")
-          File.mkdir_p!(cwd)
-          File.write!(path, Jason.encode!(%{"mcpServers" => McpTools.mcp_servers(tools)}))
-          ["--mcp-config", path]
+      if servers == %{} do
+        ["--no-extensions"]
+      else
+        cwd = Path.expand(opts.cwd)
+        path = Path.join(cwd, ".pi-mcp.json")
+        File.mkdir_p!(cwd)
+        File.write!(path, Jason.encode!(%{"mcpServers" => servers}))
+        ["--mcp-config", path]
       end
     end
   end

@@ -53,6 +53,12 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
               "items" => %{"type" => "string", "enum" => ["firecrawl"]},
               "description" =>
                 "Grant MCP research tools to this worker, e.g. firecrawl web scrape/search/crawl/map/extract. Grant only to workers that need live web access. Omit for none."
+            },
+            "apis" => %{
+              "type" => "array",
+              "items" => %{"type" => "string"},
+              "description" =>
+                "Names of registered external APIs/MCP servers (see `list_apis`) to PROVISION to this worker. The worker gains the server in its `.mcp.json`, the vault secret in its env, and the API's usage instructions in its charter. You cannot call these tools yourself — only transfer them to a worker."
             }
           },
           "required" => ["name"]
@@ -71,6 +77,12 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
               "type" => "string",
               "description" =>
                 "Optional workstream id or title this dispatch advances. Tags the worker so its return resumes the right workstream scratchpad (spec-driven phased orchestration)."
+            },
+            "apis" => %{
+              "type" => "array",
+              "items" => %{"type" => "string"},
+              "description" =>
+                "Names of registered external APIs/MCP servers (see `list_apis`) to PROVISION to this worker for this dispatch. Merges with any APIs already granted at create time."
             }
           },
           "required" => ["name", "prompt"]
@@ -79,6 +91,12 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       %{
         name: "list_agents",
         description: "List all worker agents owned by this orchestrator and their status.",
+        input_schema: %{"type" => "object", "properties" => %{}}
+      },
+      %{
+        name: "list_apis",
+        description:
+          "List the external APIs/MCP servers registered for this orchestrator (platform + project scope) that you may PROVISION to a worker. Returns each registration's name/scope/transport/description/instructions/doc_urls — never any secret. You CANNOT call these tools yourself — pass their names in `apis` to `create_agent`/`command_agent` to transfer them to a worker.",
         input_schema: %{"type" => "object", "properties" => %{}}
       },
       %{
@@ -656,4 +674,21 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
   @doc "The set of tool names this catalog advertises."
   @spec names() :: [String.t()]
   def names, do: Enum.map(tools(), & &1.name)
+
+  @doc """
+  Every catalog tool serialized into the pi extension's `registerTool` shape —
+  `%{name:, description:, parameters:}` where `parameters` is the tool's
+  `input_schema`. Pure data; the single source the pi extension loads at runtime
+  (via `PI_ORCH_TOOLS_PATH`) so it can never drift from the MCP `tools/list` path.
+  """
+  @spec pi_manifest() :: [%{name: String.t(), description: String.t(), parameters: map()}]
+  def pi_manifest do
+    Enum.map(tools(), fn tool ->
+      %{name: tool.name, description: tool.description, parameters: tool.input_schema}
+    end)
+  end
+
+  @doc "`pi_manifest/0` encoded as JSON for writing to the pi extension's manifest file."
+  @spec pi_manifest_json() :: String.t()
+  def pi_manifest_json, do: Jason.encode!(pi_manifest())
 end
