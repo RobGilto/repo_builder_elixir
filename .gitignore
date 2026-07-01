@@ -51,6 +51,8 @@ npm-debug.log
 # Playwright MCP scratch output (screenshots/snapshots/console logs).
 /.playwright-mcp/
 /console-current-state.png
+# Playwright test/QA report artifacts (screenshots + run dirs, machine-local).
+/playwright-reports/
 
 # ADW (AI Developer Workflow) runtime artifacts — agent working dirs, isolated
 # git worktrees, and Python bytecode caches. Generated per run, never committed.
