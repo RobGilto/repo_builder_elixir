@@ -50,52 +50,6 @@ defmodule RepoBuilderWeb.DashboardComponents do
   @event_categories [:response, :tool, :thinking, :hook, :system]
 
   attr :id, :string, required: true
-
-  attr :title, :string,
-    required: true,
-    doc: "human-friendly display name (ADW type or worker name)"
-
-  attr :subtitle, :string,
-    default: nil,
-    doc: "the machine-ish worker name, shown under the title when the title is the ADW type"
-
-  attr :status, :atom, required: true, values: @statuses
-  attr :harness, :string, default: nil
-  slot :inner_block, doc: "the per-stage lanes of event squares"
-
-  @doc """
-  A standalone agent card (manual / non-workflow agents): the same card chrome as
-  `adw_card/1` (status-colored left border + header) holding per-stage lanes of event
-  squares, so every block in the ADWS view shares one visual language.
-  """
-  @spec adw_agent_card(map()) :: Phoenix.LiveView.Rendered.t()
-  def adw_agent_card(assigns) do
-    ~H"""
-    <div id={@id} class={["cns-card", "cns-card--#{@status}"]} data-run-status={@status}>
-      <div class="flex items-start justify-between">
-        <div class="flex flex-col gap-0.5">
-          <span class="cns-card__key">AGENT</span>
-          <span class="cns-card__title">{@title}</span>
-          <span :if={@subtitle} class="text-[0.625rem]" style="color: var(--cns-text-2)">
-            {@subtitle}
-          </span>
-          <span class="flex items-center gap-1.5">
-            <.adw_orb active?={@status == :running} />
-            <span class={["badge", status_class(@status)]}>{@status}</span>
-            <span :if={@harness} class="text-[0.625rem]" style="color: var(--cns-text-2)">
-              {@harness}
-            </span>
-          </span>
-        </div>
-      </div>
-      <div class="mt-2 flex flex-wrap gap-3">
-        {render_slot(@inner_block)}
-      </div>
-    </div>
-    """
-  end
-
-  attr :id, :string, required: true
   attr :title, :string, required: true, doc: "human-friendly display name (never a UUID)"
   attr :type, :string, default: nil, doc: "the workflow type slug (key line)"
   attr :status, :atom, required: true, values: @statuses
@@ -179,33 +133,6 @@ defmodule RepoBuilderWeb.DashboardComponents do
     >
       <span class="cns-step-box__name">{format_step_name(@name)}</span>
       <div :if={@inner_block != []} class="cns-stage-lane__squares">
-        {render_slot(@inner_block)}
-      </div>
-    </div>
-    """
-  end
-
-  attr :id, :string, required: true
-  attr :step, :string, required: true, doc: "raw step name; `_workflow` → `Workflow`"
-  attr :status, :atom, default: nil, doc: "optional stage status for tinting/highlight"
-  attr :current?, :boolean, default: false
-  slot :inner_block, required: true, doc: "the stage's event squares"
-
-  @doc """
-  One stage lane: a labeled, status-tintable box (shares the `.cns-step-box` chrome) whose
-  body is a wrapping grid of the stage's event squares. `"_workflow"` humanizes to
-  `"Workflow"`, so non-ADW workers degrade to a single lane.
-  """
-  @spec stage_lane(map()) :: Phoenix.LiveView.Rendered.t()
-  def stage_lane(assigns) do
-    ~H"""
-    <div
-      id={@id}
-      data-step-status={@status}
-      class={["cns-step-box cns-stage-lane", @current? && "cns-step-box--current"]}
-    >
-      <span class="cns-step-box__name">{format_step_name(@step)}</span>
-      <div class="cns-stage-lane__squares">
         {render_slot(@inner_block)}
       </div>
     </div>

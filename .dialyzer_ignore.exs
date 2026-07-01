@@ -17,5 +17,6 @@
   # and RepoBuilder.Plugins.ManifestTest. Pinned to type_check 0.13.7 (latest release; no
   # newer version supports Elixir 1.20).
   {"lib/repo_builder/harness/wire.ex", :no_return},
-  {"lib/repo_builder/plugins/manifest.ex", :no_return}
+  {"lib/repo_builder/plugins/manifest.ex", :no_return},
+  {"lib/repo_builder/plugins/quality_gate.ex", :no_return}
 ]

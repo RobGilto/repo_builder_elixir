@@ -109,25 +109,32 @@ defmodule RepoBuilderWeb.TestUnifiedAdwSwimlaneCardsTest do
 
   test "event squares carry a category icon and open the detail panel on click",
        %{conn: conn} do
+    {_wf, run} = seed_run(%{name: "square-test"})
+
     {:ok, view, _html} = live(conn, ~p"/")
     to_adws(view)
 
-    agent_id = "agent-#{uniq()}"
-
+    # A tool event keyed to the run's `build` step lands as a square inside that step box
+    # of the workflow card.
     Dashboard.broadcast_event(
-      agent_id,
-      %Event.ToolCall{harness: :fake, name: "Bash", input: %{"command" => "ls"}, raw: %{}},
+      "wf-#{run.id}-build",
+      %Event.ToolCall{
+        harness: :fake,
+        name: "Bash",
+        input: %{"command" => "ls"},
+        raw: %{"adw_step" => "build"}
+      },
       7
     )
 
-    # The tool event lands as a square (🛠️ icon) inside the agent card.
-    assert wait_render(view, "swimlane-#{agent_id}")
+    # The tool event lands as a square (🛠️ icon) inside the ADW card.
+    assert wait_render(view, "cns-square--tool")
     html = render(view)
-    assert html =~ "cns-square--tool"
+    assert html =~ "workflow-#{run.id}"
     assert html =~ "🛠️"
 
     # Clicking the square opens the slide-out detail panel.
-    view |> element("#agent-cards button[phx-click=open_event]") |> render_click()
+    view |> element("#workflow-runs button[phx-click=open_event]") |> render_click()
     assert has_element?(view, "#event-detail-panel")
   end
 

@@ -35,7 +35,8 @@ defmodule RepoBuilder.Harness do
           optional(:config) => map(),
           optional(:secrets) => map(),
           optional(:price_table) => map(),
-          optional(:reasoning_effort) => reasoning_effort()
+          optional(:reasoning_effort) => reasoning_effort(),
+          optional(:project_id) => String.t() | nil
         }
 
   @typedoc "Adapter-private per-session context returned by command/1 and threaded into normalize/2."

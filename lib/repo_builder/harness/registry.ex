@@ -9,6 +9,7 @@ defmodule RepoBuilder.Harness.Registry do
   separate `:harness_adapter` key, which the runtime would never consult.
   """
 
+  alias RepoBuilder.Harness.Pi.Models
   alias RepoBuilder.Plugins.HarnessOverlay
 
   @typedoc "Open harness identity (a registry key); intentionally atom()/String.t(), not a closed union (§3 rule 5)."
@@ -71,6 +72,97 @@ defmodule RepoBuilder.Harness.Registry do
     |> Enum.filter(fn {_key, config} -> config[:orchestrating] == true end)
     |> Enum.map(fn {key, _config} -> key end)
     |> Enum.sort()
+  end
+
+  @doc """
+  Whether `model` is offered by `harness`+`provider` — the SINGLE reader for the
+  orchestrator model-consistency check (keeps the `{harness, provider, model}` triple
+  coherent so the header provider dropdown always matches the selected harness).
+
+  **Lenient by design** (§3 rule 5 / §10 — open identity): the curated `:models` lists are
+  *guidance, not a constraint* (pi/claude accept any model string), so a model the
+  registry has never heard of (e.g. a freshly-released concrete id like
+  `claude-sonnet-4-6` not yet in the alias list) is treated as **offered** rather than
+  foreign. A model is only **foreign** when it is recognizably cross-harness — i.e. it
+  appears in SOME harness's curated list (or, for the `pi` harness, the live
+  `pi --list-models` catalog) but NOT in this harness's. This is the minimal signal that
+  flags the orphan state (a `zai` model like `glm-4.6` set on a `claude` orchestrator)
+  without ever rejecting a legitimate concrete model id the registry simply hasn't
+  catalogued yet.
+
+  A blank/`nil` model is always "offered" (no-op). An unknown harness is lenient
+  (`true`) — never reject on a harness the registry doesn't recognise.
+  """
+  @spec model_offered_by_harness?(harness(), String.t() | nil, String.t() | nil) ::
+          boolean()
+  def model_offered_by_harness?(_harness, _provider, model) when model in [nil, ""], do: true
+
+  def model_offered_by_harness?(harness, provider, model) do
+    harness = to_string(harness)
+
+    cond do
+      not is_map(all()[harness]) ->
+        # Unknown harness — lenient (never reject what we can't reason about).
+        true
+
+      offered_by_harness?(harness, provider, model) ->
+        true
+
+      offered_by_any_other_harness?(harness, model) ->
+        # Recognisably cross-harness (e.g. a `zai` model on a `claude` orchestrator) —
+        # the orphan signature. Flag it so the consistency guard can react.
+        false
+
+      true ->
+        # Unknown to every curated list — assume a legitimate concrete id (lenient).
+        true
+    end
+  end
+
+  # The models `harness` offers for `provider`: the curated `:models` list, PLUS (for the
+  # `pi` harness only) the live `pi --list-models` catalog so freshly-released models the
+  # static list hasn't caught up with still count as offered for `pi`.
+  @spec offered_by_harness?(String.t(), String.t() | nil, String.t()) :: boolean()
+  defp offered_by_harness?("pi" = harness, provider, model) do
+    model in orchestrator_models(harness, provider) or
+      model in Models.list(provider)
+  end
+
+  defp offered_by_harness?(harness, provider, model) do
+    model in orchestrator_models(harness, provider)
+  end
+
+  # Whether `model` appears in ANY harness's curated list (or the pi live catalog) other
+  # than `except_harness`. Used to recognise a model that belongs to a *different*
+  # harness than the one it's set on.
+  @spec offered_by_any_other_harness?(String.t(), String.t()) :: boolean()
+  defp offered_by_any_other_harness?(except_harness, model) do
+    other_harnesses =
+      all()
+      |> Map.keys()
+      |> Enum.reject(&(&1 == except_harness))
+
+    Enum.any?(other_harnesses, fn harness ->
+      defaults = orchestrator_defaults(harness)
+
+      curated? =
+        case Map.get(defaults, :models) do
+          %{} = models ->
+            models
+            |> Map.values()
+            |> Enum.flat_map(&List.wrap/1)
+            |> Enum.member?(model)
+
+          _ ->
+            false
+        end
+
+      live_pi? =
+        harness == "pi" and
+          model in (Models.all() |> Map.values() |> List.flatten())
+
+      curated? or live_pi?
+    end)
   end
 
   @doc """

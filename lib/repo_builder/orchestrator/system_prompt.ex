@@ -9,8 +9,17 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
   alias RepoBuilder.Commands
   alias RepoBuilder.Definitions
   alias RepoBuilder.Expertise
+  alias RepoBuilder.ExternalApis
   alias RepoBuilder.Harness.Registry
-  alias RepoBuilder.Orchestrator.{Orchestrator, Reflections, Templates, ToolCatalog}
+
+  alias RepoBuilder.Orchestrator.{
+    Orchestrator,
+    Reflections,
+    SurfaceDetector,
+    Templates,
+    ToolCatalog
+  }
+
   alias RepoBuilder.Orchestrators
   alias RepoBuilder.Plugins.Activation
   alias RepoBuilder.Projects
@@ -111,12 +120,14 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     #{project_primer_block(orchestrator)}
     #{project_stack_block(orchestrator)}
     #{project_secrets_block(orchestrator)}
+    #{registered_apis_block(orchestrator)}
 
     Worker roles (data-driven from the live subagent-template registry — name workers by role):
     #{worker_roles_block()}
 
     #{leader_expertise_block()}
     #{phased_delivery_block()}
+    #{quality_gate_block()}
     #{external_memory_block()}
     #{expertise_block(orchestrator)}
     #{reflections_block(orchestrator)}
@@ -299,6 +310,42 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
        do: "- $#{name} (set; ••••#{last_four})"
 
   defp secret_line(%{name: name}), do: "- $#{name} (set)"
+
+  # Registered external APIs the orchestrator may DELEGATE to workers
+  # (issue-external-api-mcp-provisioning): name + description only (never the secret), so
+  # the brain knows what capabilities it can transfer without a `list_apis` round-trip.
+  # Empty scope ⇒ "" so the prompt is byte-identical when nothing is registered.
+  @spec registered_apis_block(Orchestrator.t()) :: String.t()
+  defp registered_apis_block(%Orchestrator{project_id: project_id}) do
+    render_apis(ExternalApis.list_in_scope_for(project_id))
+  rescue
+    _error -> ""
+  end
+
+  @spec render_apis([ExternalApis.ExternalApi.t()]) :: String.t()
+  defp render_apis([]), do: ""
+
+  defp render_apis(apis) do
+    lines = Enum.map_join(apis, "\n", &api_line/1)
+
+    """
+
+    Registered APIs you may delegate to workers:
+    #{lines}
+    You CANNOT call these tools yourself — pass their names in `apis` when you
+    `create_agent`/`command_agent` to transfer a capability to a worker (use `list_apis`
+    for the full instructions/doc URLs). The credentials live in the vault and are
+    injected only into the provisioned worker's environment — you never hold them.
+    """
+    |> String.trim_trailing()
+  end
+
+  @spec api_line(ExternalApis.ExternalApi.t()) :: String.t()
+  defp api_line(%ExternalApis.ExternalApi{name: name, description: description})
+       when is_binary(description) and description != "",
+       do: "- #{name} — #{description}"
+
+  defp api_line(%ExternalApis.ExternalApi{name: name}), do: "- #{name}"
 
   # Make the brain self-aware of its execution context (harness + provider + model).
   @spec own_harness_block(Orchestrator.t()) :: String.t()
@@ -504,6 +551,12 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     - ONE STEP per turn: drive a worker (`command_agent`), fan out a new role (`create_agent`),
       or — only once the definition of done is verified — `report_complete`. Don't poll; end your
       turn and you'll be re-engaged when there is work to review.
+    - DECLARE YOUR FOCUS before spending budget: `set_focus` names the single concrete thing you
+      are working on right now, and an unfocused scope is BLOCKED from `command_agent` /
+      `create_agent` / `start_adw`. Focus the workstream you are advancing (`set_focus` with its
+      `workstream`) before commanding a worker on it; omit `workstream` to focus yourself for
+      untagged work. Keep exactly one focus per scope; `clear_focus` only once that focus is
+      verified done against the tree, then set the next one.
     - REPLAN on stagnation: after two no-progress turns you'll be told to REPLAN — reconsider the
       facts/plan and try a DIFFERENT approach rather than pushing the same step again.
     - BANK LESSONS as you learn them: the moment you discover something generalizable (a wasted
@@ -534,7 +587,11 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
           then `record_stage(stage: "spec", outcome: "passed", artifact: "<spec_path>")`.
         * implement: dispatch `/implement <spec_path>` (it STOPs without the path — always pass
           the phase's captured `spec_path`), verify, then `record_stage("implement", "passed")`.
-        * test: dispatch `/test`, then `record_stage("test", "passed")`.
+        * test: dispatch `/test`, then run the QUALITY GATE — call `run_quality_gate` to get the
+          ordered command plan, have a worker run it, then call `run_quality_gate` again with the
+          worker's `outputs` to get the GateResult. On ANY red stage, dispatch a fix worker with
+          the parsed diagnostics and re-run — loop until green (bounded by the stall limit) before
+          `record_stage("test", "passed")` (pass the GateResult as the stage `note`).
         * review: dispatch `/review`; on failure record `review`/`failed`, dispatch the fix,
           then re-`/review` and record `review`/`passed`. A passed review completes the phase and
           promotes the next one automatically.
@@ -544,6 +601,47 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     - Run MULTIPLE workstreams in parallel: a single turn may advance several ready workstreams,
       and their workers run concurrently (bounded by the live-session admission cap). Keep the
       number of ACTIVE workstreams small (≈5) so you don't over-commit your own context.
+    - ITERATIVE UI/UX POLISH after the backend passes: once the backend phases are green, check
+      for a front-end surface with `inspect_repo(op: "surfaces")`. If it returns any of
+      `web`/`desktop`/`tui`, append ONE `:ui_ux` phase per surface via `plan_phases` (set each
+      phase's `kind: "ui_ux"` and its `surface`), and drive them to done BEFORE `report_complete`.
+      A `:ui_ux` phase runs the same four stages, UI-flavored: spec = a UX design brief; implement
+      = build/refine the interface; test = VISUAL/BEHAVIORAL validation producing real evidence
+      (Playwright screenshots + console/network logs for web via the `playwright-cli` shell tool;
+      a terminal snapshot for tui; a window screenshot or an honest block for desktop) attached as
+      the stage `artifact`; review = the `ui-ux-foundations` rubric, whose failure re-enters the
+      fix loop. That review→fix loop is BOUNDED — it converges to a decent MVP and auto-completes
+      at the iteration cap. STOP AT MVP: fix concrete rubric failures with evidence, don't
+      gold-plate. An empty `surfaces` result means no front end — skip UI/UX entirely.
+    """
+    |> String.trim_trailing()
+  end
+
+  @doc """
+  The quality-gate protocol (quality-gate-plugins): the stack-aware five-stage green gate the
+  orchestrator runs at each phase's `:test` stage, plus the strict/no-warnings tier and the
+  pre-merge mutation/property tier run at workstream close. Public so it can be asserted.
+  """
+  @spec quality_gate_block() :: String.t()
+  def quality_gate_block do
+    """
+    Quality gate (per-phase rigorous testing, stack-aware):
+    - The `:test` stage is a GREEN GATE, not a single `/test`. `run_quality_gate` resolves this
+      project's stack-aware gate — an ORDERED five stages: format · lint · type · test · mutation —
+      each a single command with a binary red/green exit code. A phase may only advance to `:review`
+      once EVERY per_phase stage is green.
+    - STRICT / NO-WARNINGS tier: warnings are errors. The type stage is the cheapest verifier — it
+      catches hallucinated APIs without executing anything, so never skip it. `typed_enforcement`
+      (default strict) runs the strict type checker plus an annotation/`@spec`-coverage sub-stage;
+      a passing type checker is not a typed system enforced.
+    - FIX LOOP: on a red stage, dispatch a fix worker with the parsed `file:line` diagnostics from
+      the GateResult, re-run the gate, and loop until green — bounded by the stall limit so a
+      genuinely stuck gate blocks the phase rather than looping forever.
+    - MUTATION / PROPERTY run at CLOSE, not per edit: they are slow (mutation re-runs the suite per
+      mutant), so they are `pre_merge`-cadence. Before `close_workstream`, call
+      `run_quality_gate(cadence: "pre_merge")` once; a red mutation score blocks the close (fix the
+      vacuous tests) — passing tests with empty assertions clear a coverage gate but not a mutation
+      gate.
     """
     |> String.trim_trailing()
   end
@@ -591,12 +689,15 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
   end
 
   # Kebab-cased domain keys derived from the project's selected stack layers (e.g. an
-  # "Elixir / Phoenix" layer → "elixir-phoenix"). No project ⇒ no domains.
+  # "Elixir / Phoenix" layer → "elixir-phoenix"), plus the `ui-ux-mvp` domain when the built
+  # repo has a detected front-end surface (iterative-ui-ux polish phase) — so the orchestrator
+  # gets UI/UX guidance exactly when a UI/UX phase is warranted. No project ⇒ no domains.
   @spec relevant_domains(Orchestrator.t()) :: [String.t()]
   defp relevant_domains(%Orchestrator{} = orchestrator) do
     case resolve_project(orchestrator) do
-      %Projects.Project{id: id} ->
-        id |> StackLayers.layers_for_project() |> Enum.map(&domain_key(&1.name)) |> Enum.uniq()
+      %Projects.Project{id: id} = project ->
+        base = id |> StackLayers.layers_for_project() |> Enum.map(&domain_key(&1.name))
+        Enum.uniq(base ++ ui_ux_domain(project))
 
       _no_project ->
         []
@@ -604,6 +705,17 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
   rescue
     _error -> []
   end
+
+  # `["ui-ux-mvp"]` when the project's repo presents a front-end surface, else `[]`.
+  @spec ui_ux_domain(Projects.Project.t()) :: [String.t()]
+  defp ui_ux_domain(%Projects.Project{root_path: root}) when is_binary(root) and root != "" do
+    case SurfaceDetector.detect(root) do
+      {:ok, [_ | _]} -> ["ui-ux-mvp"]
+      _none -> []
+    end
+  end
+
+  defp ui_ux_domain(%Projects.Project{}), do: []
 
   @spec domain_key(String.t()) :: String.t()
   defp domain_key(name) do

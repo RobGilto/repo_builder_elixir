@@ -252,6 +252,28 @@ defmodule RepoBuilder.Agents do
     end
   end
 
+  @doc """
+  Restore a soft-demoted-but-still-alive worker `:idle → :running` (idle-status-while-running
+  bug). A meaningful, non-terminal event from a live worker is proof it is still WORKING, so
+  the soft quiescence demotion (`Session.Server` `:quiescence`) must not leave `status` stuck
+  at `:idle` while the session keeps emitting events. Cheap, conflict-free targeted
+  `update_all` that ONLY flips `:idle → :running` (never touches `:running`/`:holding`/`:error`
+  — a `:holding` worker blocked on input must stay held). Bumps `updated_at` so the phantom
+  reaper (`list_stuck_running/1`, keyed on `updated_at`) reads the restore as fresh liveness.
+  Returns `{:ok, agent}` when a flip actually happened (so the caller can broadcast the card
+  update), `:noop` otherwise.
+  """
+  @spec mark_running_if_idle(Ecto.UUID.t()) :: {:ok, Agent.t()} | :noop
+  def mark_running_if_idle(agent_id) do
+    case Repo.update_all(
+           from(a in Agent, where: a.id == ^agent_id and a.status == :idle),
+           set: [status: :running, updated_at: DateTime.utc_now()]
+         ) do
+      {0, _} -> :noop
+      {_n, _} -> {:ok, Repo.get(Agent, agent_id)}
+    end
+  end
+
   @doc "Set an agent's status (used by the session runtime); a missing agent is a no-op."
   @spec set_status(Ecto.UUID.t(), Agent.status()) :: {:ok, Agent.t()} | {:error, :not_found}
   def set_status(agent_id, status) do

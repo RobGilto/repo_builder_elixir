@@ -30,9 +30,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
   import RepoBuilderWeb.DashboardComponents,
     only: [
       adw_card: 1,
-      adw_agent_card: 1,
-      stage_lane: 1,
-      event_square: 1,
       event_detail_panel: 1
     ]
 
@@ -43,9 +40,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
     Dashboard,
     Definitions,
     Explain,
+    ExternalApis,
     Logs,
     Orchestrators,
     Projects,
+    Secrets,
     Session,
     Settings,
     WorkflowEngine,
@@ -56,6 +55,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
   alias RepoBuilder.Budget.Cap
   alias RepoBuilder.Console.EventPresenter
   alias RepoBuilder.CostCenter.ModelPrice
+  alias RepoBuilder.ExternalApis.{ImportResult, SmartImport}
   alias RepoBuilder.FileBrowser
   alias RepoBuilder.Harness.Event
   alias RepoBuilder.Harness.Pi.Models, as: PiModels
@@ -136,6 +136,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
         dir_picker_dirs: [],
         view_mode: :logs,
         rail_collapsed?: false,
+        goal_card_collapsed?: false,
         chat_width: :sm,
         # Operator display timezone for log timestamps; the connected mount reads the
         # persisted value off the orchestrator (this default is for the static render).
@@ -167,6 +168,21 @@ defmodule RepoBuilderWeb.ConsoleLive do
         stack_layer_rows: [],
         stack_layer_form: to_form(StackLayer.changeset(%StackLayer{}, %{}), as: :stack_layer),
         editing_layer_id: nil,
+        # Registered APIs settings tab (issue-external-api-mcp-provisioning): the
+        # user-scope (platform) + active-project-scope registrations, the register/edit
+        # form, and the masked set of vault secret names (for the "secret present?" hint).
+        # Lazily refreshed; safe empty defaults for the disconnected render.
+        user_apis: [],
+        project_apis: [],
+        api_form: blank_api_form(),
+        editing_api_id: nil,
+        api_secret_names: MapSet.new(),
+        # MCP smart import (issue-external-api-mcp-provisioning): the textarea's status
+        # (:idle | :running | {:question, text} | {:error, msg}) + the live async request
+        # id, and a staged Deposit-a-secret prefill (name/value the parser extracted from
+        # a pasted config — never persisted on the row).
+        smart_import: %{status: :idle, request_id: nil},
+        api_secret_prefill: %{scope: nil, name: nil, value: nil},
         regex?: false,
         search: "",
         active_categories: MapSet.new(@categories),
@@ -294,6 +310,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
         |> backfill_events()
         |> seed_log_manager()
         |> assign_template_rows()
+        |> load_external_apis()
         |> seed_definitions()
         |> subscribe_feeds()
         |> tap(fn _ -> PiModels.refresh_async() end)
@@ -434,14 +451,27 @@ defmodule RepoBuilderWeb.ConsoleLive do
   def agent_model_rows(orchestrator) do
     harnesses = orchestrator_harness_options()
 
+    project_models = Orchestrators.agent_models(orchestrator)
+
     Enum.map(Orchestrators.agent_categories(), fn category ->
       # Show the EFFECTIVE tier: the per-project assignment when set, else the inherited
       # global default. `inherited?` drives the "inherited" badge + "reset" affordance.
-      {entry, source} = Orchestrators.effective_agent_model(orchestrator, category)
-      entry = entry || %{}
-      harness = entry["harness"]
-      provider = entry["provider"]
-      model = entry["model"]
+      {effective_entry, source} = Orchestrators.effective_agent_model(orchestrator, category)
+      effective_entry = effective_entry || %{}
+
+      # When the project has explicitly chosen a harness (even without a model yet),
+      # use the project entry for display and option computation. The effective_entry
+      # would otherwise fall back to the global default (a different harness), which
+      # would show the wrong provider/model options for the chosen harness.
+      project_entry = Map.get(project_models, category, %{})
+      project_harness = project_entry["harness"]
+
+      {harness, provider, model} =
+        if project_harness do
+          {project_harness, project_entry["provider"], project_entry["model"]}
+        else
+          {effective_entry["harness"], effective_entry["provider"], effective_entry["model"]}
+        end
 
       # The orchestrator assigns concrete model ids (e.g. `claude-sonnet-4-5`) that the
       # registry's curated tier-alias list (`opus`/`sonnet`/`haiku`) omits. Prepend the
@@ -455,7 +485,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
         harness: harness,
         provider: provider,
         model: model,
-        inherited?: not is_nil(model) and source == :default,
+        inherited?: is_nil(project_harness) and not is_nil(model) and source == :default,
         harness_options: harnesses,
         provider_options: if(harness, do: provider_options_for(harness), else: []),
         model_options: model_options
@@ -1031,7 +1061,102 @@ defmodule RepoBuilderWeb.ConsoleLive do
      |> assign(:active_project_id, active)
      |> switch_orchestrator(previous_id)
      |> load_agents()
+     |> load_external_apis()
      |> restream()}
+  end
+
+  # --- Registered APIs settings tab (issue-external-api-mcp-provisioning) ---
+
+  def handle_event("register_api", %{"api" => params}, socket) do
+    params = normalize_api_params(params, socket)
+
+    case ExternalApis.create(params) do
+      {:ok, api} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Registered API #{api.name}")
+         |> assign(:api_form, blank_api_form())
+         |> assign(:editing_api_id, nil)
+         |> load_external_apis()}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply, assign(socket, :api_form, to_form(changeset, as: :api))}
+    end
+  end
+
+  def handle_event("edit_api", %{"id" => id}, socket) do
+    case ExternalApis.get(id) do
+      {:ok, api} ->
+        {:noreply,
+         socket
+         |> assign(:editing_api_id, api.id)
+         |> assign(:api_form, api_form_from(api))}
+
+      {:error, :not_found} ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("cancel_edit_api", _params, socket) do
+    {:noreply, socket |> assign(:editing_api_id, nil) |> assign(:api_form, blank_api_form())}
+  end
+
+  def handle_event("update_api", %{"_id" => id, "api" => params}, socket) do
+    with {:ok, api} <- ExternalApis.get(id),
+         {:ok, updated} <- ExternalApis.update(api, normalize_api_params(params, socket)) do
+      {:noreply,
+       socket
+       |> put_flash(:info, "Updated API #{updated.name}")
+       |> assign(:editing_api_id, nil)
+       |> assign(:api_form, blank_api_form())
+       |> load_external_apis()}
+    else
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply, assign(socket, :api_form, to_form(changeset, as: :api))}
+
+      {:error, :not_found} ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("delete_api", %{"id" => id}, socket) do
+    :ok = ExternalApis.delete(id)
+    {:noreply, socket |> put_flash(:info, "Deleted API") |> load_external_apis()}
+  end
+
+  def handle_event("deposit_api_secret", %{"scope" => scope} = params, socket) do
+    name = String.trim(params["name"] || "")
+    value = params["value"] || ""
+    project_id = secret_scope_id(scope, socket)
+
+    case Secrets.put_secret(project_id, name, value) do
+      {:ok, _secret} ->
+        {:noreply, socket |> put_flash(:info, "Deposited secret #{name}") |> load_external_apis()}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply,
+         put_flash(socket, :error, "Could not deposit secret: #{secret_error(changeset)}")}
+    end
+  end
+
+  # MCP smart import (issue-external-api-mcp-provisioning): run the deterministic parser
+  # synchronously (auto-register or pre-fill); on free-form input dispatch the Fast agent
+  # and flip to :running, applying its async reply in handle_info/2.
+  def handle_event("smart_import_api", %{"blob" => blob}, socket) do
+    case SmartImport.import(current_orchestrator(socket), blob) do
+      {:ok, %ImportResult{} = result} ->
+        {:noreply, apply_import_result(socket, result)}
+
+      {:ok, {:async, request_id}} ->
+        {:noreply, assign(socket, :smart_import, %{status: :running, request_id: request_id})}
+
+      {:error, reason} ->
+        {:noreply,
+         assign(socket, :smart_import, %{
+           status: {:error, smart_import_error(reason)},
+           request_id: nil
+         })}
+    end
   end
 
   # Switch the orchestrator's harness (Claude ⇄ pi ⇄ …). Applies that harness's
@@ -1421,6 +1546,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   def handle_event("toggle_rail", _params, socket),
     do: {:noreply, assign(socket, :rail_collapsed?, not socket.assigns.rail_collapsed?)}
+
+  # Bottom orchestrator drawer: collapse/expand the goal card (autonomy + workstreams + queue).
+  def handle_event("toggle_goal_card", _params, socket),
+    do: {:noreply, assign(socket, :goal_card_collapsed?, not socket.assigns.goal_card_collapsed?)}
 
   # Command-panel header: a single button that cycles sm → md → lg → sm.
   def handle_event("cycle_chat_width", _params, socket),
@@ -1834,11 +1963,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
      |> stream(:events, [], reset: true)}
   end
 
-  # Clear finished (succeeded/failed/cancelled) workflows AND non-running agent swimlanes
-  # from the ADWS view. Soft-hides the persisted data so the cleared state survives a
-  # reconnect. Running/queued work stays; nothing is deleted (reversible via the settings
-  # "show hidden" toggle). When troubleshooting (show_hidden?), skip the persist so CLEAR
-  # stays a view-only reset.
+  # Clear finished (succeeded/failed/cancelled) workflows from the ADWS view, and trim the
+  # non-running event rows that back the LOGS view + workflow step-squares. Soft-hides the
+  # persisted data so the cleared state survives a reconnect. Running/queued work stays;
+  # nothing is deleted (reversible via the settings "show hidden" toggle). When
+  # troubleshooting (show_hidden?), skip the persist so CLEAR stays a view-only reset.
   def handle_event("clear_workflows", _params, socket) do
     # Existing: drop finished workflow cards and persist cleared state.
     _ = unless socket.assigns.show_hidden?, do: Workflows.hide_finished_runs()
@@ -1848,10 +1977,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
       |> Enum.reject(fn {_run_id, view} -> view.status in @finished_workflow_statuses end)
       |> Map.new()
 
-    # New: derive clearable agent_key set from event_buffer + statuses (@swimlanes is a
-    # render-time derived assign computed in render/1 — not in socket.assigns directly).
-    # Any key whose current status is not :running (nor :holding — a held worker is blocked
-    # and resumable, not finished) is clearable (issue holding-status-for-blocked-agents).
+    # Derive the clearable agent_key set from event_buffer + statuses. Any key whose current
+    # status is not :running (nor :holding — a held worker is blocked and resumable, not
+    # finished) is clearable (issue holding-status-for-blocked-agents).
     clearable_keys =
       socket.assigns.event_buffer
       |> Enum.map(& &1.agent_key)
@@ -1861,7 +1989,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
       end)
       |> MapSet.new()
 
-    # Trim event_buffer; @swimlanes auto-recomputes from it in render/1 (line 2847).
+    # Trim event_buffer; the LOGS stream + workflow step-squares recompute from it.
     {cleared_rows, kept_buffer} =
       Enum.split_with(socket.assigns.event_buffer, fn row ->
         MapSet.member?(clearable_keys, row.agent_key)
@@ -2431,6 +2559,29 @@ defmodule RepoBuilderWeb.ConsoleLive do
         end
 
       {:noreply, assign(socket, :explain, %{socket.assigns.explain | status: status})}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # MCP smart-import async reply (issue-external-api-mcp-provisioning): ignore a superseded
+  # request; otherwise apply the Fast agent's draft/question exactly like the sync branch.
+  @impl true
+  def handle_info({:smart_import_result, request_id, result}, socket) do
+    if socket.assigns.smart_import.request_id == request_id do
+      socket =
+        case result do
+          {:ok, %ImportResult{} = import_result} ->
+            apply_import_result(socket, import_result)
+
+          {:error, reason} ->
+            assign(socket, :smart_import, %{
+              status: {:error, smart_import_error(reason)},
+              request_id: nil
+            })
+        end
+
+      {:noreply, socket}
     else
       {:noreply, socket}
     end
@@ -3331,8 +3482,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   @impl true
   def render(assigns) do
-    assigns = assign(assigns, :swimlanes, agent_swimlanes(assigns))
-
     ~H"""
     <div class="console flex h-screen flex-col" data-theme="dark">
       <h1 class="sr-only">Repo Builder orchestration console</h1>
@@ -3536,12 +3685,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
                   id="clear-workflows"
                   type="button"
                   phx-click="clear_workflows"
-                  disabled={
-                    not (any_finished_workflows?(@workflow_progress) or
-                           any_clearable_swimlanes?(@swimlanes))
-                  }
+                  disabled={not any_finished_workflows?(@workflow_progress)}
                   class="cns-chip disabled:cursor-not-allowed disabled:opacity-40"
-                  title="Clear finished workflows and non-running agent cards from the view; running ones stay. Nothing is deleted — reversible via the settings 'show hidden' toggle."
+                  title="Clear finished workflows from the view; running ones stay. Nothing is deleted — reversible via the settings 'show hidden' toggle."
                 >
                   CLEAR
                 </button>
@@ -3565,7 +3711,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
               </div>
 
               <div
-                :if={@workflow_progress == %{} and @swimlanes == []}
+                :if={@workflow_progress == %{}}
                 id="no-adws"
                 class="cns-empty p-6 text-center text-sm"
                 style="color: var(--cns-text-2)"
@@ -3575,30 +3721,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
                   Start an ADW from the orchestrator chat.
                 </div>
               </div>
-
-              <div :if={@swimlanes != []} id="agent-cards" class="mt-1 flex flex-col gap-2">
-                <span class="cns-card__key">AGENTS</span>
-                <.adw_agent_card
-                  :for={lane <- @swimlanes}
-                  id={"swimlane-#{lane.key}"}
-                  title={lane.title}
-                  subtitle={lane.subtitle}
-                  status={lane.status}
-                >
-                  <.stage_lane
-                    :for={stage <- visible_stages(lane.stages, @active_categories)}
-                    id={"swimlane-#{lane.key}-stage-#{stage.step}"}
-                    step={stage.step}
-                  >
-                    <.event_square
-                      :for={row <- stage.rows}
-                      event_id={row.id}
-                      category={row.category}
-                      summary={"#{row.kind}: #{row.body}"}
-                    />
-                  </.stage_lane>
-                </.adw_agent_card>
-              </div>
             </div>
 
             <.event_detail_panel event={@selected_event} />
@@ -3607,65 +3729,97 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
         <aside
           aria-label="Orchestrator console"
-          class="min-h-0 overflow-hidden border-l p-2"
+          class="flex min-h-0 flex-col overflow-hidden border-l p-2"
           style="border-color: var(--cns-border)"
         >
-          <.command_panel
-            chat_width={@chat_width}
-            cost={@orchestrator_cost}
-            estimate={@orchestrator_est_cost}
-            context_tokens={@orchestrator_context}
-            harness={@orchestrator_harness}
-            model={@orchestrator_model}
-            typing?={
-              @orchestrator_queue.busy? || @typing? ||
-                Map.get(@statuses, @orchestrator_id) == :running
-            }
-            auto_follow?={@auto_follow?}
-          >
-            <:messages>
-              <%= for msg <- @messages, msg.role != :thinking or @show_thinking? do %>
-                <%= case msg.role do %>
-                  <% :thinking -> %>
-                    <.thinking_bubble content={msg.content} time={msg.time} />
-                  <% :tool -> %>
-                    <.tool_use_card
-                      tool_name={msg.tool_name}
-                      params_json={msg.params_json}
-                      time={msg.time}
-                    />
-                  <% role -> %>
-                    <.chat_message
-                      role={role}
-                      label={msg.label}
-                      content={msg.content}
-                      time={msg.time}
-                    />
+          <div class="min-h-0 flex-1 overflow-hidden">
+            <.command_panel
+              chat_width={@chat_width}
+              cost={@orchestrator_cost}
+              estimate={@orchestrator_est_cost}
+              context_tokens={@orchestrator_context}
+              harness={@orchestrator_harness}
+              model={@orchestrator_model}
+              typing?={
+                @orchestrator_queue.busy? || @typing? ||
+                  Map.get(@statuses, @orchestrator_id) == :running
+              }
+              auto_follow?={@auto_follow?}
+            >
+              <:messages>
+                <%= for msg <- @messages, msg.role != :thinking or @show_thinking? do %>
+                  <%= case msg.role do %>
+                    <% :thinking -> %>
+                      <.thinking_bubble content={msg.content} time={msg.time} />
+                    <% :tool -> %>
+                      <.tool_use_card
+                        tool_name={msg.tool_name}
+                        params_json={msg.params_json}
+                        time={msg.time}
+                      />
+                    <% role -> %>
+                      <.chat_message
+                        role={role}
+                        label={msg.label}
+                        content={msg.content}
+                        time={msg.time}
+                      />
+                  <% end %>
                 <% end %>
-              <% end %>
-              <%!-- In-flight streaming buffers: one growing bubble per agent/channel,
+                <%!-- In-flight streaming buffers: one growing bubble per agent/channel,
               rendered after the finalized history; replaced by a finalized message
               once the authoritative block (or Done/Error flush) arrives. --%>
-              <%= for {agent_id, buf} <- @streaming do %>
-                <.streaming_bubble
-                  :if={buf.text != ""}
-                  id={"streaming-text-#{agent_id}"}
-                  content={buf.text}
-                />
-                <.streaming_bubble
-                  :if={@show_thinking? and buf.thinking != ""}
-                  id={"streaming-think-#{agent_id}"}
-                  thinking?={true}
-                  content={buf.thinking}
-                />
-              <% end %>
-            </:messages>
-          </.command_panel>
+                <%= for {agent_id, buf} <- @streaming do %>
+                  <.streaming_bubble
+                    :if={buf.text != ""}
+                    id={"streaming-text-#{agent_id}"}
+                    content={buf.text}
+                  />
+                  <.streaming_bubble
+                    :if={@show_thinking? and buf.thinking != ""}
+                    id={"streaming-think-#{agent_id}"}
+                    thinking?={true}
+                    content={buf.thinking}
+                  />
+                <% end %>
+              </:messages>
+            </.command_panel>
+          </div>
 
-          <.autonomy_panel ledger={@ledger} holding_reason={@orchestrator_holding_reason} />
+          <div :if={goal_card_present?(assigns)} class="flex min-h-0 shrink-0 flex-col">
+            <button
+              type="button"
+              id="toggle-goal-card"
+              phx-click="toggle_goal_card"
+              aria-expanded={to_string(not @goal_card_collapsed?)}
+              title={if @goal_card_collapsed?, do: "Expand goal card", else: "Collapse goal card"}
+              class="flex w-full items-center gap-2 border-t px-3 py-1 text-[0.7rem]"
+              style="border-color: var(--cns-border)"
+            >
+              <span aria-hidden="true">{if @goal_card_collapsed?, do: "▲", else: "▼"}</span>
+              <.goal_card_summary
+                :if={@goal_card_collapsed?}
+                ledger={@ledger}
+                workstreams={@workstreams}
+              />
+            </button>
+            <div
+              :if={not @goal_card_collapsed?}
+              class="min-h-0 overflow-y-auto"
+              style="max-height: 45vh"
+            >
+              <.autonomy_panel ledger={@ledger} holding_reason={@orchestrator_holding_reason} />
 
-          <.workstreams_panel workstreams={@workstreams} context_tokens={@orchestrator_context} />
+              <.workstreams_panel
+                workstreams={@workstreams}
+                context_tokens={@orchestrator_context}
+              />
+            </div>
+          </div>
 
+          <%!-- Queue status is NOT part of the collapsible goal card: it self-gates on busy/depth
+          and must stay visible (the `#orchestrator-queue` "Busy" indicator) regardless of the
+          goal-card toggle or whether a goal/workstream exists. --%>
           <.queued_messages
             busy?={@orchestrator_queue.busy?}
             depth={@orchestrator_queue.depth}
@@ -3754,6 +3908,14 @@ defmodule RepoBuilderWeb.ConsoleLive do
         editing_layer_id={@editing_layer_id}
         default_model_rows={@default_model_rows}
         default_model_saved={@default_model_saved}
+        user_apis={@user_apis}
+        project_apis={@project_apis}
+        api_form={@api_form}
+        editing_api_id={@editing_api_id}
+        api_secret_names={@api_secret_names}
+        smart_import={@smart_import}
+        api_secret_prefill={@api_secret_prefill}
+        active_project_id={@active_project_id}
       />
     </div>
     """
@@ -3912,13 +4074,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
     end)
   end
 
-  @spec any_clearable_swimlanes?([map()]) :: boolean()
-  defp any_clearable_swimlanes?(swimlanes) do
-    # A :holding worker is active (blocked, resumable), not finished — never treat its
-    # swimlane as clearable, so it stays visible (issue holding-status-for-blocked-agents).
-    Enum.any?(swimlanes, fn lane -> lane.status not in [:running, :holding] end)
-  end
-
   # The workflow stage of one event row: the envelope's `adw_step` when present, else the
   # `"_workflow"` fallback (mirrors the reference's `event.adw_step || '_workflow'`).
   @spec event_step(map()) :: String.t()
@@ -3930,67 +4085,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
   end
 
   defp event_step(_payload), do: "_workflow"
-
-  @spec agent_swimlanes(map()) :: [map()]
-  defp agent_swimlanes(assigns) do
-    configs = Map.new(assigns.agents, &{&1.id, &1.config})
-
-    assigns.event_buffer
-    |> Enum.group_by(& &1.agent_key)
-    |> Enum.map(fn {key, rows} ->
-      name = Map.get(assigns.agent_names, key, short_id(key))
-      adw_type = adw_type(Map.get(configs, key))
-
-      %{
-        key: key,
-        name: name,
-        # An ADW worker's card titles with its workflow type (e.g. "plan_build_review_fix"),
-        # demoting the machine-ish worker name (e.g. "orch-adw-3156290") to a subtitle. Manual
-        # agents (no `adw_type`) keep the worker name as the title with no subtitle.
-        title: adw_type || name,
-        subtitle: adw_type && name,
-        status: Map.get(assigns.statuses, key, :idle),
-        stages: group_by_step(rows)
-      }
-    end)
-  end
-
-  # The ADW workflow type from a worker's `config` (set when the orchestrator launches an
-  # ADW), or `nil` for a manual/non-workflow agent.
-  @spec adw_type(map() | nil) :: String.t() | nil
-  defp adw_type(%{"adw_type" => type}) when is_binary(type), do: presence(type)
-  defp adw_type(_config), do: nil
-
-  # Group an agent's rows into ordered `%{step, rows}` stage lanes, keyed by `:step` in
-  # first-appearance (chronological) order — mirroring the reference's insertion-ordered
-  # `allAdwEventsByStep[adwId][step]`.
-  @spec group_by_step([map()]) :: [%{step: String.t(), rows: [map()]}]
-  defp group_by_step(rows) do
-    {order, groups} =
-      Enum.reduce(rows, {[], %{}}, fn row, {order, groups} ->
-        step = row.step
-
-        if Map.has_key?(groups, step) do
-          {order, Map.update!(groups, step, &[row | &1])}
-        else
-          {[step | order], Map.put(groups, step, [row])}
-        end
-      end)
-
-    order
-    |> Enum.reverse()
-    |> Enum.map(fn step -> %{step: step, rows: Enum.reverse(groups[step])} end)
-  end
-
-  # The agent-card stage lanes whose squares pass the active category filter (empty stages
-  # dropped). `:system` events always pass (lifecycle), matching the LOGS view.
-  @spec visible_stages([map()], MapSet.t()) :: [map()]
-  defp visible_stages(stages, active) do
-    for stage <- stages,
-        rows = Enum.filter(stage.rows, &category_pass?(&1, active)),
-        rows != [],
-        do: %{step: stage.step, rows: rows}
-  end
 
   # The run's buffered event rows grouped by `:step`, for the matching workflow card's step
   # boxes (squares live under the step that emitted them). Rows are matched to the run by the
@@ -4013,6 +4107,15 @@ defmodule RepoBuilderWeb.ConsoleLive do
   @spec counter(map(), String.t(), atom()) :: non_neg_integer()
   defp counter(counters, agent_id, key) do
     counters |> Map.get(agent_id, %{}) |> Map.get(key, 0)
+  end
+
+  # Whether the collapsible goal card has anything to show (so the collapse handle only appears
+  # when there is a goal card, an open workstream, or an escalation). The queue status renders
+  # separately (outside the drawer), so it is deliberately NOT a trigger here.
+  @spec goal_card_present?(map()) :: boolean()
+  defp goal_card_present?(assigns) do
+    assigns.ledger != nil or assigns.workstreams != [] or
+      assigns.orchestrator_holding_reason != nil
   end
 
   @spec rail_width(boolean()) :: String.t()
@@ -4171,6 +4274,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
           | :cost_center
           | :stack_layers
           | :default_models
+          | :external_apis
           | :logs
   defp settings_tab("appearance"), do: :appearance
   defp settings_tab("about"), do: :about
@@ -4179,8 +4283,160 @@ defmodule RepoBuilderWeb.ConsoleLive do
   defp settings_tab("cost_center"), do: :cost_center
   defp settings_tab("stack_layers"), do: :stack_layers
   defp settings_tab("default_models"), do: :default_models
+  defp settings_tab("external_apis"), do: :external_apis
   defp settings_tab("logs"), do: :logs
   defp settings_tab(_other), do: :general
+
+  # Load the two scoped registration lists + the masked set of present vault secret names
+  # (platform + active project) so the panel can flag whether a referenced secret exists.
+  @spec load_external_apis(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp load_external_apis(socket) do
+    project_id = socket.assigns[:active_project_id]
+
+    secret_names =
+      (Secrets.list_names(nil) ++ Secrets.list_names(project_id))
+      |> Enum.map(& &1.name)
+      |> MapSet.new()
+
+    assign(socket,
+      user_apis: ExternalApis.list_for_scope(nil),
+      project_apis: if(project_id, do: ExternalApis.list_for_scope(project_id), else: []),
+      api_secret_names: secret_names
+    )
+  end
+
+  @spec blank_api_form() :: Phoenix.HTML.Form.t()
+  defp blank_api_form do
+    to_form(ExternalApis.ExternalApi.changeset(%ExternalApis.ExternalApi{}, %{}), as: :api)
+  end
+
+  @spec api_form_from(ExternalApis.ExternalApi.t()) :: Phoenix.HTML.Form.t()
+  defp api_form_from(api) do
+    to_form(ExternalApis.ExternalApi.changeset(api, %{}), as: :api)
+  end
+
+  # Coerce the register/edit form params into changeset-ready shape: the `project_id`
+  # comes from the chosen scope (nil = platform/user scope; the active project otherwise),
+  # and the comma/newline list fields are split into string arrays.
+  @spec normalize_api_params(map(), Phoenix.LiveView.Socket.t()) :: map()
+  defp normalize_api_params(params, socket) do
+    project_id = secret_scope_id(params["scope"], socket)
+
+    params
+    |> Map.put("project_id", project_id)
+    |> Map.update("args", [], &split_list/1)
+    |> Map.update("doc_urls", [], &split_list/1)
+    |> Map.update("allowed_tools", [], &split_list/1)
+  end
+
+  # nil for the platform/user scope, the active project id for project scope.
+  @spec secret_scope_id(String.t() | nil, Phoenix.LiveView.Socket.t()) :: Ecto.UUID.t() | nil
+  defp secret_scope_id("project", socket), do: socket.assigns[:active_project_id]
+  defp secret_scope_id(_user_or_nil, _socket), do: nil
+
+  # Split a comma/newline-separated text field into a trimmed, non-empty string list.
+  @spec split_list(term()) :: [String.t()]
+  defp split_list(value) when is_binary(value) do
+    value
+    |> String.split([",", "\n"], trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp split_list(value) when is_list(value), do: value
+  defp split_list(_value), do: []
+
+  @spec secret_error(Ecto.Changeset.t()) :: String.t()
+  defp secret_error(changeset) do
+    Enum.map_join(changeset.errors, "; ", fn {field, {msg, _opts}} -> "#{field} #{msg}" end)
+  end
+
+  # The orchestrator backing the active console, or nil — used by the smart-import Fast
+  # fallback (the deterministic path needs no orchestrator).
+  @spec current_orchestrator(Phoenix.LiveView.Socket.t()) ::
+          RepoBuilder.Orchestrator.Orchestrator.t() | nil
+  defp current_orchestrator(socket) do
+    with id when is_binary(id) <- socket.assigns[:orchestrator_id],
+         {:ok, orchestrator} <- Orchestrators.fetch(id) do
+      orchestrator
+    else
+      _other -> nil
+    end
+  end
+
+  # Apply a smart-import ImportResult: a high-confidence :register draft is created via the
+  # existing write path (changeset errors fall back to a pre-filled form); a :question
+  # pre-fills the form and shows the clarifying banner. A staged secret pre-fills the
+  # Deposit form in both cases (never written to the row).
+  @spec apply_import_result(Phoenix.LiveView.Socket.t(), ImportResult.t()) ::
+          Phoenix.LiveView.Socket.t()
+  defp apply_import_result(socket, %ImportResult{action: :register} = result) do
+    params = normalize_api_params(result.api_params, socket)
+
+    case ExternalApis.create(params) do
+      {:ok, api} ->
+        socket
+        |> put_flash(:info, "Imported API #{api.name}")
+        |> assign(:editing_api_id, nil)
+        |> assign(:api_form, blank_api_form())
+        |> assign(:smart_import, %{status: :idle, request_id: nil})
+        |> stage_secret_prefill(result)
+        |> load_external_apis()
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        socket
+        |> assign(:editing_api_id, nil)
+        |> assign(:api_form, to_form(changeset, as: :api))
+        |> assign(:smart_import, %{
+          status:
+            {:question, "Review the draft below — some fields need fixing before it registers."},
+          request_id: nil
+        })
+        |> stage_secret_prefill(result)
+    end
+  end
+
+  defp apply_import_result(socket, %ImportResult{action: :question} = result) do
+    changeset = ExternalApis.ExternalApi.changeset(%ExternalApis.ExternalApi{}, result.api_params)
+
+    socket
+    |> assign(:editing_api_id, nil)
+    |> assign(:api_form, to_form(changeset, as: :api))
+    |> assign(:smart_import, %{
+      status: {:question, result.question || "Please clarify."},
+      request_id: nil
+    })
+    |> stage_secret_prefill(result)
+  end
+
+  # Stage a parser-extracted token into the Deposit-a-secret form (name + value). The value
+  # lives only in this transient assign for one-click deposit — never on the registry row.
+  @spec stage_secret_prefill(Phoenix.LiveView.Socket.t(), ImportResult.t()) ::
+          Phoenix.LiveView.Socket.t()
+  defp stage_secret_prefill(socket, %ImportResult{secret_name: name} = result)
+       when is_binary(name) do
+    scope = if socket.assigns[:active_project_id], do: "project", else: "user"
+    assign(socket, :api_secret_prefill, %{scope: scope, name: name, value: result.secret_value})
+  end
+
+  defp stage_secret_prefill(socket, _result), do: socket
+
+  @spec smart_import_error(term()) :: String.t()
+  defp smart_import_error(:no_fast_agent), do: no_fast_agent_message()
+
+  defp smart_import_error(:no_orchestrator),
+    do:
+      "No orchestrator available to interpret free-form input — paste an MCP config JSON instead."
+
+  defp smart_import_error(:empty), do: "Paste an MCP config or a description first."
+
+  defp smart_import_error(:bad_agent_reply),
+    do: "The Fast agent's reply could not be parsed — try rephrasing."
+
+  defp smart_import_error(:timeout), do: "The Fast agent timed out before replying."
+
+  defp smart_import_error(_reason),
+    do: "Smart import failed — paste an MCP config JSON or try again."
 
   # Re-derive the Cost Center tab's data from the DB (no reliance on socket state, so a
   # reconnect re-renders correctly). Cheap enough to run on each tab open.

@@ -37,7 +37,9 @@ defmodule RepoBuilder.Orchestrator.Workstreams do
           phase: String.t(),
           current_stage: WorkstreamPhase.current_stage() | nil,
           next_action: String.t(),
-          stall_count: non_neg_integer()
+          stall_count: non_neg_integer(),
+          focus: String.t() | nil,
+          focus_set_at: DateTime.t() | nil
         }
 
   @typedoc "One phase inside the full rehydration RECORD (`get_workstream/2`)."
@@ -49,6 +51,9 @@ defmodule RepoBuilder.Orchestrator.Workstreams do
           spec_path: String.t() | nil,
           status: WorkstreamPhase.status(),
           current_stage: WorkstreamPhase.current_stage(),
+          kind: WorkstreamPhase.kind(),
+          surface: WorkstreamPhase.surface() | nil,
+          iteration: non_neg_integer(),
           stages: map(),
           completed: [String.t()],
           remaining: [String.t()]
@@ -64,6 +69,8 @@ defmodule RepoBuilder.Orchestrator.Workstreams do
           stall_count: non_neg_integer(),
           current_phase_position: non_neg_integer(),
           next_action: String.t(),
+          focus: String.t() | nil,
+          focus_set_at: DateTime.t() | nil,
           phases: [phase_view()]
         }
 
@@ -73,6 +80,13 @@ defmodule RepoBuilder.Orchestrator.Workstreams do
   # Bounded fix/retry attempts before a phase is forced `:blocked` (no infinite review→fix
   # loop). A passed stage resets the workstream's `stall_count` to 0.
   @stall_limit 3
+
+  # Default cap on a `:ui_ux` phase's review→fix ITERATIONS (iterative-ui-ux polish). Unlike a
+  # backend phase — where a repeatedly-failing review escalates to `:blocked` — a UI/UX phase's
+  # failed review is bounded polish: it increments `iteration` and re-enters the fix branch only
+  # while `iteration < cap`, then auto-completes at MVP (never stalls the workstream forever).
+  # Overridable via `config :repo_builder, :orchestrator, ui_iteration_cap: N`.
+  @default_ui_iteration_cap 3
 
   # --- create / plan ---
 
@@ -153,7 +167,11 @@ defmodule RepoBuilder.Orchestrator.Workstreams do
       description: fetch(phase, :description),
       definition_of_done: fetch(phase, :definition_of_done),
       status: status,
-      current_stage: current_stage
+      current_stage: current_stage,
+      # UI/UX polish phase (iterative-ui-ux): a decomposed phase may carry a `kind`/`surface`.
+      # Absent ⇒ the schema defaults (`:backend`, nil surface) keep existing plans unchanged.
+      kind: fetch(phase, :kind) || :backend,
+      surface: fetch(phase, :surface)
     })
   end
 
@@ -194,7 +212,7 @@ defmodule RepoBuilder.Orchestrator.Workstreams do
     multi =
       Multi.new()
       |> Multi.update(:phase, WorkstreamPhase.changeset(phase, phase_attrs))
-      |> promote_next_phase(workstream, phase, outcome, stage)
+      |> promote_next_phase(workstream, phase, phase_attrs)
       |> Multi.update(:workstream, Workstream.changeset(workstream, ws_attrs))
 
     case Repo.transaction(multi) do
@@ -212,6 +230,20 @@ defmodule RepoBuilder.Orchestrator.Workstreams do
 
   defp transition(_workstream, _phase, stage, :passed) do
     {%{status: :running, current_stage: next_stage(stage)}, %{stall_count: 0}}
+  end
+
+  # A `:ui_ux` phase's failed review is BOUNDED POLISH, not a stall: bump `iteration` and
+  # re-enter the fix branch while under the cap, then auto-complete at MVP (`:done`) — the
+  # workstream is never blocked by cosmetic iteration. `stall_count` resets each iteration so
+  # the generic stall limit can't pre-empt the iteration cap.
+  defp transition(_workstream, %WorkstreamPhase{kind: :ui_ux} = phase, :review, :failed) do
+    iteration = phase.iteration + 1
+
+    if iteration >= ui_iteration_cap() do
+      {%{status: :done, current_stage: :done, iteration: iteration}, %{stall_count: 0}}
+    else
+      {%{status: :running, current_stage: :review, iteration: iteration}, %{stall_count: 0}}
+    end
   end
 
   defp transition(workstream, _phase, :review, :failed) do
@@ -238,11 +270,12 @@ defmodule RepoBuilder.Orchestrator.Workstreams do
     {Map.put(phase_attrs, :status, :running), %{stall_count: stall_count}}
   end
 
-  # On a passed review, promote the immediate next `:pending` phase to `:running` and move
-  # the workstream's `current_phase_position` to it. Any other outcome is a no-op.
-  @spec promote_next_phase(Multi.t(), Workstream.t(), WorkstreamPhase.t(), outcome(), stage()) ::
-          Multi.t()
-  defp promote_next_phase(multi, workstream, phase, :passed, :review) do
+  # Whenever this stage COMPLETES the phase (`status: :done` — a passed review, or a `:ui_ux`
+  # phase hitting its iteration cap), promote the immediate next `:pending` phase to `:running`
+  # and move the workstream's `current_phase_position` to it. Any non-completing outcome is a
+  # no-op (the phase stays current).
+  @spec promote_next_phase(Multi.t(), Workstream.t(), WorkstreamPhase.t(), map()) :: Multi.t()
+  defp promote_next_phase(multi, workstream, phase, %{status: :done}) do
     case next_pending_phase(workstream, phase.position) do
       %WorkstreamPhase{} = next ->
         multi
@@ -260,7 +293,16 @@ defmodule RepoBuilder.Orchestrator.Workstreams do
     end
   end
 
-  defp promote_next_phase(multi, _workstream, _phase, _outcome, _stage), do: multi
+  defp promote_next_phase(multi, _workstream, _phase, _phase_attrs), do: multi
+
+  # The active `:ui_ux` review→fix iteration cap (config-overridable, default 3).
+  @spec ui_iteration_cap() :: pos_integer()
+  defp ui_iteration_cap do
+    case Application.get_env(:repo_builder, :orchestrator, [])[:ui_iteration_cap] do
+      cap when is_integer(cap) and cap > 0 -> cap
+      _invalid -> @default_ui_iteration_cap
+    end
+  end
 
   @spec next_pending_phase(Workstream.t(), pos_integer()) :: WorkstreamPhase.t() | nil
   defp next_pending_phase(%Workstream{id: id}, position) do
@@ -279,7 +321,11 @@ defmodule RepoBuilder.Orchestrator.Workstreams do
       "status" => to_string(outcome),
       "worker" => fetch(attrs, :worker),
       "artifact" => fetch(attrs, :artifact),
-      "note" => fetch(attrs, :note)
+      "note" => fetch(attrs, :note),
+      # Quality-gate evidence (quality-gate-plugins): the structured GateResult a `test`
+      # stage carries (green/red per gate stage + diagnostic counts), rendered on the
+      # console Workstreams panel. nil for stages that carry no gate.
+      "gate" => fetch(attrs, :gate)
     }
   end
 
@@ -303,6 +349,34 @@ defmodule RepoBuilder.Orchestrator.Workstreams do
     with {:ok, workstream} <- resolve(orchestrator_id, ref),
          {:ok, status} <- cast_close_status(status) do
       workstream |> Workstream.changeset(%{status: status}) |> Repo.update()
+    end
+  end
+
+  # --- focus (focus discipline: one in-flight focus per parallel stream) ---
+
+  @doc """
+  Set a workstream's focus — the single concrete thing it is advancing right now. Overwrites
+  any prior focus (single-focus-per-stream invariant) and refreshes `focus_set_at`. Blank
+  rejection lives at the tool boundary. `{:error, :not_found}` for an unknown ref.
+  """
+  @spec set_focus(Ecto.UUID.t(), String.t(), String.t()) ::
+          {:ok, Workstream.t()} | {:error, reason() | Ecto.Changeset.t()}
+  def set_focus(orchestrator_id, ref, focus) do
+    with {:ok, workstream} <- resolve(orchestrator_id, ref) do
+      workstream
+      |> Workstream.changeset(%{focus: focus, focus_set_at: DateTime.utc_now()})
+      |> Repo.update()
+    end
+  end
+
+  @doc "Clear a workstream's focus (its stretch of work is verified done)."
+  @spec clear_focus(Ecto.UUID.t(), String.t()) ::
+          {:ok, Workstream.t()} | {:error, reason() | Ecto.Changeset.t()}
+  def clear_focus(orchestrator_id, ref) do
+    with {:ok, workstream} <- resolve(orchestrator_id, ref) do
+      workstream
+      |> Workstream.changeset(%{focus: nil, focus_set_at: nil})
+      |> Repo.update()
     end
   end
 
@@ -354,7 +428,9 @@ defmodule RepoBuilder.Orchestrator.Workstreams do
       phase: "#{workstream.current_phase_position}/#{length(phases)}",
       current_stage: current && current.current_stage,
       next_action: next_action(workstream, phases, current),
-      stall_count: workstream.stall_count
+      stall_count: workstream.stall_count,
+      focus: workstream.focus,
+      focus_set_at: workstream.focus_set_at
     }
   end
 
@@ -372,6 +448,8 @@ defmodule RepoBuilder.Orchestrator.Workstreams do
       stall_count: workstream.stall_count,
       current_phase_position: workstream.current_phase_position,
       next_action: next_action(workstream, phases, current),
+      focus: workstream.focus,
+      focus_set_at: workstream.focus_set_at,
       phases: Enum.map(phases, &phase_view/1)
     }
   end
@@ -386,6 +464,9 @@ defmodule RepoBuilder.Orchestrator.Workstreams do
       spec_path: phase.spec_path,
       status: phase.status,
       current_stage: phase.current_stage,
+      kind: phase.kind,
+      surface: phase.surface,
+      iteration: phase.iteration,
       stages: phase.stages,
       completed: completed_stages(phase),
       remaining: remaining_stages(phase)

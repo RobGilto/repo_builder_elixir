@@ -71,6 +71,10 @@ defmodule RepoBuilder.Application do
       # (issue-unified-adw-swimlane-cards): a one-shot session that never persists and
       # never hits the global feed; on reply it writes only `Workflow.metadata["title"]`.
       {DynamicSupervisor, name: RepoBuilder.TitleHumanizerSupervisor, strategy: :one_for_one},
+      # One :temporary runner per ephemeral MCP smart-import request
+      # (issue-external-api-mcp-provisioning): a one-shot Fast-tier session that parses a
+      # pasted MCP config into a registration draft; never persists, never hits the feed.
+      {DynamicSupervisor, name: RepoBuilder.SmartImportSupervisor, strategy: :one_for_one},
       # Plugin activation cache (agentic plugin system): memoizes the per-project
       # effective contribution set; the DB read runs in the caller, so it is correct
       # under the test sandbox (caching is gated off in test).

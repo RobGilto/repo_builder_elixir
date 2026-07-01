@@ -174,6 +174,10 @@ defmodule RepoBuilder.Orchestrator.Driver do
         _ = Queue.enqueue_drive(orchestrator.id, replan_prompt(ledger))
         {true, state}
 
+      focus_gate_enabled?() and blank?(ledger.focus) ->
+        _ = Queue.enqueue_drive(orchestrator.id, focus_prompt(ledger))
+        {true, state}
+
       true ->
         _ =
           Queue.enqueue_drive(
@@ -273,6 +277,7 @@ defmodule RepoBuilder.Orchestrator.Driver do
 
     GOAL: #{ledger.goal}
     DEFINITION OF DONE: #{ledger.definition_of_done}
+    FOCUS: #{focus_line(ledger.focus)}
     #{progress_line(progress)}
 
     1. Re-orient with get_ledger if needed.
@@ -297,6 +302,33 @@ defmodule RepoBuilder.Orchestrator.Driver do
     """
     |> String.trim()
   end
+
+  # The focus-first nudge (focus discipline): an active goal with no focus is BLOCKED from
+  # spending budget on workers, so nudge the brain to declare its focus before it acts — the
+  # durable, server-side analogue of tilldone's `agent_end` nudge.
+  @spec focus_prompt(TaskLedger.t()) :: String.t()
+  defp focus_prompt(%TaskLedger{} = ledger) do
+    """
+    [FOCUS FIRST] Before spending budget on any worker, declare your FOCUS — the single concrete \
+    thing you will pursue this stretch. `command_agent` / `create_agent` / `start_adw` are BLOCKED \
+    until you do.
+
+    GOAL: #{ledger.goal}
+    DEFINITION OF DONE: #{ledger.definition_of_done}
+
+    Call set_focus naming that one concrete thing (or set_focus with a `workstream` to focus a \
+    specific parallel stream), then take your ONE step.
+    """
+    |> String.trim()
+  end
+
+  # Inference-only spec — narrows the nil/string focus below a `String.t() | nil` contract.
+  defp focus_line(focus) when is_binary(focus) and focus != "", do: focus
+  defp focus_line(_focus), do: "(none set — declare it with set_focus before commanding workers)"
+
+  @spec blank?(String.t() | nil) :: boolean()
+  defp blank?(nil), do: true
+  defp blank?(focus) when is_binary(focus), do: String.trim(focus) == ""
 
   # Inference-only spec — the input narrows to the progress map/nil below a `term()` contract.
   defp progress_line(%{summary: summary}) when is_binary(summary) and summary != "",
@@ -330,4 +362,7 @@ defmodule RepoBuilder.Orchestrator.Driver do
 
   @spec escalate_after_stall() :: non_neg_integer()
   defp escalate_after_stall, do: config()[:escalate_after_stall] || @default_escalate_after_stall
+
+  @spec focus_gate_enabled?() :: boolean()
+  defp focus_gate_enabled?, do: Keyword.get(config(), :focus_gate, true)
 end

@@ -701,16 +701,39 @@ defmodule RepoBuilder.Orchestrators do
   resumable session id: a CLI session is model-specific, so switching models must
   start the next turn fresh (and zero the console context-window bar) rather than
   resume the prior model's conversation.
+
+  Keeps the `{harness, provider, model}` triple coherent (§10 open identity): when the
+  requested `model` is recognisably foreign to the current harness+provider (e.g. a
+  `zai` model set on a `claude` orchestrator — the orphan signature from the provider
+  dropdown bug), `provider` is cleared so the header re-offers the full provider list
+  for the persisted harness and the operator must re-pick one that actually offers that
+  model. The harness is NOT silently flipped (that would surprise the operator and
+  could spawn the wrong adapter); nulling `provider` is the minimal, honest correction.
+  Models unknown to every curated list (e.g. freshly-released concrete ids) are treated
+  as legitimate (lenient — the lists are guidance, not a constraint).
   """
   @spec set_model(Ecto.UUID.t(), String.t() | nil) ::
           {:ok, Orchestrator.t()} | {:error, :not_found}
   def set_model(id, model) do
     case fetch(id) do
       {:ok, orchestrator} ->
+        foreign? =
+          not Registry.model_offered_by_harness?(
+            orchestrator.harness,
+            orchestrator.provider,
+            model
+          )
+
+        # On a foreign model, clear `provider` (the orphan correction) AND skip recording
+        # it under the stale provider key, so it isn't re-offered later from a provider the
+        # harness no longer matches. Both derive from the same coherence decision.
+        provider = if(foreign?, do: nil, else: orchestrator.provider)
+
         update_fields(id, %{
           model: model,
+          provider: provider,
           session_id: nil,
-          metadata: record_recent_model(orchestrator.metadata, orchestrator.provider, model)
+          metadata: record_recent_model(orchestrator.metadata, provider, model)
         })
 
       error ->

@@ -128,6 +128,14 @@ defmodule RepoBuilder.Logs.Writer do
       # (tool use / message / usage / terminal), NOT once per streamed token. Quiet: a bump
       # failure must never break persistence.
       touch_heartbeat_quietly(ctx.agent_id)
+
+      # Self-heal a stuck `:idle` (idle-status-while-running bug): a meaningful, NON-terminal
+      # event means the worker is still WORKING, so if the soft quiescence watchdog demoted a
+      # live worker `:running → :idle`, restore `:running` the instant it emits again. Terminal
+      # events are skipped — `update_status_quietly/2` above already set their `:idle`/`:error`/
+      # `:holding`, which this must not stomp back to `:running`.
+      unless terminal?(event), do: mark_running_if_idle_quietly(ctx.agent_id)
+
       persist_quietly(:agent, event, ctx)
     end
   end
@@ -202,6 +210,27 @@ defmodule RepoBuilder.Logs.Writer do
       end
 
     _ = if status, do: Agents.set_status(agent_id, status)
+    :ok
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
+
+  # Terminal events finalize a worker's lifecycle — `update_status_quietly/2` has already
+  # set their persistent `:idle`/`:holding`/`:error` status, so the idle-self-heal must skip
+  # them (it would otherwise stomp a just-finished worker back to `:running`).
+  @spec terminal?(Event.t()) :: boolean()
+  defp terminal?(%Event.Done{}), do: true
+  defp terminal?(%Event.Error{}), do: true
+  defp terminal?(_event), do: false
+
+  # Restore a live worker demoted `:running → :idle` by the soft quiescence watchdog the
+  # instant it emits a meaningful non-terminal event. Fail-soft like the other bumps: a DB
+  # hiccup degrades to a no-op and never crashes the writer.
+  @spec mark_running_if_idle_quietly(Ecto.UUID.t()) :: :ok
+  defp mark_running_if_idle_quietly(agent_id) do
+    _ = Agents.mark_running_if_idle(agent_id)
     :ok
   rescue
     _error -> :ok

@@ -14,10 +14,29 @@ defmodule RepoBuilderWeb.TestOrchestrationConsoleUiTest do
 
   import Phoenix.LiveViewTest
 
-  alias RepoBuilder.{Agents, Dashboard}
+  alias RepoBuilder.{Agents, Dashboard, Workflows}
   alias RepoBuilder.Harness.Event
 
   defp uniq_name, do: "ui-agent-#{System.unique_integer([:positive])}"
+
+  # Seed a running plan_build workflow run so the console renders its ADW card (with
+  # per-step boxes) on mount.
+  defp seed_run do
+    {:ok, wf} =
+      Workflows.create_workflow(%{
+        name: "wf-#{System.unique_integer([:positive])}",
+        type: "plan_build",
+        steps: [
+          %{"name" => "plan", "harness" => "fake", "on_success" => "build"},
+          %{"name" => "build", "harness" => "fake", "on_success" => "done"}
+        ]
+      })
+
+    {:ok, run} =
+      Workflows.create_run(%{workflow_id: wf.id, status: :running, current_step: "build"})
+
+    run
+  end
 
   # Seed an agent the way the orchestrator will at runtime: persist it, then announce
   # it on the console's `agent_created` seam so the LiveView adds it to the rail live.
@@ -163,18 +182,24 @@ defmodule RepoBuilderWeb.TestOrchestrationConsoleUiTest do
     assert has_element?(view, "#event-stream")
   end
 
-  test "in swimlanes view an event square opens the detail panel", %{conn: conn} do
+  test "in swimlanes view an ADW step square opens the detail panel", %{conn: conn} do
+    run = seed_run()
+
     {:ok, view, _html} = live(conn, ~p"/")
 
     view |> element("#view-toggle") |> render_click()
 
-    Dashboard.broadcast_event("worker-xyz", %Event.ToolCall{
+    # An ADW worker event keyed to the run's `build` step (via the `wf-<run_id>` agent key
+    # + `adw_step` on the raw frame) lands as a square inside that step box of the card.
+    Dashboard.broadcast_event("wf-#{run.id}-build", %Event.ToolCall{
       harness: :fake,
       name: "grep",
-      input: %{"q" => "needle"}
+      input: %{"q" => "needle"},
+      raw: %{"adw_step" => "build"}
     })
 
     _ = render(view)
+    assert has_element?(view, "#workflow-#{run.id}")
     assert has_element?(view, ".cns-square")
     refute has_element?(view, "#event-detail-panel")
 

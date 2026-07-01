@@ -11,6 +11,8 @@ defmodule RepoBuilder.Harness.Claude do
   @behaviour RepoBuilder.Harness
   @behaviour RepoBuilder.Harness.Orchestrating
 
+  alias RepoBuilder.ExternalApis
+  alias RepoBuilder.ExternalApis.Provisioning
   alias RepoBuilder.Harness.{Event, McpTools, Pricing}
 
   @ctx %{harness: :claude}
@@ -123,18 +125,26 @@ defmodule RepoBuilder.Harness.Claude do
     if orchestrator_config?(config) do
       []
     else
-      case McpTools.enabled(config["tools"]) do
-        [] ->
-          []
+      # MERGE the static firecrawl catalog with the dynamic, operator-registered API
+      # registry (issue-external-api-mcp-provisioning), resolved against the worker's
+      # bound project scope. Skip the file ONLY when BOTH are empty — a plain worker is
+      # byte-for-byte unchanged.
+      tools = McpTools.enabled(config["tools"])
+      apis = ExternalApis.fetch_by_names(opts[:project_id], config["apis"] || [])
 
-        tools ->
-          cwd = Path.expand(opts.cwd)
-          path = Path.join(cwd, ".mcp.json")
-          File.mkdir_p!(cwd)
-          File.write!(path, Jason.encode!(%{"mcpServers" => McpTools.mcp_servers(tools)}))
+      servers = Map.merge(McpTools.mcp_servers(tools), Provisioning.mcp_servers(apis))
+      allowed = McpTools.allowed_tools(tools) ++ Provisioning.allowed_tools(apis)
 
-          ["--mcp-config", path, "--strict-mcp-config"] ++
-            ["--allowedTools" | McpTools.allowed_tools(tools)]
+      if servers == %{} do
+        []
+      else
+        cwd = Path.expand(opts.cwd)
+        path = Path.join(cwd, ".mcp.json")
+        File.mkdir_p!(cwd)
+        File.write!(path, Jason.encode!(%{"mcpServers" => servers}))
+
+        ["--mcp-config", path, "--strict-mcp-config"] ++
+          ["--allowedTools" | allowed]
       end
     end
   end

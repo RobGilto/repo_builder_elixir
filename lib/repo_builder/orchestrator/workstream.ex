@@ -29,6 +29,8 @@ defmodule RepoBuilder.Orchestrator.Workstream do
           status: status(),
           stall_count: non_neg_integer(),
           current_phase_position: non_neg_integer(),
+          focus: String.t() | nil,
+          focus_set_at: DateTime.t() | nil,
           phases: [WorkstreamPhase.t()] | Ecto.Association.NotLoaded.t(),
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
@@ -48,6 +50,9 @@ defmodule RepoBuilder.Orchestrator.Workstream do
     field :status, Ecto.Enum, values: @statuses, default: :running
     field :stall_count, :integer, default: 0
     field :current_phase_position, :integer, default: 0
+    # The single concrete thing this workstream is focused on right now (focus discipline).
+    field :focus, :string
+    field :focus_set_at, :utc_datetime_usec
 
     has_many :phases, WorkstreamPhase,
       foreign_key: :workstream_id,
@@ -66,11 +71,14 @@ defmodule RepoBuilder.Orchestrator.Workstream do
       :status,
       :definition_of_done,
       :stall_count,
-      :current_phase_position
+      :current_phase_position,
+      :focus,
+      :focus_set_at
     ])
     |> validate_required([:orchestrator_id, :title, :goal])
     |> validate_inclusion(:status, @statuses)
     |> validate_number(:stall_count, greater_than_or_equal_to: 0)
     |> validate_number(:current_phase_position, greater_than_or_equal_to: 0)
+    |> validate_length(:focus, max: 2_000)
   end
 end

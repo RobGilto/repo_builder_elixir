@@ -22,6 +22,14 @@ This is a web application written using the Phoenix web framework.
 - **Sources** (`Plugins.Source`): `LocalLibrary` (`plugin_library/`) + Req-backed
   `RemoteStore`. **Trust**: `Plugins.Trust` gates checksum/code/signature; code plugins
   run arbitrary BEAM code in-node — never auto-install one without confirmation.
+- **Quality gate** (the `:quality_gate` kind): a stack-aware, ordered five-stage green gate
+  (format·lint·type·test·mutation) the orchestrator runs at each workstream phase's `:test`
+  stage via the `run_quality_gate` tool, looping fix-workers until green. Descriptors are data
+  (`RepoBuilder.Plugins.QualityGate`), resolved by `Orchestrator.GateResolver` (plugin → builtin
+  `priv/quality_gates/<stack>.json` → generic) and evaluated by `Orchestrator.GateRunner` — the
+  BEAM never shells out; the phase worker runs the plan in its sandbox. `typed_enforcement`
+  (`:off`/`:standard`/`:strict`, default `:strict`) generalizes this repo's own `@spec` gate to
+  the repos it builds. See `ai_docs/quality-gate-plugins.md`.
 
 ### Agentic layer adaptor (target-repo Projects)
 

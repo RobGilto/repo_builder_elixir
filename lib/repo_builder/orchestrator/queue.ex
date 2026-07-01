@@ -563,8 +563,18 @@ defmodule RepoBuilder.Orchestrator.Queue do
     stage = if row.current_stage, do: to_string(row.current_stage), else: "—"
 
     "- #{row.title} (#{row.id}) [#{row.status}] phase #{row.phase} stage #{stage} — " <>
-      "next: #{row.next_action}"
+      "next: #{row.next_action}#{focus_suffix(row)}"
   end
+
+  # The per-workstream focus (focus discipline): surface each stream's focus, or a nudge to set
+  # one when a running stream is unfocused (its budget-spending workers are gated until it is).
+  @spec focus_suffix(Workstreams.index_row()) :: String.t()
+  defp focus_suffix(%{focus: focus}) when is_binary(focus) and focus != "", do: " 🎯 #{focus}"
+
+  defp focus_suffix(%{status: :running}),
+    do: " ⚠ no focus — set_focus(workstream: …) before commanding a worker"
+
+  defp focus_suffix(_row), do: ""
 
   # Holding pattern (event-driven, coalesced single-resume): a worker returned.
   #   * disabled          → unchanged (fully opt-out via config).

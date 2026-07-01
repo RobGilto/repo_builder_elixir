@@ -15,12 +15,15 @@ defmodule RepoBuilder.Orchestrator.Tools do
     Agents,
     Budget,
     Commands,
+    ExternalApis,
     Logs,
     Orchestrators,
     Session,
     WorkflowEngine,
     Workflows
   }
+
+  alias RepoBuilder.ExternalApis.Provisioning
 
   alias RepoBuilder.Agents.Handover
   alias RepoBuilder.Agents.Holding
@@ -36,13 +39,19 @@ defmodule RepoBuilder.Orchestrator.Tools do
   alias RepoBuilder.Orchestrator.{
     Breaker,
     ContextWindow,
+    GateResolver,
+    GateRunner,
     Ledgers,
     Orchestrator,
     Queue,
     Reflections,
     Server,
+    SurfaceDetector,
+    TaskLedger,
     Template,
     Templates,
+    Workstream,
+    WorkstreamPhase,
     Workstreams
   }
 
@@ -82,6 +91,11 @@ defmodule RepoBuilder.Orchestrator.Tools do
   # is warned (not refused) so it consolidates rather than over-committing its own context.
   @active_workstream_cap 5
 
+  # Budget-spending WORKER tools blocked by the focus gate (focus discipline). `plan_phases` is
+  # deliberately absent — it is the workstream-DECLARATION step, which must run before a
+  # meaningful focus can be named (the analogue of tilldone "declare your tasks").
+  @focus_gated_tools ~w(command_agent create_agent start_adw)
+
   # Changeset failures are stringified at the boundary (`changeset_reason/1`), so a
   # reason that escapes a tool is always an atom or a string.
   @type reason :: atom() | String.t()
@@ -94,7 +108,12 @@ defmodule RepoBuilder.Orchestrator.Tools do
   """
   @spec call(String.t(), Ecto.UUID.t(), map()) :: result()
   def call(tool, orchestrator_id, args) when is_binary(tool) and is_map(args) do
-    result = dispatch(tool, orchestrator_id, args)
+    result =
+      case focus_gate_block(tool, orchestrator_id, args) do
+        :ok -> dispatch(tool, orchestrator_id, args)
+        {:error, _reason} = blocked -> blocked
+      end
+
     log_invocation(tool, orchestrator_id, args, result)
     result
   rescue
@@ -111,6 +130,7 @@ defmodule RepoBuilder.Orchestrator.Tools do
   defp dispatch("create_agent", orchestrator_id, args), do: create_agent(orchestrator_id, args)
   defp dispatch("command_agent", orchestrator_id, args), do: command_agent(orchestrator_id, args)
   defp dispatch("list_agents", orchestrator_id, _args), do: list_agents(orchestrator_id)
+  defp dispatch("list_apis", orchestrator_id, _args), do: list_apis(orchestrator_id)
 
   defp dispatch("check_agent_status", orchestrator_id, args),
     do: check_agent_status(orchestrator_id, args)
@@ -152,6 +172,8 @@ defmodule RepoBuilder.Orchestrator.Tools do
     do: record_reflection(orchestrator_id, args)
 
   defp dispatch("get_ledger", orchestrator_id, _args), do: get_ledger(orchestrator_id)
+  defp dispatch("set_focus", orchestrator_id, args), do: set_focus(orchestrator_id, args)
+  defp dispatch("clear_focus", orchestrator_id, args), do: clear_focus(orchestrator_id, args)
 
   defp dispatch("report_complete", orchestrator_id, args),
     do: report_complete(orchestrator_id, args)
@@ -176,6 +198,9 @@ defmodule RepoBuilder.Orchestrator.Tools do
 
   defp dispatch("compact_self", orchestrator_id, _args), do: compact_self(orchestrator_id)
 
+  defp dispatch("run_quality_gate", orchestrator_id, args),
+    do: run_quality_gate(orchestrator_id, args)
+
   defp dispatch(_tool, _orchestrator_id, _args), do: {:error, :unknown_tool}
 
   # --- tools ---
@@ -185,10 +210,10 @@ defmodule RepoBuilder.Orchestrator.Tools do
     with {:ok, name} <- fetch_string(args, "name"),
          {:ok, template} <- resolve_template(args),
          {:ok, tools} <- resolve_tools(args),
+         project_id = orchestrator_project_id(orchestrator_id),
+         {:ok, apis} <- resolve_apis(project_id, args),
          args = apply_template_args(args, template),
          {:ok, spec} <- resolve_agent_spec(orchestrator_id, args) do
-      project_id = orchestrator_project_id(orchestrator_id)
-
       params = %{
         "name" => name,
         "harness" => spec.harness,
@@ -204,13 +229,20 @@ defmodule RepoBuilder.Orchestrator.Tools do
         "system_prompt" =>
           args["system_prompt"]
           |> blank_to_nil()
+          |> prepend_api_instructions(apis)
           |> prepend_stack_contract(project_id)
           |> with_reporting_clause(),
         # The worker's `provider` column is a closed enum that can't hold pi's open
         # provider set, so the real provider rides in `config` and is threaded into
         # the session at command time. Template provenance (name+version) rides here too;
-        # a non-empty research-tool grant (issue firecrawl-grant) rides under `"tools"`.
-        "config" => spec.provider |> agent_config(template) |> maybe_put_tools(tools)
+        # a non-empty research-tool grant (issue firecrawl-grant) rides under `"tools"`;
+        # a non-empty external-API provision (issue-external-api-mcp-provisioning) under
+        # `"apis"` (names only — the secret stays in the vault).
+        "config" =>
+          spec.provider
+          |> agent_config(template)
+          |> maybe_put_tools(tools)
+          |> maybe_put_apis(apis)
       }
 
       case Agents.create_worker(orchestrator_id, params) do
@@ -393,6 +425,11 @@ defmodule RepoBuilder.Orchestrator.Tools do
       # a workstream, tag the worker so its terminal carries the workstream_id and the Queue
       # resumes the right scratchpad.
       worker = maybe_tag_workstream(orchestrator_id, worker, args)
+      # Provision-at-command-time (issue-external-api-mcp-provisioning): merge any
+      # command-time `apis` into the worker's config so the spawn path grants them. Merges
+      # with create-time grants; unknown names are dropped (the brain saw them via
+      # `list_apis`, so a silent drop is acceptable here).
+      worker = maybe_provision_apis(orchestrator_id, worker, args)
       session_id = worker.session_id || generate_session_id()
       _ = Agents.set_session(worker.id, session_id)
 
@@ -449,6 +486,23 @@ defmodule RepoBuilder.Orchestrator.Tools do
     with ref when is_binary(ref) <- blank_to_nil(args["workstream"]),
          {:ok, workstream} <- Workstreams.resolve(orchestrator_id, ref),
          {:ok, updated} <- Agents.merge_config(worker, %{"workstream_id" => workstream.id}) do
+      updated
+    else
+      _ -> worker
+    end
+  end
+
+  # Merge a command-time `apis` provision into the worker's persisted config (names only),
+  # unioned with any create-time grant. An absent/empty/unresolvable list leaves the worker
+  # untouched (back-compat). Returns the (possibly config-updated) worker.
+  @spec maybe_provision_apis(Ecto.UUID.t(), Agents.Agent.t(), map()) :: Agents.Agent.t()
+  defp maybe_provision_apis(orchestrator_id, worker, args) do
+    project_id = orchestrator_project_id(orchestrator_id)
+
+    with {:ok, [_ | _] = apis} <- resolve_apis(project_id, args),
+         existing = List.wrap(worker.config["apis"]),
+         names = Enum.uniq(existing ++ Enum.map(apis, & &1.name)),
+         {:ok, updated} <- Agents.merge_config(worker, %{"apis" => names}) do
       updated
     else
       _ -> worker
@@ -544,6 +598,7 @@ defmodule RepoBuilder.Orchestrator.Tools do
         "git_status" -> git_status(dir)
         "changed_files" -> changed_files(dir)
         "read_file" -> read_file_jailed(dir, args["path"])
+        "surfaces" -> detect_surfaces(dir)
         _ -> {:error, :invalid_op}
       end
     end
@@ -552,6 +607,141 @@ defmodule RepoBuilder.Orchestrator.Tools do
   @spec broadcast_ledger(Ecto.UUID.t()) :: :ok
   defp broadcast_ledger(orchestrator_id),
     do: Dashboard.broadcast_ledger_updated(orchestrator_id, Ledgers.view(orchestrator_id))
+
+  # --- focus discipline (two-level: per-workstream + orchestrator fallback) ---
+
+  # Set the focus for the targeted scope: a `workstream` ref focuses that parallel stream,
+  # otherwise the orchestrator itself (untagged work). Blank focus is rejected at the boundary.
+  @spec set_focus(Ecto.UUID.t(), map()) :: result()
+  defp set_focus(orchestrator_id, args) do
+    with {:ok, focus} <- fetch_string(args, "focus") do
+      case blank_to_nil(args["workstream"]) do
+        nil -> set_orchestrator_focus(orchestrator_id, focus)
+        ref -> set_workstream_focus(orchestrator_id, ref, focus)
+      end
+    end
+  end
+
+  @spec set_orchestrator_focus(Ecto.UUID.t(), String.t()) :: result()
+  defp set_orchestrator_focus(orchestrator_id, focus) do
+    case Ledgers.set_focus(orchestrator_id, focus) do
+      {:ok, _ledger} ->
+        _ = broadcast_ledger(orchestrator_id)
+        {:ok, %{"status" => "focused", "scope" => "orchestrator", "focus" => focus}}
+
+      {:error, :no_active_ledger} ->
+        {:error, :no_active_ledger}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:error, changeset_reason(changeset)}
+    end
+  end
+
+  @spec set_workstream_focus(Ecto.UUID.t(), String.t(), String.t()) :: result()
+  defp set_workstream_focus(orchestrator_id, ref, focus) do
+    case Workstreams.set_focus(orchestrator_id, ref, focus) do
+      {:ok, _workstream} ->
+        _ = broadcast_workstreams(orchestrator_id)
+
+        {:ok,
+         %{"status" => "focused", "scope" => "workstream", "workstream" => ref, "focus" => focus}}
+
+      {:error, :not_found} ->
+        {:error, :not_found}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:error, changeset_reason(changeset)}
+    end
+  end
+
+  # Clear the focus for the targeted scope (its stretch of work is verified done).
+  @spec clear_focus(Ecto.UUID.t(), map()) :: result()
+  defp clear_focus(orchestrator_id, args) do
+    case blank_to_nil(args["workstream"]) do
+      nil -> clear_orchestrator_focus(orchestrator_id)
+      ref -> clear_workstream_focus(orchestrator_id, ref)
+    end
+  end
+
+  @spec clear_orchestrator_focus(Ecto.UUID.t()) :: result()
+  defp clear_orchestrator_focus(orchestrator_id) do
+    case Ledgers.clear_focus(orchestrator_id) do
+      {:ok, _ledger} ->
+        _ = broadcast_ledger(orchestrator_id)
+        {:ok, %{"status" => "focus_cleared", "scope" => "orchestrator"}}
+
+      {:error, :no_active_ledger} ->
+        {:error, :no_active_ledger}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:error, changeset_reason(changeset)}
+    end
+  end
+
+  @spec clear_workstream_focus(Ecto.UUID.t(), String.t()) :: result()
+  defp clear_workstream_focus(orchestrator_id, ref) do
+    case Workstreams.clear_focus(orchestrator_id, ref) do
+      {:ok, _workstream} ->
+        _ = broadcast_workstreams(orchestrator_id)
+        {:ok, %{"status" => "focus_cleared", "scope" => "workstream", "workstream" => ref}}
+
+      {:error, :not_found} ->
+        {:error, :not_found}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:error, changeset_reason(changeset)}
+    end
+  end
+
+  # The deterministic, scope-aware focus gate: refuse a budget-spending worker tool when the
+  # scope it targets has no focus. A call naming a `workstream` is gated against THAT stream's
+  # focus; an untagged call against the orchestrator-level focus. Never engages for ungated
+  # tools, a disabled gate, an unresolvable/non-running workstream, or an absent active goal.
+  @spec focus_gate_block(String.t(), Ecto.UUID.t(), map()) :: :ok | {:error, :focus_required}
+  defp focus_gate_block(tool, orchestrator_id, args) do
+    if focus_gate_enabled?() and tool in @focus_gated_tools and
+         scope_unfocused?(orchestrator_id, args) do
+      {:error, :focus_required}
+    else
+      :ok
+    end
+  end
+
+  # True when the tool's target scope is an active/running unit with a blank focus.
+  @spec scope_unfocused?(Ecto.UUID.t(), map()) :: boolean()
+  defp scope_unfocused?(orchestrator_id, args) do
+    case targeted_workstream(orchestrator_id, args) do
+      %Workstream{} = ws -> blank?(ws.focus)
+      nil -> orchestrator_unfocused?(orchestrator_id)
+    end
+  end
+
+  # The `:running` workstream a call targets via its `workstream` ref, or nil (untagged, an
+  # unresolvable ref, or a non-running stream — the last two fall through to normal dispatch).
+  @spec targeted_workstream(Ecto.UUID.t(), map()) :: Workstream.t() | nil
+  defp targeted_workstream(orchestrator_id, args) do
+    with ref when is_binary(ref) <- blank_to_nil(args["workstream"]),
+         {:ok, %Workstream{status: :running} = ws} <- Workstreams.resolve(orchestrator_id, ref) do
+      ws
+    else
+      _ -> nil
+    end
+  end
+
+  @spec orchestrator_unfocused?(Ecto.UUID.t()) :: boolean()
+  defp orchestrator_unfocused?(orchestrator_id) do
+    case Ledgers.current(orchestrator_id) do
+      %TaskLedger{focus: focus} -> blank?(focus)
+      nil -> false
+    end
+  end
+
+  @spec blank?(String.t() | nil) :: boolean()
+  defp blank?(value), do: is_nil(blank_to_nil(value))
+
+  @spec focus_gate_enabled?() :: boolean()
+  defp focus_gate_enabled?,
+    do: Keyword.get(Application.get_env(:repo_builder, :orchestrator, []), :focus_gate, true)
 
   # --- workstream tools (spec-driven phased orchestration) ---
 
@@ -609,7 +799,8 @@ defmodule RepoBuilder.Orchestrator.Tools do
         outcome: outcome,
         artifact: blank_to_nil(args["artifact"]),
         worker: blank_to_nil(args["worker"]),
-        note: blank_to_nil(args["note"])
+        note: blank_to_nil(args["note"]),
+        gate: gate_evidence(args["gate"])
       }
 
       case Workstreams.record_stage(orchestrator_id, ref, attrs) do
@@ -625,6 +816,11 @@ defmodule RepoBuilder.Orchestrator.Tools do
       end
     end
   end
+
+  # Accept an already-structured GateResult map as stage evidence; anything else ⇒ nil.
+  @spec gate_evidence(term()) :: map() | nil
+  defp gate_evidence(%{} = gate), do: gate
+  defp gate_evidence(_gate), do: nil
 
   @spec list_workstreams(Ecto.UUID.t()) :: result()
   defp list_workstreams(orchestrator_id) do
@@ -669,6 +865,101 @@ defmodule RepoBuilder.Orchestrator.Tools do
       {:ok, :compacting} -> {:ok, %{"status" => "compacting"}}
       {:error, reason} -> {:error, normalize_reason(reason)}
     end
+  end
+
+  # --- quality gate (quality-gate-plugins) ---
+
+  # Resolve + run the project's stack-aware quality gate for a phase's `:test` stage. With no
+  # `outputs` it returns the ordered COMMAND PLAN the phase worker executes; with `outputs`
+  # (the worker's captured exit codes + text) it EVALUATES them into a structured GateResult.
+  # The orchestrator BEAM never shells out — execution stays in the worker sandbox.
+  @spec run_quality_gate(Ecto.UUID.t(), map()) :: result()
+  defp run_quality_gate(orchestrator_id, args) do
+    with {:ok, cadence} <- cast_gate_cadence(args["cadence"]),
+         {:ok, gate} <- resolve_project_gate(orchestrator_id) do
+      case normalize_gate_outputs(args["outputs"]) do
+        {:ok, nil} -> {:ok, gate_plan_map(gate, cadence)}
+        {:ok, outputs} -> {:ok, gate_result_map(gate, cadence, outputs)}
+      end
+    end
+  end
+
+  # The resolved gate for the orchestrator's bound project. `:no_project`/`:no_gate` are honest
+  # errors the brain can act on (register a project / install a gate plugin).
+  @spec resolve_project_gate(Ecto.UUID.t()) :: {:ok, GateResolver.t()} | {:error, reason()}
+  defp resolve_project_gate(orchestrator_id) do
+    with project_id when is_binary(project_id) <-
+           orchestrator_project_id(orchestrator_id) || :no_project,
+         {:ok, %Project{} = project} <- fetch_gate_project(project_id) do
+      case GateResolver.resolve(project) do
+        {:ok, gate} -> {:ok, gate}
+        {:error, :none} -> {:error, :no_gate}
+      end
+    else
+      :no_project -> {:error, :no_project}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @spec fetch_gate_project(Ecto.UUID.t()) :: {:ok, Project.t()} | {:error, :project_not_found}
+  defp fetch_gate_project(project_id) do
+    case Projects.fetch_project(project_id) do
+      {:ok, %Project{} = project} -> {:ok, project}
+      {:error, _reason} -> {:error, :project_not_found}
+    end
+  end
+
+  @spec cast_gate_cadence(term()) :: {:ok, :per_phase | :pre_merge} | {:error, reason()}
+  defp cast_gate_cadence(nil), do: {:ok, :per_phase}
+  defp cast_gate_cadence("per_phase"), do: {:ok, :per_phase}
+  defp cast_gate_cadence("pre_merge"), do: {:ok, :pre_merge}
+  defp cast_gate_cadence(_other), do: {:error, "cadence must be per_phase or pre_merge"}
+
+  # Normalize the optional `outputs` array into a `%{stage_id => %{exit_code, output}}` lookup,
+  # or nil when absent/empty (plan mode). A malformed entry is dropped.
+  @spec normalize_gate_outputs(term()) :: {:ok, map() | nil}
+  defp normalize_gate_outputs(list) when is_list(list) and list != [] do
+    {:ok, Enum.reduce(list, %{}, &maybe_put_output(&2, &1))}
+  end
+
+  defp normalize_gate_outputs(_list), do: {:ok, nil}
+
+  @spec maybe_put_output(map(), term()) :: map()
+  defp maybe_put_output(acc, %{"stage_id" => id, "exit_code" => code} = entry)
+       when is_binary(id) and is_integer(code) do
+    Map.put(acc, id, %{exit_code: code, output: to_string(entry["output"] || "")})
+  end
+
+  defp maybe_put_output(acc, _entry), do: acc
+
+  # Evaluate the gate against the worker-captured outputs (exec_fun reads the lookup; a stage
+  # with no captured output is treated as a clean pass so a partial report can't false-red).
+  @spec gate_result_map(GateResolver.t(), :per_phase | :pre_merge, map()) :: map()
+  defp gate_result_map(gate, cadence, outputs) do
+    result =
+      GateRunner.run(gate, cadence, fn stage ->
+        Map.get(outputs, stage.id, %{exit_code: 0, output: ""})
+      end)
+
+    GateRunner.to_map(result)
+    |> Map.put("mode", "result")
+    |> Map.put("source", to_string(gate.source))
+    |> Map.put("typed_enforcement", to_string(gate.typed_enforcement))
+    |> Map.put("degraded", gate.degraded)
+  end
+
+  # The ordered command plan the worker executes (plan mode).
+  # Inference-only spec — the concrete string-keyed map narrows below a hand-written `map()`.
+  defp gate_plan_map(gate, cadence) do
+    %{
+      "mode" => "plan",
+      "stack" => gate.stack,
+      "source" => to_string(gate.source),
+      "cadence" => to_string(cadence),
+      "typed_enforcement" => to_string(gate.typed_enforcement),
+      "degraded" => gate.degraded,
+      "commands" => GateRunner.command_plan(gate, cadence)
+    }
   end
 
   @spec broadcast_workstreams(Ecto.UUID.t()) :: :ok
@@ -716,7 +1007,8 @@ defmodule RepoBuilder.Orchestrator.Tools do
       "phase" => row.phase,
       "current_stage" => row.current_stage && to_string(row.current_stage),
       "next_action" => row.next_action,
-      "stall_count" => row.stall_count
+      "stall_count" => row.stall_count,
+      "focus" => row.focus
     }
   end
 
@@ -731,6 +1023,7 @@ defmodule RepoBuilder.Orchestrator.Tools do
       "stall_count" => record.stall_count,
       "current_phase_position" => record.current_phase_position,
       "next_action" => record.next_action,
+      "focus" => record.focus,
       "phases" => Enum.map(record.phases, &phase_map/1)
     }
   end
@@ -745,6 +1038,9 @@ defmodule RepoBuilder.Orchestrator.Tools do
       "spec_path" => phase.spec_path,
       "status" => to_string(phase.status),
       "current_stage" => to_string(phase.current_stage),
+      "kind" => to_string(phase.kind),
+      "surface" => phase.surface && to_string(phase.surface),
+      "iteration" => phase.iteration,
       "stages" => phase.stages,
       "completed" => phase.completed,
       "remaining" => phase.remaining
@@ -759,7 +1055,12 @@ defmodule RepoBuilder.Orchestrator.Tools do
         %{
           title: blank_to_nil(phase["title"]),
           description: blank_to_nil(phase["description"]),
-          definition_of_done: blank_to_nil(phase["definition_of_done"])
+          definition_of_done: blank_to_nil(phase["definition_of_done"]),
+          # UI/UX polish phase (iterative-ui-ux): a phase may declare `kind: "ui_ux"` + a
+          # `surface`. Absent/blank/unknown ⇒ nil, and the context defaults to a `:backend`
+          # phase, so existing plans are byte-for-byte unchanged.
+          kind: normalize_phase_kind(phase["kind"]),
+          surface: normalize_phase_surface(phase["surface"])
         }
       end)
 
@@ -771,6 +1072,18 @@ defmodule RepoBuilder.Orchestrator.Tools do
   end
 
   defp normalize_phases(_phases), do: {:error, "phases must be a non-empty array"}
+
+  # Map a phase's wire `kind`/`surface` to a validated atom (or nil). Unknown strings drop to
+  # nil so a malformed value degrades to the backend default rather than failing the plan.
+  @spec normalize_phase_kind(term()) :: WorkstreamPhase.kind() | nil
+  defp normalize_phase_kind(kind) when kind in ["backend", "ui_ux"], do: String.to_atom(kind)
+  defp normalize_phase_kind(_kind), do: nil
+
+  @spec normalize_phase_surface(term()) :: WorkstreamPhase.surface() | nil
+  defp normalize_phase_surface(surface) when surface in ["web", "desktop", "tui"],
+    do: String.to_atom(surface)
+
+  defp normalize_phase_surface(_surface), do: nil
 
   @spec current_goal(Ecto.UUID.t()) :: String.t() | nil
   defp current_goal(orchestrator_id) do
@@ -827,6 +1140,8 @@ defmodule RepoBuilder.Orchestrator.Tools do
       "status" => to_string(view.status),
       "stall_count" => view.stall_count,
       "plan" => view.plan,
+      "focus" => view.focus,
+      "focus_set_at" => view.focus_set_at,
       "progress" => progress_tool_map(view.progress)
     }
   end
@@ -882,6 +1197,15 @@ defmodule RepoBuilder.Orchestrator.Tools do
       {:error, :not_found} ->
         {:error, :orchestrator_not_found}
     end
+  end
+
+  # Front-end SURFACE detection (iterative-ui-ux polish phase): classify the built repo's
+  # user-facing surface(s) so the brain can decide whether to append a `:ui_ux` phase. An
+  # empty list ⇒ no front end ⇒ skip UI/UX. Never raises (SurfaceDetector is fail-soft).
+  @spec detect_surfaces(String.t()) :: result()
+  defp detect_surfaces(dir) do
+    {:ok, surfaces} = SurfaceDetector.detect(dir)
+    {:ok, %{"op" => "surfaces", "surfaces" => Enum.map(surfaces, &to_string/1)}}
   end
 
   @spec git_status(String.t()) :: result()
@@ -989,6 +1313,36 @@ defmodule RepoBuilder.Orchestrator.Tools do
       )
 
     {:ok, %{"agents" => workers, "count" => length(workers)}}
+  end
+
+  # The external APIs in scope for this orchestrator (platform + project)
+  # (issue-external-api-mcp-provisioning). Name-only auth exposure: the `secret_name` is
+  # surfaced (so the brain knows a credential is referenced) but never any token value.
+  @spec list_apis(Ecto.UUID.t()) :: result()
+  defp list_apis(orchestrator_id) do
+    apis =
+      orchestrator_id
+      |> orchestrator_project_id()
+      |> ExternalApis.list_in_scope_for()
+      |> Enum.map(&api_summary/1)
+
+    {:ok, %{"apis" => apis, "count" => length(apis)}}
+  end
+
+  @spec api_summary(ExternalApis.ExternalApi.t()) :: map()
+  defp api_summary(api) do
+    %{
+      "name" => api.name,
+      "provider" => api.provider,
+      "scope" => if(is_nil(api.project_id), do: "platform", else: "project"),
+      "transport" => to_string(api.transport),
+      "auth_scheme" => to_string(api.auth_scheme),
+      "secret_name" => api.secret_name,
+      "description" => api.description,
+      "instructions" => api.instructions,
+      "doc_urls" => api.doc_urls,
+      "allowed_tools" => api.allowed_tools
+    }
   end
 
   @spec check_agent_status(Ecto.UUID.t(), map()) :: result()
@@ -1142,7 +1496,7 @@ defmodule RepoBuilder.Orchestrator.Tools do
       case Agents.create_worker(orchestrator_id, params) do
         {:ok, worker} ->
           _ = Agents.set_session(worker.id, adw_id)
-          spawn_adw_session(worker, input, adw, cwd)
+          spawn_adw_session(orchestrator_id, worker, input, adw, cwd)
 
         {:error, %Ecto.Changeset{} = changeset} ->
           {:error, changeset_reason(changeset)}
@@ -1244,18 +1598,40 @@ defmodule RepoBuilder.Orchestrator.Tools do
     :ok
   end
 
-  @spec spawn_adw_session(Agents.Agent.t(), String.t(), Definitions.Adw.t(), String.t() | nil) ::
+  @spec spawn_adw_session(
+          Ecto.UUID.t(),
+          Agents.Agent.t(),
+          String.t(),
+          Definitions.Adw.t(),
+          String.t() | nil
+        ) ::
           result()
-  defp spawn_adw_session(worker, input, adw, cwd) do
+  defp spawn_adw_session(orchestrator_id, worker, input, adw, cwd) do
+    # Restore attribution/scoping parity with `command_agent/3` (regression from de59371):
+    # the adapter worker row carries `orchestrator_id` but no `project_id`, so resolve the
+    # target project (owning `cwd`, else the orchestrator's bound project) to scope the
+    # persisted `agent_logs` rows and light up the correct project's feed. Its
+    # `isolation_mode` mirrors the worker-dispatch contract (nil ⇒ direct, back-compat).
+    {project_id, isolation_mode} =
+      case adw_target_project(orchestrator_id, cwd) do
+        %Project{id: id, isolation_mode: mode} -> {id, mode}
+        nil -> {nil, nil}
+      end
+
     opts = [
       agent_id: worker.id,
       agent_db_id: worker.id,
+      agent_name: worker.name,
       session_id: worker.session_id,
       harness: worker.harness,
       prompt: input,
       model: worker.model,
+      orchestrator_id: orchestrator_id,
+      project_id: project_id,
+      provider: worker_provider(worker),
       config: worker.config,
-      cwd: cwd
+      cwd: cwd,
+      isolation_mode: isolation_mode
     ]
 
     case Session.Supervisor.start_session(opts) do
@@ -2358,6 +2734,63 @@ defmodule RepoBuilder.Orchestrator.Tools do
     do: Map.put(config, "tools", tools)
 
   defp maybe_put_tools(config, _tools), do: config
+
+  # Validate an optional `apis` provision against the orchestrator's in-scope registry
+  # (issue-external-api-mcp-provisioning). Absent ⇒ `{:ok, []}` (no provision). A list of
+  # known names ⇒ `{:ok, [ExternalApi.t()]}` (resolved rows, in request order). An unknown
+  # name errors up front, listing the available names. A non-list value is rejected.
+  @spec resolve_apis(Ecto.UUID.t() | nil, map()) ::
+          {:ok, [ExternalApis.ExternalApi.t()]} | {:error, reason()}
+  defp resolve_apis(project_id, args) do
+    case Map.get(args, "apis") do
+      nil ->
+        {:ok, []}
+
+      [] ->
+        {:ok, []}
+
+      list when is_list(list) ->
+        in_scope = ExternalApis.list_in_scope_for(project_id)
+        known = MapSet.new(in_scope, & &1.name)
+        requested = list |> Enum.filter(&is_binary/1) |> Enum.uniq()
+
+        case Enum.reject(requested, &MapSet.member?(known, &1)) do
+          [] ->
+            {:ok, ExternalApis.fetch_by_names(project_id, requested)}
+
+          unknown ->
+            available = Enum.map_join(in_scope, ", ", & &1.name)
+
+            {:error,
+             "unknown apis #{inspect(unknown)}; available: #{if available == "", do: "(none registered)", else: available}"}
+        end
+
+      _other ->
+        {:error, "apis must be an array of registered API names"}
+    end
+  end
+
+  # Fold a non-empty external-API provision into a worker's config as NAMES only (never
+  # the secret). `[]` leaves the config untouched. Inference-only spec (mirrors
+  # `maybe_put_tools/2`).
+  defp maybe_put_apis(config, [_ | _] = apis),
+    do: Map.put(config, "apis", Enum.map(apis, & &1.name))
+
+  defp maybe_put_apis(config, _apis), do: config
+
+  # Prepend the provisioned APIs' usage instructions/doc URLs to the worker charter so the
+  # worker reads HOW to use each transferred API. `[]` ⇒ the prompt is untouched.
+  @spec prepend_api_instructions(String.t() | nil, [ExternalApis.ExternalApi.t()]) ::
+          String.t() | nil
+  defp prepend_api_instructions(prompt, []), do: prompt
+
+  defp prepend_api_instructions(prompt, apis) do
+    case Provisioning.instructions(apis) do
+      "" -> prompt
+      fragment when is_binary(prompt) and prompt != "" -> fragment <> "\n\n" <> prompt
+      fragment -> fragment
+    end
+  end
 
   # Inference-only spec — callers pass literal string keys, which dialyzer narrows
   # below a hand-written `String.t()` second arg (mirrors `positive_int/2`).

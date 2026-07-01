@@ -13,6 +13,14 @@ defmodule RepoBuilder.Projects.Capabilities do
 
   @type stack :: %{optional(String.t()) => term()}
 
+  @typedoc "Typed-system enforcement policy for the quality gate's type stage (quality-gate-plugins)."
+  @type typed_enforcement :: :off | :standard | :strict
+
+  # Closed set of typed-enforcement levels (generalizing this platform's own hard @spec
+  # gate to the repos it builds). `:strict` is the default.
+  @enforcements [:off, :standard, :strict]
+  @enforcement_strings Enum.map(@enforcements, &Atom.to_string/1)
+
   typedstruct enforce: false do
     field :language, String.t(), default: "unknown"
     field :package_manager, String.t() | nil
@@ -25,7 +33,21 @@ defmodule RepoBuilder.Projects.Capabilities do
     field :spec_dir, String.t(), default: "specs"
     field :source_dirs, [String.t()], default: []
     field :test_dir, String.t() | nil
+    # Quality-gate capability tokens (quality-gate-plugins): the mutation-testing command
+    # (`:pre_merge`-cadence stage), the strict type-checker command, and the annotation /
+    # @spec-coverage command the `:strict` typed_enforcement variant needs.
+    field :mutation_command, String.t() | nil
+    field :mutation_min_score, float() | nil
+    field :typecheck_strict_command, String.t() | nil
+    field :type_coverage_command, String.t() | nil
+    # Typed-system enforcement policy (default `:strict`): `:off` drops the type stage,
+    # `:standard` runs the plain checker, `:strict` runs the strict checker + coverage.
+    field :typed_enforcement, typed_enforcement(), default: :strict
   end
+
+  @doc "The closed set of typed-enforcement levels (quality-gate-plugins)."
+  @spec enforcements() :: [typed_enforcement(), ...]
+  def enforcements, do: @enforcements
 
   # Per-language defaults. The keys mirror the struct fields. A language absent here
   # falls back to a generic empty map (only spec_dir/language populated).
@@ -40,7 +62,10 @@ defmodule RepoBuilder.Projects.Capabilities do
       run_command: "mix run",
       spec_dir: "specs",
       source_dirs: ["lib"],
-      test_dir: "test"
+      test_dir: "test",
+      mutation_command: "mix muzak",
+      typecheck_strict_command: "mix dialyzer",
+      type_coverage_command: "mix credo --strict"
     },
     "python" => %{
       package_manager: "uv",
@@ -52,7 +77,10 @@ defmodule RepoBuilder.Projects.Capabilities do
       run_command: "uv run python",
       spec_dir: "specs",
       source_dirs: ["src"],
-      test_dir: "tests"
+      test_dir: "tests",
+      mutation_command: "uv run mutmut run",
+      typecheck_strict_command: "uv run pyright --strict",
+      type_coverage_command: "uv run mypy --disallow-untyped-defs"
     },
     "node" => %{
       package_manager: "npm",
@@ -64,7 +92,10 @@ defmodule RepoBuilder.Projects.Capabilities do
       run_command: "npm start",
       spec_dir: "specs",
       source_dirs: ["src"],
-      test_dir: "test"
+      test_dir: "test",
+      mutation_command: "npx stryker run",
+      typecheck_strict_command: "npx tsc --noEmit --strict",
+      type_coverage_command: "npx biome lint"
     },
     "rust" => %{
       package_manager: "cargo",
@@ -76,7 +107,10 @@ defmodule RepoBuilder.Projects.Capabilities do
       run_command: "cargo run",
       spec_dir: "specs",
       source_dirs: ["src"],
-      test_dir: "tests"
+      test_dir: "tests",
+      mutation_command: "cargo mutants",
+      typecheck_strict_command: "cargo check",
+      type_coverage_command: "cargo clippy -- -D warnings"
     },
     "go" => %{
       package_manager: "go",
@@ -88,12 +122,16 @@ defmodule RepoBuilder.Projects.Capabilities do
       run_command: "go run .",
       spec_dir: "specs",
       source_dirs: ["."],
-      test_dir: "."
+      test_dir: ".",
+      mutation_command: "go-mutesting ./...",
+      typecheck_strict_command: "go build ./...",
+      type_coverage_command: "golangci-lint run"
     }
   }
 
   @fields ~w(package_manager test_command build_command lint_command format_command
-             typecheck_command run_command spec_dir source_dirs test_dir)a
+             typecheck_command run_command spec_dir source_dirs test_dir
+             mutation_command typecheck_strict_command type_coverage_command)a
 
   @doc """
   Derive a capability map from a detected stack descriptor (`%{"language" => ...}`).
@@ -113,7 +151,14 @@ defmodule RepoBuilder.Projects.Capabilities do
   @doc "Serialize a capability struct to a string-keyed map for JSONB persistence."
   @spec to_map(t()) :: %{optional(String.t()) => term()}
   def to_map(%__MODULE__{} = caps) do
-    base = %{"language" => caps.language, "source_dirs" => caps.source_dirs}
+    base = %{
+      "language" => caps.language,
+      "source_dirs" => caps.source_dirs,
+      # Non-string capability fields (quality-gate-plugins) round-trip explicitly:
+      # `typed_enforcement` is stored as its string form, `mutation_min_score` as a number.
+      "typed_enforcement" => Atom.to_string(caps.typed_enforcement),
+      "mutation_min_score" => caps.mutation_min_score
+    }
 
     Enum.reduce(@fields, base, fn field, acc ->
       Map.put(acc, Atom.to_string(field), Map.get(caps, field))
@@ -131,6 +176,37 @@ defmodule RepoBuilder.Projects.Capabilities do
         end
       end)
 
+    attrs =
+      attrs
+      |> put_enforcement(map)
+      |> put_mutation_min_score(map)
+
     struct(%__MODULE__{}, attrs)
+  end
+
+  # Cast the persisted `typed_enforcement` (string, from JSONB) to its closed atom; an
+  # unknown/absent value leaves the struct default (`:strict`). `to_existing_atom` against
+  # the declared set keeps untrusted persisted data off `to_atom/1`.
+  @spec put_enforcement(map(), map()) :: map()
+  defp put_enforcement(attrs, map) do
+    case Map.get(map, "typed_enforcement") do
+      value when value in @enforcement_strings ->
+        Map.put(attrs, :typed_enforcement, String.to_existing_atom(value))
+
+      value when is_atom(value) and not is_nil(value) ->
+        if value in @enforcements, do: Map.put(attrs, :typed_enforcement, value), else: attrs
+
+      _ ->
+        attrs
+    end
+  end
+
+  @spec put_mutation_min_score(map(), map()) :: map()
+  defp put_mutation_min_score(attrs, map) do
+    case Map.get(map, "mutation_min_score") do
+      value when is_float(value) -> Map.put(attrs, :mutation_min_score, value)
+      value when is_integer(value) -> Map.put(attrs, :mutation_min_score, value / 1)
+      _ -> attrs
+    end
   end
 end

@@ -25,13 +25,15 @@ defmodule RepoBuilder.Session.Server do
 
   require Logger
 
-  alias RepoBuilder.{Agents, Logs, Secrets}
+  alias RepoBuilder.{Agents, ExternalApis, Logs, Secrets}
   alias RepoBuilder.Agents.Holding
+  alias RepoBuilder.ExternalApis.Provisioning
   alias RepoBuilder.Harness.Event
   alias RepoBuilder.Harness.McpTools
   alias RepoBuilder.Harness.Redact
   alias RepoBuilder.Harness.Registry, as: HarnessRegistry
   alias RepoBuilder.OsPidLedger
+  alias RepoBuilder.Plugins.SkillPack
   alias RepoBuilder.Projects.Worktree
   alias RepoBuilder.Session.Admission
 
@@ -249,8 +251,75 @@ defmodule RepoBuilder.Session.Server do
     project_env
     |> Map.merge(configured)
     |> Map.merge(tool_secrets(opts[:config] || %{}))
+    |> Map.merge(api_secrets(opts))
     |> Map.merge(opts[:secrets] || %{})
   end
+
+  # Fold in the encrypted-vault secrets for the dynamic external APIs provisioned to this
+  # worker (`config["apis"]`, issue-external-api-mcp-provisioning). WORKERS ONLY — the
+  # orchestrator brain is gated out (it must never hold a token). For each provisioned API
+  # we resolve its `{_server, secret_name}` pair and pull the value from the worker's
+  # project vault, falling back to the platform vault (project shadows platform — matching
+  # `ExternalApis.list_in_scope_for/1`). Unset/nil values are dropped (fail-soft: the
+  # `${SECRET}` placeholder stays literal), so only resolvable secrets reach the child env.
+  @spec api_secrets(keyword()) :: %{optional(String.t()) => String.t()}
+  defp api_secrets(opts) do
+    if orchestrator_session?(opts) do
+      %{}
+    else
+      project_id = opts[:project_id]
+      names = get_in(opts[:config] || %{}, ["apis"]) || []
+
+      project_id
+      |> ExternalApis.fetch_by_names(names)
+      |> Provisioning.secret_keys()
+      |> resolve_api_secret_values(project_id)
+    end
+  end
+
+  # Pull each provisioned API's secret from the project vault, falling back to the platform
+  # vault (project shadows platform). Unset/nil values are dropped (fail-soft).
+  @spec resolve_api_secret_values([{String.t(), String.t()}], Ecto.UUID.t() | nil) ::
+          %{optional(String.t()) => String.t()}
+  defp resolve_api_secret_values([], _project_id), do: %{}
+
+  defp resolve_api_secret_values(keys, project_id) do
+    vault = Map.merge(Secrets.resolve_platform_env(), Secrets.resolve_env(project_id))
+
+    for {_server, secret_name} <- keys,
+        value = Map.get(vault, secret_name),
+        not is_nil(value),
+        into: %{},
+        do: {secret_name, value}
+  end
+
+  # The provisioned `{api_name, secret_name}` pairs whose `secret_name` did NOT resolve into
+  # the already-merged child env (`secrets`) — i.e. the fail-soft drops
+  # (issue-provisioned-api-secret-missing-silent). Mirrors `api_secrets/1`'s scope EXACTLY
+  # (`fetch_by_names/2` → `Provisioning.secret_keys/1`, project shadows platform) and reuses
+  # the merged env rather than decrypting a second time, so precedence/overrides stay
+  # consistent: a secret present from ANY layer is not "missing". Gated to workers — an
+  # orchestrator holds no token and provisions nothing. `@doc false` as the hermetic test
+  # seam (a pure read; no process state).
+  @doc false
+  @spec missing_api_secrets(map(), %{optional(String.t()) => String.t()}, Ecto.UUID.t() | nil) ::
+          [{String.t(), String.t()}]
+  def missing_api_secrets(config, secrets, project_id)
+      when is_map(config) and is_map(secrets) do
+    if orchestrator_config?(config) do
+      []
+    else
+      names = config["apis"] || []
+
+      project_id
+      |> ExternalApis.fetch_by_names(names)
+      |> Provisioning.secret_keys()
+      |> Enum.reject(fn {_server, secret_name} -> Map.has_key?(secrets, secret_name) end)
+    end
+  end
+
+  @spec orchestrator_config?(map()) :: boolean()
+  defp orchestrator_config?(config), do: Map.get(config, :orchestrator) == true
 
   # The decrypted `name => value` vault for this session's project — the base secret layer
   # AND the scrub-value source. WORKERS ONLY: the orchestrator brain is gated out (its env
@@ -293,6 +362,20 @@ defmodule RepoBuilder.Session.Server do
   def handle_continue(:spawn, %State{} = state) do
     File.mkdir_p!(state.cwd)
 
+    # Materialize the project's active Agent Skill bundles into the session's
+    # `.claude/skills/` before the harness runs (iterative-ui-ux polish phase), so a worker
+    # discovers e.g. the UI/UX polish skills in its own cwd. Fail-soft (best-effort, mirrors
+    # the context-fragment injection): a copy failure never blocks the spawn. No-op when the
+    # session has no bound project.
+    _ = maybe_materialize_skills(state)
+
+    # Loud, persisted signal (issue-provisioned-api-secret-missing-silent): if this worker
+    # was provisioned an external API whose vault secret did NOT resolve into the merged
+    # child env (the fail-soft drop), emit a :missing_secret Status event + Logger.warning
+    # per missing secret AND prepend one warning line to the prompt — so the operator sees it
+    # at spawn and the worker does not chase a ghost credential. No-op on the happy path.
+    state = signal_missing_api_secrets(state)
+
     start_opts = %{
       prompt: state.prompt,
       model: state.model,
@@ -302,7 +385,10 @@ defmodule RepoBuilder.Session.Server do
       config: state.config,
       secrets: state.secrets,
       reasoning_effort: state.reasoning_effort,
-      price_table: state.price_table
+      price_table: state.price_table,
+      # The worker's bound project scopes the dynamic external-API resolution at spawn
+      # (issue-external-api-mcp-provisioning); nil for an unscoped/platform worker.
+      project_id: state.project_id
     }
 
     {exe, args, env, ctx} = state.adapter.command(start_opts)
@@ -330,6 +416,96 @@ defmodule RepoBuilder.Session.Server do
       message = "spawn preparation failed: #{inspect({kind, reason})}"
       state = dispatch(error_event(state, message, :spawn_failed), state)
       {:stop, :normal, state}
+  end
+
+  # Copy the bound project's active Agent Skill bundles into the session cwd's `.claude/skills/`
+  # (iterative-ui-ux polish phase). Best-effort: any failure is swallowed so a skill-copy
+  # problem never blocks a spawn. No-op for an unscoped (project-less) session.
+  @spec maybe_materialize_skills(State.t()) :: :ok
+  defp maybe_materialize_skills(%State{project_id: project_id, cwd: cwd})
+       when is_binary(project_id) and is_binary(cwd) do
+    _ = SkillPack.materialize(project_id, cwd)
+    :ok
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
+
+  defp maybe_materialize_skills(%State{}), do: :ok
+
+  # Detect provisioned-API secrets that did NOT resolve into the merged child env and signal
+  # them LOUDLY at spawn (issue-provisioned-api-secret-missing-silent), without weakening the
+  # fail-soft drop. For each missing pair: a `Logger.warning` + a non-terminal
+  # `Event.Status{kind: :missing_secret}` (persisted via `dispatch/2` → `Logs.Writer`, the
+  # `dispatch/2` result folded back), and ONE warning line prepended to the worker prompt so
+  # the worker reports the missing secret instead of grepping the filesystem for a ghost
+  # credential. The spawn is NOT blocked — the signal is observability, not a gate. Empty (the
+  # happy path) ⇒ state returned unchanged: zero events, zero log, byte-identical prompt.
+  @spec signal_missing_api_secrets(State.t()) :: State.t()
+  defp signal_missing_api_secrets(%State{} = state) do
+    case missing_api_secrets(state.config, state.secrets, state.project_id) do
+      [] ->
+        state
+
+      missing ->
+        state
+        |> emit_missing_secret_signals(missing)
+        |> Map.update!(:prompt, &prepend_missing_secret_note(&1, missing))
+    end
+  end
+
+  @spec emit_missing_secret_signals(State.t(), [{String.t(), String.t()}]) :: State.t()
+  defp emit_missing_secret_signals(state, missing) do
+    state =
+      Enum.reduce(missing, state, fn {api_name, secret_name}, acc ->
+        Logger.warning(missing_secret_message(api_name, secret_name))
+        dispatch(missing_secret_event(acc, api_name, secret_name), acc)
+      end)
+
+    # `dispatch/2` arms the soft quiescence timer for a worker session; `spawn_child/5` arms it
+    # again at the end of a successful spawn. Cancel the pre-spawn timer here so we don't leak
+    # it (which would risk a spurious idle-demote ~quiescence_ms after spawn).
+    disarm_quiescence(state)
+  end
+
+  @spec disarm_quiescence(State.t()) :: State.t()
+  defp disarm_quiescence(%State{quiescence_ref: nil} = state), do: state
+
+  defp disarm_quiescence(%State{quiescence_ref: ref} = state) do
+    _ = Process.cancel_timer(ref)
+    %{state | quiescence_ref: nil}
+  end
+
+  @spec missing_secret_event(State.t(), String.t(), String.t()) :: Event.Status.t()
+  defp missing_secret_event(state, api_name, secret_name) do
+    %Event.Status{
+      harness: state.harness,
+      kind: :missing_secret,
+      detail: %{api: api_name, secret_name: secret_name},
+      raw: %{"message" => missing_secret_message(api_name, secret_name)}
+    }
+  end
+
+  @spec missing_secret_message(String.t(), String.t()) :: String.t()
+  defp missing_secret_message(api_name, secret_name) do
+    "provisioned API #{api_name} references vault secret #{secret_name} which is missing — " <>
+      "deposit it (Settings → vault) so the worker can authenticate"
+  end
+
+  # ONE clear line prepended to the worker prompt naming the missing secret(s), so the worker
+  # does not chase a non-existent credential. Only ever called with a non-empty `missing`, so
+  # the prompt is byte-identical when nothing is missing.
+  @spec prepend_missing_secret_note(String.t(), [{String.t(), String.t()}]) :: String.t()
+  defp prepend_missing_secret_note(prompt, missing) do
+    names = missing |> Enum.map(fn {_api, secret} -> secret end) |> Enum.uniq() |> Enum.join(", ")
+
+    note =
+      "NOTE: provisioned API secret(s) not available in your environment (MCP auth will " <>
+        "fail): #{names}. Do not search the filesystem for them; report the missing secret " <>
+        "and stop."
+
+    note <> "\n\n" <> prompt
   end
 
   # When this is an orchestrator session AND the adapter implements the optional
@@ -864,9 +1040,39 @@ defmodule RepoBuilder.Session.Server do
 
   @spec lane(State.t(), :running | :succeeded | :failed | :holding, String.t()) :: :ok
   defp lane(state, status, label) do
+    :ok =
+      RepoBuilder.Dashboard.broadcast_lane(%{
+        id: "agent:#{state.agent_id}",
+        kind: :agent,
+        label: to_string(label),
+        status: status,
+        harness: to_string(state.harness)
+      })
+
+    # A portable (shell-out) ADW is modelled as a worker Agent, so it only ever produced a
+    # `kind: :agent` lane — invisible on the console's ADWs screen, which renders `kind:
+    # :workflow` cards. Mirror the same lifecycle status onto a `kind: :workflow` lane
+    # (`id: "workflow:<agent_id>"`) so `ConsoleLive.update_workflow_status/2` builds/updates
+    # an ADW card; because `run_id == agent_id`, the already-streaming ADW worker events fill
+    # its step squares. Harness-blind for every other harness (no behaviour change).
+    maybe_workflow_lane(state, status, label)
+  end
+
+  # Whether this session is a portable ADW (registry key "adw" → atom `:adw`).
+  @spec adw?(State.t()) :: boolean()
+  defp adw?(%State{harness: harness}), do: harness == :adw
+
+  @spec maybe_workflow_lane(State.t(), :running | :succeeded | :failed | :holding, String.t()) ::
+          :ok
+  defp maybe_workflow_lane(state, status, label) do
+    if adw?(state), do: workflow_lane(state, status, label), else: :ok
+  end
+
+  @spec workflow_lane(State.t(), :running | :succeeded | :failed | :holding, String.t()) :: :ok
+  defp workflow_lane(state, status, label) do
     RepoBuilder.Dashboard.broadcast_lane(%{
-      id: "agent:#{state.agent_id}",
-      kind: :agent,
+      id: "workflow:#{state.agent_id}",
+      kind: :workflow,
       label: to_string(label),
       status: status,
       harness: to_string(state.harness)

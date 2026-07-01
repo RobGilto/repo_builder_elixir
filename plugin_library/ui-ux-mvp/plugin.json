@@ -1,0 +1,12 @@
+{
+  "schema": "agentic.plugin/1",
+  "id": "ui-ux-mvp",
+  "name": "UI/UX MVP",
+  "version": "1.0.0",
+  "description": "Curated UI/UX polish knowledge for the iterative front-end phase: a foundations skill (visual hierarchy, spacing/type, accessibility, the avoid-AI-slop anti-pattern list + review rubric) plus one skill per surface (web, desktop, TUI), materialized into a worker's .claude/skills/ so it raises an app past green-tests to a decent MVP.",
+  "author": "repo_builder",
+  "compat": { "platform": ">= 0.0.0" },
+  "contributions": [
+    { "kind": "skill", "path": "skills" }
+  ]
+}

@@ -74,7 +74,11 @@ defmodule RepoBuilder.Prompts.SlashExpander do
   def expand(prompt, working_dir, nil), do: expand(prompt, working_dir)
 
   def expand(prompt, working_dir, %Project{} = project) when is_binary(prompt) do
-    case body_index(project) do
+    # Overlay the project's resolved bodies on TOP of the path-based platform layer
+    # (app-root ∪ working-dir), so project/pack resolution still wins on conflict while
+    # platform-only commands (`/bug`, `/chore`, …) resolve from the app's own
+    # `.claude/commands/` instead of leaking through raw.
+    case Map.merge(platform_body_index(working_dir), body_index(project)) do
       empty when map_size(empty) == 0 ->
         expand(prompt, working_dir)
 
@@ -119,6 +123,22 @@ defmodule RepoBuilder.Prompts.SlashExpander do
     project
     |> Commands.resolve_all()
     |> Map.new(fn resolved -> {resolved.name, resolved.body} end)
+  end
+
+  # The `name => resolved-body` index for the path-based platform layer (app-root ∪
+  # working-dir). Reuses the file discovery + frontmatter-stripped body read; unreadable
+  # files are skipped, staying fail-silent.
+  @spec platform_body_index(String.t() | nil) :: index()
+  defp platform_body_index(working_dir) do
+    working_dir
+    |> index()
+    |> Enum.flat_map(fn {name, path} ->
+      case body(path) do
+        {:ok, body} -> [{name, body}]
+        {:error, _reason} -> []
+      end
+    end)
+    |> Map.new()
   end
 
   # Build the `name => path` index for the merged (app ∪ working-dir) command set,

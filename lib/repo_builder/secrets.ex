@@ -84,9 +84,21 @@ defmodule RepoBuilder.Secrets do
   """
   @spec resolve_env(Ecto.UUID.t() | nil) :: %{optional(String.t()) => String.t()}
   def resolve_env(nil), do: %{}
+  def resolve_env(project_id), do: decrypt_into_env(project_id)
 
-  def resolve_env(project_id) do
-    project_id
+  @doc """
+  Decrypt the PLATFORM (NULL-scope) vault into a `name => value` env map. Unlike
+  `resolve_env(nil)` (which is gated to `%{}` for the "no project" convention), this is the
+  explicit platform-scope resolver — used by the external-API secret-injection seam so a
+  platform-scope API's credential reaches a provisioned worker
+  (issue-external-api-mcp-provisioning). Empty for an unset key (fail-closed).
+  """
+  @spec resolve_platform_env() :: %{optional(String.t()) => String.t()}
+  def resolve_platform_env, do: decrypt_into_env(nil)
+
+  @spec decrypt_into_env(Ecto.UUID.t() | nil) :: %{optional(String.t()) => String.t()}
+  defp decrypt_into_env(scope) do
+    scope
     |> load_rows()
     |> Enum.reduce(%{}, fn row, acc ->
       case Cipher.decrypt(row.ciphertext) do

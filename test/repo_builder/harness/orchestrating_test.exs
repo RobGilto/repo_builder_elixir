@@ -8,6 +8,7 @@ defmodule RepoBuilder.Harness.OrchestratingTest do
   use ExUnit.Case, async: true
 
   alias RepoBuilder.Harness.{Claude, Pi, Registry}
+  alias RepoBuilder.Orchestrator.ToolCatalog
 
   defp ctx(overrides \\ %{}) do
     Map.merge(
@@ -69,6 +70,22 @@ defmodule RepoBuilder.Harness.OrchestratingTest do
       ctx = ctx(%{resume_session_id: "sess-pi"})
       {args, _env} = Pi.orchestrator_spawn(%{}, ctx)
       assert Enum.chunk_every(args, 2, 1) |> Enum.member?(["--session", "sess-pi"])
+      File.rm_rf!(ctx.cwd)
+    end
+
+    test "writes the catalog-derived tool manifest and injects PI_ORCH_TOOLS_PATH (absolute)" do
+      ctx = ctx()
+      {_args, env} = Pi.orchestrator_spawn(%{}, ctx)
+
+      path = Path.join(ctx.cwd, ".pi-orch-tools.json")
+      assert {"PI_ORCH_TOOLS_PATH", ^path} = List.keyfind(env, "PI_ORCH_TOOLS_PATH", 0)
+      assert Path.type(path) == :absolute
+      assert File.exists?(path)
+
+      manifest_names = path |> File.read!() |> Jason.decode!() |> Enum.map(& &1["name"])
+      assert MapSet.new(manifest_names) == MapSet.new(ToolCatalog.names())
+
+      File.rm_rf!(ctx.cwd)
     end
   end
 

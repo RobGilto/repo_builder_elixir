@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan: Iterative UI/UX Polish Phase — skill-driven front-end MVP layer</title>
+<style>
+  :root {
+    /* Synced visual identity — matches the repo's dark orchestration console.
+       Any generated image must use this palette + mono/technical, minimal feel. */
+    --bg:        #0a0a0a;
+    --surface:   #141414;
+    --surface-2: #1e1e1e;
+    --line:      #2a2a2a;
+    --text:      #e7e9ea;
+    --text-dim:  #9aa1a6;
+    --cyan:      #06b6d4;
+    --teal:      #14b8a6;
+    --violet:    #a855f7;
+    --amber:     #f59e0b;
+    --green:     #22c55e;
+    --red:       #ef4444;
+    --mono: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --maxw: 980px;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: var(--sans); line-height: 1.6; font-size: 16px;
+  }
+  main { max-width: var(--maxw); margin: 0 auto; padding: 3rem 1.5rem 6rem; }
+  h1, h2, h3, h4 { line-height: 1.25; font-weight: 650; }
+  h1 { font-size: 2rem; letter-spacing: -0.01em; margin: 0 0 0.5rem; }
+  h2 {
+    font-size: 1.4rem; margin: 3rem 0 1rem; padding-bottom: 0.4rem;
+    border-bottom: 1px solid var(--line);
+  }
+  h2::before { content: "▎"; color: var(--cyan); margin-right: 0.4rem; }
+  h3 { font-size: 1.12rem; margin: 1.8rem 0 0.6rem; color: #fff; }
+  h4 { font-size: 1rem; margin: 1.3rem 0 0.4rem; color: var(--teal); }
+  p  { color: var(--text); }
+  a  { color: var(--cyan); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    font-family: var(--mono); font-size: 0.86em;
+    background: var(--surface-2); border: 1px solid var(--line);
+    padding: 0.05em 0.4em; border-radius: 5px; color: #d7ecef;
+  }
+  pre {
+    background: var(--surface); border: 1px solid var(--line);
+    border-left: 3px solid var(--cyan); border-radius: var(--radius);
+    padding: 1rem 1.1rem; overflow-x: auto;
+  }
+  pre code { background: none; border: none; padding: 0; color: #cfe9ee; }
+
+  header { border-bottom: 1px solid var(--line); padding-bottom: 1.5rem; }
+  .subtitle { color: var(--text-dim); margin: 0.2rem 0 1rem; font-size: 1.02rem; }
+  details.meta { margin-top: 0.6rem; }
+  summary { cursor: pointer; color: var(--text-dim); font-family: var(--mono); font-size: 0.82rem; }
+  dl {
+    display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 1.2rem;
+    margin: 0.8rem 0 0; font-family: var(--mono); font-size: 0.8rem;
+  }
+  dt { color: var(--violet); }
+  dd { margin: 0; color: var(--text-dim); word-break: break-word; }
+
+  nav.toc {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 1rem 1.4rem; margin: 2rem 0;
+    font-size: 0.92rem; columns: 2; column-gap: 2rem;
+  }
+  nav.toc a { color: var(--text-dim); display: block; padding: 0.15rem 0; }
+  nav.toc a:hover { color: var(--cyan); }
+
+  figure { margin: 1.4rem 0; text-align: center; }
+  figure img { max-width: 100%; border: 1px solid var(--line); border-radius: var(--radius); }
+  figcaption { color: var(--text-dim); font-size: 0.85rem; margin-top: 0.5rem; font-style: italic; }
+  .img-todo {
+    display: block; border: 1px dashed var(--line); border-radius: var(--radius);
+    padding: 2rem 1rem; color: var(--text-dim); font-family: var(--mono);
+    font-size: 0.8rem; background: repeating-linear-gradient(45deg, #111, #111 10px, #141414 10px, #141414 20px);
+  }
+
+  .files ul { list-style: none; padding-left: 0; }
+  .files li { padding: 0.35rem 0; border-bottom: 1px dashed var(--line); }
+  .tag {
+    display: inline-block; font-family: var(--mono); font-size: 0.68rem;
+    text-transform: uppercase; letter-spacing: 0.06em; padding: 0.1em 0.5em;
+    border-radius: 4px; margin-right: 0.5rem; vertical-align: middle;
+  }
+  .tag.existing { background: rgba(20,184,166,0.12); color: var(--teal); border: 1px solid var(--teal); }
+  .tag.new      { background: rgba(168,85,247,0.12); color: var(--violet); border: 1px solid var(--violet); }
+
+  .phase {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 1.2rem 1.5rem; margin: 1.5rem 0;
+  }
+  .phase h3 { margin-top: 0.2rem; }
+  .status {
+    font-family: var(--mono); color: var(--amber); font-weight: 700;
+    background: none; border: none; padding: 0;
+  }
+  ul.checklist { list-style: none; padding-left: 0.2rem; }
+  ul.checklist li { padding: 0.28rem 0 0.28rem 0.2rem; }
+  ul.checklist li .status { margin-right: 0.5rem; }
+  .loop {
+    margin: 1rem 0 0.2rem; padding: 0.7rem 1rem; font-size: 0.9rem;
+    background: rgba(6,182,212,0.07); border: 1px solid rgba(6,182,212,0.3);
+    border-radius: 8px; color: #bfe8ef;
+  }
+  .callout {
+    padding: 0.8rem 1.1rem; border-radius: 8px; margin: 1rem 0;
+    background: var(--surface-2); border-left: 3px solid var(--violet);
+  }
+  .callout.warn { border-left-color: var(--amber); }
+  .callout.key  { border-left-color: var(--teal); }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--cyan); font-family: var(--mono); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  #questionables details, #amendments details {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 8px; padding: 0.6rem 1rem; margin: 0.6rem 0;
+  }
+  #questionables summary { color: var(--amber); font-family: var(--sans); font-size: 1rem; }
+  .qa-answer { color: var(--text-dim); margin: 0.6rem 0 0.2rem; }
+  .pill { font-family: var(--mono); font-size: 0.72rem; padding: 0.1em 0.5em; border-radius: 4px; border: 1px solid var(--line); color: var(--text-dim); }
+</style>
+</head>
+<body>
+<main>
+
+  <!-- ===== HEADER + UPDATABLE METADATA ===== -->
+  <header>
+    <h1>Iterative UI/UX Polish Phase</h1>
+    <p class="subtitle">A skill-driven, surface-aware front-end layer the orchestrator runs <em>after</em> the backend is built — iterating web, desktop, and TUI experiences up to a decent MVP.</p>
+    <details class="meta">
+      <summary>Metadata</summary>
+      <dl>
+        <dt>created</dt>      <dd>2026-07-01T00:00:00Z</dd>
+        <dt>modified</dt>     <dd>2026-07-01T00:00:00Z, 2026-07-01T01:00:00Z</dd>
+        <dt>commits</dt>      <dd>6d18280 (baseline)</dd>
+        <dt>agent name</dt>   <dd>claude-opus-4-8 (planf3)</dd>
+        <dt>session id</dt>   <dd>2f9d24a4-1ead-4dd4-af40-aa2165bcb648</dd>
+        <dt>back refs</dt>    <dd>specs/issue-b-adw-consoleui-sdlc_planner-orchestration-console-ui-parity.md, specs/issue-0-adw-local-sdlc_planner-pi-provider-dropdown-only-anthropic.md, workstream-orchestration-implemented (memory)</dd>
+        <dt>forward refs</dt> <dd>(none yet)</dd>
+      </dl>
+    </details>
+  </header>
+
+  <!-- Hero image — synced to the :root visual identity. Replace with <img> once generated. -->
+  <figure>
+    <img src="orchestrator-iterative-ui-ux-polish-phase/hero.png" alt="SDLC pipeline spec→build→test→review with an appended looping UI/UX stage feeding browser, desktop, and terminal surfaces from a stack of skill cards">
+    <figcaption>The orchestrator appends an iterative, skill-fed UI/UX stage after the backend passes — one loop per surface (web · desktop · TUI).</figcaption>
+  </figure>
+
+  <!-- ===== TABLE OF CONTENTS ===== -->
+  <nav class="toc">
+    <a href="#purpose">Purpose</a>
+    <a href="#problem">Problem</a>
+    <a href="#solution">Solution</a>
+    <a href="#research">Research (firecrawl)</a>
+    <a href="#files">Relevant Files</a>
+    <a href="#phases">Implementation Phases</a>
+    <a href="#validation">Validation Commands</a>
+    <a href="#questionables">Questionables</a>
+    <a href="#notes">Notes</a>
+    <a href="#amendments">Amendments</a>
+  </nav>
+
+  <!-- ===== PURPOSE / PROBLEM / SOLUTION ===== -->
+  <section id="purpose">
+    <h2>Purpose</h2>
+    <p>Give the autonomous orchestrator (Claude or <code>pi</code>) an explicit, <strong>iterative front-end layer</strong> that runs after the backend is delivered. When a generated app has a user-facing surface — a web app, a desktop/PC app, or a TUI — the orchestrator should plan and drive one or more <strong>UI/UX polish phases</strong> that loop until the experience reaches a decent MVP: tight navigation, no obvious UX traps, consistent visual language, and accessible defaults. The knowledge that raises quality is packaged as curated <strong>skill files</strong> (<code>SKILL.md</code> bundles) plus a UI/UX <strong>expertise domain</strong>, fed to the workers and orchestrator through mechanisms the platform already has.</p>
+  </section>
+
+  <section id="problem">
+    <h2>Problem</h2>
+    <p>Today the workstream stage machine is <code>spec → implement → test → review</code> (see <code>@stage_order</code> in <code>workstreams.ex:75</code>). Those stages optimize for <em>correctness</em>: does the backend work, do tests pass, does review approve the diff. Nothing in the loop optimizes for <em>experience</em>. In practice the user had to hand-author several UI/UX planning specs (console parity, provider dropdown, swimlanes) after the fact to make navigation tight and kill bad UX — exactly the work the platform should perform on its own. The result of "build it and stop at green tests" is functional-but-flat UI: the generic AI-slop tells (oversized cards, soft shadows, no visual hierarchy, dead-end navigation), and no per-surface awareness that a TUI, a desktop app, and a web app each demand different UX affordances.</p>
+    <figure>
+      <img src="orchestrator-iterative-ui-ux-polish-phase/problem.png" alt="Split contrast: left a flat grey wireframe with a passing-tests check mark; right navigation arrows hitting dead-end walls labeled bad UX">
+      <figcaption>Green tests ≠ good experience. The current loop verifies correctness, never the interface.</figcaption>
+    </figure>
+  </section>
+
+  <section id="solution">
+    <h2>Solution</h2>
+    <p>Add a <strong>UI/UX phase kind</strong> to the existing workstream machinery rather than inventing a parallel system. Three coordinated pieces:</p>
+    <ol>
+      <li><strong>A curated UI/UX skill library</strong> — a vendored plugin (<code>plugin_library/ui-ux-mvp/</code>) shipping <code>SKILL.md</code> bundles: <code>ui-ux-foundations</code> (universal principles) plus one per surface (<code>web-ui-polish</code>, <code>desktop-ui-polish</code>, <code>tui-ux-polish</code>), and a matching <code>ui-ux-mvp</code> <em>expertise</em> domain. These reach workers via the already-written <code>SkillPack.materialize/2</code> (wired in at last) and reach the orchestrator via <code>expertise_block/1</code>.</li>
+      <li><strong>A surface-aware, iterative phase</strong> — phases carry a <code>kind</code> (<code>:backend | :ui_ux</code>) and a <code>surface</code> (<code>:web | :desktop | :tui</code>). A <code>:ui_ux</code> phase runs the same four stages, but the stages are UI-flavored: <em>spec</em> = a UX design brief, <em>implement</em> = build/refine the interface, <em>test</em> = <strong>visual/behavioral validation</strong> (Playwright screenshots for web, terminal snapshots for TUI), <em>review</em> = a UX rubric review whose failure re-enters the fix loop. The existing <code>review → failed → fix → re-review</code> stall machine <em>is</em> the iteration engine — bounded by a UX iteration cap so it converges to MVP instead of gold-plating.</li>
+      <li><strong>Orchestrator guidance</strong> — extend <code>phased_delivery_block/0</code> so that, after backend phases pass, the orchestrator detects whether the app has a front-end surface and, if so, appends UI/UX phase(s) via <code>plan_phases</code>, then drives them to done.</li>
+    </ol>
+    <div class="callout key"><strong>Design north star:</strong> reuse the durable, crash-resumable workstream machine. No new state store, no parallel scheduler — a <code>:ui_ux</code> phase is just a phase with a different <code>kind</code>, different skills in context, and a visual test gate. Everything already rehydrates through <code>get_workstream</code>.</div>
+    <figure>
+      <img src="orchestrator-iterative-ui-ux-polish-phase/solution.png" alt="Three-layer diagram: skill library at the bottom, a looping ui/ux phase in the middle, orchestrator on top, with web/desktop/tui surface icons">
+      <figcaption>Three layers: a skill library feeds knowledge, a UI/UX phase kind loops to MVP, orchestrator guidance decides when to run it.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== RESEARCH ===== -->
+  <section id="research">
+    <h2>Research (firecrawl)</h2>
+    <p>Scraped to ground the skill-file design against how the ecosystem actually packages UI/UX knowledge for coding agents.</p>
+    <table>
+      <tr><th>Source</th><th>What it confirms for this plan</th></tr>
+      <tr>
+        <td><a href="https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview">Anthropic — Agent Skills overview</a></td>
+        <td>Canonical <code>SKILL.md</code> = YAML frontmatter (<code>name</code>, <code>description</code>) + body, with <strong>progressive disclosure</strong> across three levels: metadata always loaded (~100 tok), body loaded when triggered (&lt;5k tok), bundled resources loaded on demand (unlimited). This maps 1:1 onto our repo's <code>skills/&lt;name&gt;/SKILL.md</code> + <code>SkillPack.materialize/2</code> and the Forge <code>:skill</code> contribution kind. <code>description</code> must state <em>what</em> AND <em>when</em>. Reserved words: no "anthropic"/"claude" in <code>name</code>.</td>
+      </tr>
+      <tr>
+        <td><a href="https://github.com/nextlevelbuilder/ui-ux-pro-max-skill">nextlevelbuilder/ui-ux-pro-max-skill</a>, <a href="https://skillsllm.com/skill/front-end-checklist">Front-End Checklist</a>, <a href="https://aiuxplayground.com/skills">AI UX Playground</a></td>
+        <td>Real, widely-forked UI/UX skills organize knowledge as: multi-<strong>platform</strong> design intelligence, <strong>accessibility</strong> (WCAG, focus, contrast), <strong>color / typography / spacing / layout</strong> systems, and <strong>component</strong> patterns — the exact section set our <code>SKILL.md</code> bodies should encode. Confirms surface-specific skills (web vs. native vs. terminal) are the right granularity.</td>
+      </tr>
+      <tr>
+        <td><a href="https://www.youtube.com/watch?v=j_ghsM_4MZY">"Fixing Visual AI Slop with Front-End Design Skills"</a></td>
+        <td>Names the failure mode precisely — purple gradients, oversized rounded cards, soft shadows, copied layouts. Our <code>ui-ux-foundations</code> skill should carry an explicit "avoid these AI tells" anti-pattern list as a review-rubric input.</td>
+      </tr>
+    </table>
+    <div class="callout warn"><strong>Scope note:</strong> firecrawl was used <em>only</em> to research this plan (what good UI/UX skill files contain). It is <strong>not</strong> a dependency we add to the repo. The skill files we ship are curated/authored assets, refreshable by hand or via Forge — no runtime scraping.</div>
+  </section>
+
+  <!-- ===== RELEVANT FILES ===== -->
+  <section id="files" class="files">
+    <h2>Relevant Files</h2>
+
+    <h3>Existing Files</h3>
+    <ul>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/workstreams.ex</code> — stage machine; <code>@stage_order</code> (l.75), <code>plan_phases/3</code>, <code>record_stage/3</code>, <code>transition/3</code>, <code>promote_next_phase</code>. Carries the <code>kind</code>/<code>surface</code> + iteration cap logic.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/workstream_phase.ex</code> — phase schema (<code>@stages</code>, <code>@current_stages</code>, JSONB <code>stages</code>). Gains <code>kind</code>, <code>surface</code>, <code>iteration</code> columns.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/system_prompt.ex</code> — <code>phased_delivery_block/0</code> (l.567–592), <code>expertise_block/1</code>, <code>reflections_block/1</code>. Gains UI/UX guidance + a <code>ui-ux-mvp</code> expertise mapping.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/tool_catalog.ex</code> — single source of truth for tool defs (drives MCP + pi manifest). <code>record_stage</code> schema and any new UI helper tool registered here.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/tools.ex</code> — dispatch + <code>plan_phases</code>/<code>record_stage</code>/<code>normalize_phases</code>. Extended to pass <code>kind</code>/<code>surface</code> through.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/plugins/skill_pack.ex</code> — <code>materialize/2</code> copies active <code>:skill</code> contributions into <code>.claude/skills/</code>. <strong>Currently defined but not called</strong> — this plan wires it into worker launch.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/expertise.ex</code> — versioned domain mental models (<code>render/1</code>, <code>save/3</code>), injected via <code>expertise_block/1</code>.</li>
+      <li><span class="tag existing">existing</span> <code>priv/forge/generators/skill.md</code> — the Forge generator template that authors <code>SKILL.md</code> bundles; reference for hand-authored skills.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/components/dashboard_components.ex</code> + <code>live/console_live.ex</code> — Workstreams panel; surfaces the new <code>:ui_ux</code> phase kind distinctly.</li>
+      <li><span class="tag existing">existing</span> <code>.claude/agents/playwright-validator</code> + <code>playwright-reports/</code> — visual validation seam reused as the UI/UX <em>test</em> gate for web surfaces.</li>
+      <li><span class="tag existing">existing</span> <code>playwright-cli</code> (shell tool / skill) — harness-agnostic browser automation: a11y-ref click/type/fill, disk-saved snapshots, network mocking, and <code>.spec.ts</code> generation. The deterministic pass/fail gate that works for Claude <em>and</em> <code>pi</code>.</li>
+      <li><span class="tag existing">existing</span> <code>chrome-devtools-mcp</code> (MCP) + Tidewave <code>browser_eval</code> — Claude-worker troubleshooting layer: console, network bodies/timing, Core Web Vitals, throttling; Tidewave adds Phoenix/LiveView runtime intelligence.</li>
+    </ul>
+
+    <h3>New Files</h3>
+    <ul>
+      <li><span class="tag new">new</span> <code>plugin_library/ui-ux-mvp/plugin.json</code> — manifest declaring the <code>:skill</code> contributions (+ optional <code>:context_fragment</code>).</li>
+      <li><span class="tag new">new</span> <code>plugin_library/ui-ux-mvp/skills/ui-ux-foundations/SKILL.md</code> — universal UX principles, hierarchy, accessibility, the "avoid AI-slop tells" anti-pattern list, and the review rubric.</li>
+      <li><span class="tag new">new</span> <code>plugin_library/ui-ux-mvp/skills/web-ui-polish/SKILL.md</code> — responsive layout, semantic HTML, focus/keyboard nav, Tailwind/DaisyUI-friendly patterns, Playwright self-check recipe.</li>
+      <li><span class="tag new">new</span> <code>plugin_library/ui-ux-mvp/skills/desktop-ui-polish/SKILL.md</code> — window/menu conventions, native affordances, density, keyboard shortcuts.</li>
+      <li><span class="tag new">new</span> <code>plugin_library/ui-ux-mvp/skills/tui-ux-polish/SKILL.md</code> — terminal layout, key bindings, focus/selection, color-safe/no-color fallbacks, snapshot self-check.</li>
+      <li><span class="tag new">new</span> <code>priv/orchestrator/experts/ui-ux-mvp/0001.md</code> — orchestrator-facing expertise: when to run a UI/UX phase, how to scope it per surface, the iteration/exit criteria.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/orchestrator/surface_detector.ex</code> — reads the built repo (assets, deps, entry points) and classifies its front-end surface(s): <code>:web | :desktop | :tui | :none</code>.</li>
+      <li><span class="tag new">new</span> <code>priv/repo/migrations/&lt;ts&gt;_add_ui_ux_to_workstream_phases.exs</code> — adds <code>kind</code>, <code>surface</code>, <code>iteration</code> columns to <code>orchestrator_workstream_phases</code>.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/orchestrator/ui_ux_phase_test.exs</code>, <code>surface_detector_test.exs</code>, <code>skill_pack_materialize_test.exs</code> — coverage for the new seams.</li>
+    </ul>
+  </section>
+
+  <!-- ===== IMPLEMENTATION PHASES ===== -->
+  <section id="phases">
+    <h2>Implementation Phases</h2>
+    <p><strong>IMPORTANT:</strong> Execute every phase and task step by step, in order, top to bottom.</p>
+    <p>Status markers: <code>[]</code> idle · <code>[wip]</code> in progress · <code>[x]</code> complete · <code>[f]</code> failed. All start as <code>[]</code>; the Build Plan workflow updates them as it works.</p>
+
+    <!-- ============ PHASE 1 ============ -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 1: UI/UX Skill Library + expertise</h3>
+      <p>Author the curated knowledge assets and make the plumbing that delivers them real. This phase ships value even before the phase machine changes: any worker can already consume materialized skills.</p>
+      <figure>
+        <img src="orchestrator-iterative-ui-ux-polish-phase/phase1.png" alt="Four skill cards (foundations, web, desktop, tui) flowing into a .claude/skills folder, and a separate expertise card flowing into a system prompt">
+        <figcaption>Skills materialize into the worker's <code>.claude/skills/</code>; expertise injects into the orchestrator prompt.</figcaption>
+      </figure>
+
+      <h4>1. Author the skill bundles</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Create <code>plugin_library/ui-ux-mvp/plugin.json</code> declaring four <code>:skill</code> contributions (paths to each <code>SKILL.md</code>), following <code>ai_docs/plugin-authoring.md</code> and the existing <code>plugin_library/forge-meta/plugin.json</code> as the reference manifest shape.</li>
+        <li><code class="status">[]</code> Write <code>ui-ux-foundations/SKILL.md</code> — frontmatter <code>name: ui-ux-foundations</code>, a <em>what+when</em> <code>description</code>; body covers visual hierarchy, spacing/typography scale, color/contrast, accessibility (focus, keyboard, WCAG AA), and an explicit "avoid AI-slop tells" list (from research). Keep body &lt; 500 lines; push detail to sibling files (progressive disclosure).</li>
+        <li><code class="status">[]</code> Write <code>web-ui-polish/SKILL.md</code>, <code>desktop-ui-polish/SKILL.md</code>, <code>tui-ux-polish/SKILL.md</code> — each with a surface-specific checklist + a self-validation recipe (web → Playwright screenshot; tui → terminal snapshot).</li>
+        <li><code class="status">[]</code> Author <code>priv/orchestrator/experts/ui-ux-mvp/0001.md</code> — orchestrator mental model: when a UI/UX phase is warranted, per-surface scoping, iteration cap and MVP exit criteria.</li>
+      </ul>
+
+      <h4>2. Wire skill materialization into worker launch</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Call <code>SkillPack.materialize(project_id, worker_working_dir)</code> at the point a worker/harness session is launched (harness registry / session server), so active <code>:skill</code> bundles land in the worker's <code>.claude/skills/</code> before it runs. Fail-soft on error (mirror <code>context_fragments/1</code> best-effort pattern).</li>
+        <li><code class="status">[]</code> Map <code>ui-ux-mvp</code> into <code>expertise_block/1</code>'s stack-layer → domain resolution so the orchestrator prompt renders it when a front-end surface is present.</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>Assert the assets parse and the delivery path works. Use ExUnit + a temp target dir; validate frontmatter with the same rules Forge/Anthropic require (name charset, non-empty description).</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/skill_pack_materialize_test.exs</code> — proves active skills copy into a target <code>.claude/skills/</code> and bad manifests fail soft.</li>
+        <li><code class="status">[]</code> A frontmatter lint test — every new <code>SKILL.md</code> has valid <code>name</code> (lowercase/hyphen, no reserved words) and non-empty <code>description</code> ≤ 1024 chars.</li>
+        <li><code class="status">[]</code> <code>mix test</code> covering <code>expertise_block/1</code> renders <code>ui-ux-mvp</code> when the domain is active.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- ============ PHASE 2 ============ -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 2: Surface detection</h3>
+      <p>Give the orchestrator a deterministic way to answer "does this app have a front end, and what kind?" — the gate that decides whether a UI/UX phase runs at all.</p>
+
+      <h4>1. Build the detector</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Create <code>SurfaceDetector.detect(working_dir) :: {:ok, [:web | :desktop | :tui]} | {:ok, []}</code>. Heuristics: web → <code>assets/</code>, <code>package.json</code> with a bundler, HTML/JSX/LiveView templates, a served port; desktop → Electron/Tauri/native GUI deps; tui → curses/ratatui/blessed/ink/bubbletea-style deps or a terminal entry point. Repo-agnostic — inspect files/manifests, do not assume a language.</li>
+        <li><code class="status">[]</code> Return multiple surfaces when present (an app can be both web + tui); empty list ⇒ no UI/UX phase.</li>
+        <li><code class="status">[]</code> Expose it to the orchestrator: extend <code>inspect_repo</code> (tools.ex + tool_catalog.ex) with a <code>surfaces</code> field, or add a thin <code>detect_surfaces</code> tool — reuse <code>inspect_repo</code> if possible to keep the tool count stable.</li>
+      </ul>
+
+      <h4>2. Testing Strategy</h4>
+      <p>Table-driven fixtures: tiny fake repo trees for web / desktop / tui / none, asserting classification. No network, pure filesystem.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/surface_detector_test.exs</code> — each fixture classifies correctly, including the multi-surface and none cases.</li>
+        <li><code class="status">[]</code> <code>mix test</code> covering the <code>inspect_repo</code>/tool surface exposure returns the detected list.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- ============ PHASE 3 ============ -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 3: UI/UX phase kind + iteration cap</h3>
+      <p>Teach the durable phase machine that a phase can be a <code>:ui_ux</code> phase for a given <code>surface</code>, and bound its review→fix loop so it converges to MVP.</p>
+      <figure>
+        <img src="orchestrator-iterative-ui-ux-polish-phase/phase3.png" alt="Four-stage machine spec→implement→test→review with a curved fix arrow looping review back to implement, badged kind: ui_ux">
+        <figcaption>Same four stages; a bounded review→fix arrow is the iteration engine, capped so polish stops at MVP.</figcaption>
+      </figure>
+
+      <h4>1. Schema + machine</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Migration <code>add_ui_ux_to_workstream_phases</code> — add <code>kind</code> (default <code>"backend"</code>), <code>surface</code> (nullable), <code>iteration</code> (default 0) to <code>orchestrator_workstream_phases</code>.</li>
+        <li><code class="status">[]</code> Extend <code>WorkstreamPhase</code> schema + changeset with validated <code>kind ∈ {backend, ui_ux}</code> and <code>surface ∈ {web, desktop, tui, nil}</code>.</li>
+        <li><code class="status">[]</code> In <code>workstreams.ex</code> <code>transition/3</code>: on a <code>:ui_ux</code> phase, a failed <em>review</em> increments <code>iteration</code> and re-enters the fix branch <em>only while</em> <code>iteration &lt; ui_iteration_cap</code> (config, default 3); at the cap, mark the phase <code>:done</code> with a "MVP reached / capped" note instead of blocking, so polish never stalls the workstream forever.</li>
+        <li><code class="status">[]</code> Thread <code>kind</code>/<code>surface</code> through <code>plan_phases/3</code> + <code>normalize_phases/1</code> (tools.ex) and the <code>plan_phases</code> tool schema (tool_catalog.ex), defaulting to <code>backend</code> so existing behavior is unchanged.</li>
+      </ul>
+
+      <h4>2. UI-flavored stage semantics</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Document (in the expertise + system prompt) that for a <code>:ui_ux</code> phase the four stages mean: spec = UX design brief; implement = build/refine UI; test = <strong>visual/behavioral validation</strong> (Phase 4); review = UX rubric review from <code>ui-ux-foundations</code>.</li>
+        <li><code class="status">[]</code> Ensure <code>get_workstream</code>/<code>list_workstreams</code> record maps include <code>kind</code>, <code>surface</code>, <code>iteration</code> so rehydrate-on-resume reconstructs UI/UX progress after <code>compact_self</code>.</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>Drive the state machine directly with ExUnit + the Ecto sandbox — assert iteration accounting, the cap, and that backend phases are byte-for-byte unchanged.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/ui_ux_phase_test.exs</code> — a <code>:ui_ux</code> phase loops on failed review, increments <code>iteration</code>, and auto-completes at the cap without blocking.</li>
+        <li><code class="status">[]</code> <code>mix test</code> regression on existing workstream tests — <code>:backend</code> phases behave identically (default kind).</li>
+        <li><code class="status">[]</code> <code>mix ecto.migrate</code> then <code>mix ecto.rollback</code> — migration is reversible.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- ============ PHASE 4 ============ -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 4: Visual/behavioral validation gate</h3>
+      <p>Make the UI/UX phase's <em>test</em> stage produce real evidence instead of a self-report — and, on failure, real browser-level diagnostics that drive the fix loop. A <strong>harness-agnostic CLI gate</strong> decides pass/fail; <strong>MCP diagnostics</strong> explain <em>why</em> when available.</p>
+
+      <div class="callout key"><strong>Two-layer tool stack.</strong> <code>playwright-cli</code> (a shell tool — works from Claude <em>and</em> <code>pi</code>, snapshots to disk, no context flooding) is the deterministic <em>gate</em> and emits a durable <code>.spec.ts</code> regression test. <code>chrome-devtools-mcp</code> + Tidewave <code>browser_eval</code> (MCP — Claude workers) are the <em>troubleshooting</em> layer: console, network bodies/timing, Core Web Vitals, throttling, LiveView runtime state.</div>
+
+      <h4>1. Evidence capture per surface (the gate)</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Web — evidence contract = <strong>screenshot + accessibility snapshot + console log + network log</strong>. Drive the built app with the <code>playwright-cli</code> shell tool; snapshots save to disk under <code>playwright-reports/&lt;timestamp&gt;/</code>. Because it's a CLI (not MCP) it runs identically under Claude and <code>pi</code>. Pass/fail on the UX rubric (nav reachable, focus visible, no console errors, no failed requests).</li>
+        <li><code class="status">[]</code> Web — also <strong>generate a durable <code>.spec.ts</code> smoke test</strong> via <code>playwright-cli</code> so each polish iteration leaves behind regression coverage, not just a screenshot.</li>
+        <li><code class="status">[]</code> Prefer <code>playwright-cli</code> over raw Playwright MCP for these multi-step flows — MCP snapshots flood the worker's context window; the CLI writes artifacts to disk (matters under <code>compact_self</code> pressure).</li>
+        <li><code class="status">[]</code> TUI: capture a terminal snapshot (rendered output) as the artifact; assert layout/keybinding invariants from <code>tui-ux-polish</code>.</li>
+        <li><code class="status">[]</code> Desktop: capture a window screenshot where the harness can launch it; otherwise record <code>[f]</code>/blocked with a clear reason (honest reporting, no silent skip).</li>
+        <li><code class="status">[]</code> Attach the evidence path(s) as the <code>artifact</code> on <code>record_stage("test", …)</code> so they rehydrate and show in the console.</li>
+      </ul>
+
+      <h4>2. Troubleshooting diagnostics (feed the fix loop on failure)</h4>
+      <p>When the gate fails, don't hand the review→fix loop a bare "failed" — hand it a cause. This layer is enrichment: it deepens diagnosis where MCP is available but never gates correctness.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>chrome-devtools-mcp</code> (Claude workers): on a failed gate, pull full <strong>network request/response bodies + timing</strong>, <strong>console errors</strong>, a <strong>performance trace / Core Web Vitals</strong>, and reproduce under <strong>CPU/network throttling</strong>. Record the root-cause note on <code>record_stage</code> so the fix is targeted.</li>
+        <li><code class="status">[]</code> Tidewave <code>browser_eval</code> (Phoenix/LiveView targets only): when the <em>generated</em> app is itself Phoenix, use runtime intelligence — eval in the running app, inspect LiveView assigns, read server logs — as the deepest diagnostic.</li>
+        <li><code class="status">[]</code> Harness note: <code>chrome-devtools-mcp</code> and Tidewave are MCP → Claude workers only. <code>pi</code> workers still get console + network from the <code>playwright-cli</code> capture in Task 1 (deterministic, just less deep) — so the loop degrades gracefully, never breaks.</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>Unit-test the evidence-routing/report-writing logic with a stubbed validator; keep the actual browser run as the live acceptance step (like existing E2E).</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test</code> — the test-stage evidence router picks the right capture per <code>surface</code>, writes report path(s) onto the phase, and records a failure note when the rubric fails.</li>
+        <li><code class="status">[]</code> Live acceptance (manual, documented): run a UI/UX phase against a sample web app; confirm the <code>playwright-cli</code> screenshots + console/network logs land in <code>playwright-reports/</code>, the generated <code>.spec.ts</code> runs green, and a failed rubric captures a <code>chrome-devtools-mcp</code> root-cause note before re-entering the fix loop.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- ============ PHASE 5 ============ -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 5: Orchestrator guidance + console surfacing</h3>
+      <p>Close the loop: teach the orchestrator when to run UI/UX phases and show them clearly in the console.</p>
+
+      <h4>1. Prompt + guidance</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Extend <code>phased_delivery_block/0</code>: after backend phases pass, call surface detection; if a surface exists, append UI/UX phase(s) (one per surface) via <code>plan_phases</code> with <code>kind: "ui_ux"</code>, and drive them to done before <code>report_complete</code>. Keep it bounded (respect the iteration cap; don't gold-plate).</li>
+        <li><code class="status">[]</code> Ensure the <code>ui-ux-mvp</code> expertise + reflections carry the "stop at MVP" discipline so autonomous runs converge.</li>
+      </ul>
+
+      <h4>2. Console</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> In the Workstreams panel (<code>dashboard_components.ex</code> / <code>console_live.ex</code>) render <code>:ui_ux</code> phases distinctly (surface badge + iteration N/cap) and link the visual evidence.</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>Phoenix <code>LiveViewTest</code> for the console; assertion tests on the prompt block; full green gate.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test</code> — <code>phased_delivery_block/0</code> contains the UI/UX guidance; Workstreams panel renders a <code>:ui_ux</code> phase with surface + iteration.</li>
+        <li><code class="status">[]</code> Run the full green gate (see Validation Commands).</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+  </section>
+
+  <!-- ===== GLOBAL VALIDATION ===== -->
+  <section id="validation">
+    <h2>Validation Commands</h2>
+    <p>Execute these commands to validate the entire plan is complete (the repo's enforced 5-command green gate + migration reversibility):</p>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>mix compile --warnings-as-errors</code> — no warnings introduced.</li>
+      <li><code class="status">[]</code> <code>mix format --check-formatted</code> — formatting clean.</li>
+      <li><code class="status">[]</code> <code>mix credo --strict</code> — passes strict lint incl. the <code>@spec</code> gate on new modules.</li>
+      <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — full suite green, including new UI/UX, surface-detector, skill-pack tests.</li>
+      <li><code class="status">[]</code> <code>mix dialyzer</code> — no new type errors across new wire boundaries.</li>
+      <li><code class="status">[]</code> <code>mix ecto.migrate &amp;&amp; mix ecto.rollback &amp;&amp; mix ecto.migrate</code> — migration up/down/up is clean.</li>
+    </ul>
+    <div class="loop">🔁 <strong>The plan is not complete until every box is checked and every command passes. If for some reason a step is not possible to complete, mark it with [f] and move on if possible.</strong></div>
+  </section>
+
+  <!-- ===== QUESTIONABLES ===== -->
+  <section id="questionables">
+    <h2>Questionables</h2>
+    <figure>
+      <img src="orchestrator-iterative-ui-ux-polish-phase/questionables.png" alt="A decision fork: a dim path labeled new 5th stage versus a highlighted path labeled phase kind flag">
+      <figcaption>The central design fork: extend the stage machine, or tag phases with a kind and reuse it.</figcaption>
+    </figure>
+
+    <details>
+      <summary>Extend the stage machine with a 5th stage (e.g. <code>:ux_polish</code>) vs. a phase <code>kind</code> flag?</summary>
+      <p class="qa-answer"><strong>Assumption: phase <code>kind</code>.</strong> Adding a global 5th stage forces every phase (including pure-backend ones) through it and rewrites <code>next_stage/1</code>, <code>@stage_order</code>, and every stage test. A <code>kind</code>/<code>surface</code> flag on the phase reuses the proven four-stage machine unchanged, defaults keep backend behavior identical, and it lets a workstream mix backend and UI/UX phases. Lower blast radius, fully rehydratable. Revisit only if UI/UX genuinely needs stages the four don't model.</p>
+    </details>
+    <details>
+      <summary>Where do the skill files come from — hand-authored, Forge-generated, or scraped at runtime?</summary>
+      <p class="qa-answer"><strong>Assumption: hand-authored/curated now, Forge-refreshable later; never scraped at runtime.</strong> The user clarified firecrawl is a <em>research</em> tool for authoring this plan, not a repo dependency. We ship vetted <code>SKILL.md</code> bundles in <code>plugin_library/ui-ux-mvp/</code>; the Forge <code>:skill</code> generator can later regenerate/extend them from a spec. Runtime scraping is explicitly out of scope (security + determinism).</p>
+    </details>
+    <details>
+      <summary>Should UI/UX phases run in parallel with backend phases, or strictly after?</summary>
+      <p class="qa-answer"><strong>Assumption: strictly after backend phases pass, per the user's "after building the backend and going through all the steps."</strong> The workstream layer already supports multiple parallel <em>workstreams</em>, so a future optimization could open a UI/UX workstream early — but the safe, matching-the-ask default is: backend phases green → detect surface → append UI/UX phases.</p>
+    </details>
+    <details>
+      <summary>What is the MVP exit criterion for the iteration loop?</summary>
+      <p class="qa-answer"><strong>Assumption: rubric-pass OR iteration cap (default 3), whichever first.</strong> "Decent MVP" is deliberately not "pixel-perfect." The <code>ui-ux-foundations</code> rubric (hierarchy present, nav reachable, focus visible, no AI-slop tells, no console/render errors) is the pass bar; the cap prevents infinite polishing. Both are config so a project can raise the bar.</p>
+    </details>
+    <details>
+      <summary>Which browser tool drives the web test gate — and does MCP break harness-agnosticism?</summary>
+      <p class="qa-answer"><strong>Assumption: <code>playwright-cli</code> (a shell tool) is the gate; MCP is optional enrichment.</strong> The gate must run identically under Claude and <code>pi</code>, so it cannot depend on MCP (pi has none). <code>playwright-cli</code> is a CLI → harness-agnostic, disk-saved snapshots (context-friendly under <code>compact_self</code>), and it emits durable <code>.spec.ts</code> regression tests. <code>chrome-devtools-mcp</code> (console, network bodies/timing, Core Web Vitals, throttling) and Tidewave <code>browser_eval</code> (Phoenix runtime state) are Claude-only <em>troubleshooting</em> layers that deepen diagnosis on failure but never decide pass/fail — so the loop degrades gracefully on pi instead of breaking. Prefer <code>playwright-cli</code> over raw Playwright MCP everywhere (MCP snapshots flood context).</p>
+    </details>
+    <details>
+      <summary>Desktop-app validation coverage?</summary>
+      <p class="qa-answer"><strong>Open risk.</strong> Web (Playwright) and TUI (snapshot) have clean headless evidence paths; arbitrary desktop GUIs may not launch in the harness environment. Plan degrades honestly: capture a screenshot when possible, else record <code>blocked</code>/<code>[f]</code> with reason rather than faking a pass. Full desktop visual validation may warrant its own follow-up spec.</p>
+    </details>
+  </section>
+
+  <!-- ===== NOTES ===== -->
+  <section id="notes">
+    <h2>Notes</h2>
+
+    <h3>Why this fits the platform's grain</h3>
+    <p>The repo already treats <em>knowledge</em> and <em>process</em> as separable, durable, rehydratable things: expertise domains, reflections, context fragments, skill packs, and a spec-driven phase machine. This plan adds nothing structurally new — it composes those primitives:</p>
+    <ul>
+      <li><strong>Knowledge in:</strong> <code>SKILL.md</code> bundles (workers) + <code>ui-ux-mvp</code> expertise (orchestrator) + reflections ("what UX fixes worked last run").</li>
+      <li><strong>Process:</strong> a <code>:ui_ux</code> phase kind on the existing <code>spec → implement → test → review</code> machine, with the review→fix loop bounded by an iteration cap.</li>
+      <li><strong>Evidence:</strong> the existing Playwright seam becomes the UI/UX test gate; TUI snapshots and desktop screenshots fill the other surfaces.</li>
+    </ul>
+
+    <h3>Progressive disclosure = token discipline</h3>
+    <p>Per the Anthropic Skills model, each <code>SKILL.md</code> keeps its always-loaded footprint to frontmatter (~100 tokens) and its triggered body under ~5k tokens, pushing exhaustive checklists/examples into sibling files loaded on demand. This keeps the worker's context lean even with four UI/UX skills installed — critical given <code>compact_self</code> pressure on long autonomous runs.</p>
+
+    <h3>Surface vocabulary</h3>
+    <table>
+      <tr><th>Surface</th><th>Detect signal (examples)</th><th>Test-gate evidence</th></tr>
+      <tr><td><code>:web</code></td><td>assets/, bundler in package.json, HTML/JSX/LiveView templates, served port</td><td>Playwright screenshots + rubric checks</td></tr>
+      <tr><td><code>:desktop</code></td><td>Electron/Tauri/native GUI deps</td><td>window screenshot, else honest block</td></tr>
+      <tr><td><code>:tui</code></td><td>curses/ratatui/ink/bubbletea-style deps, terminal entry point</td><td>terminal snapshot + layout/keybinding asserts</td></tr>
+    </table>
+
+    <h3>Config knobs (all defaulted, override per project)</h3>
+    <ul>
+      <li><code>:ui_iteration_cap</code> — default <code>3</code>; max review→fix loops before a UI/UX phase auto-completes at MVP.</li>
+      <li><code>:ui_ux_enabled</code> — default <code>true</code>; global off-switch so pure-backend/library builds skip detection entirely.</li>
+    </ul>
+
+    <h3>References</h3>
+    <ul>
+      <li>Anthropic — <a href="https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview">Agent Skills overview</a> (SKILL.md format, progressive disclosure).</li>
+      <li>Anthropic — <a href="https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices">Skill authoring best practices</a>.</li>
+      <li><a href="https://github.com/nextlevelbuilder/ui-ux-pro-max-skill">ui-ux-pro-max-skill</a>, <a href="https://skillsllm.com/skill/front-end-checklist">Front-End Checklist</a>, <a href="https://aiuxplayground.com/skills">AI UX Playground</a> — real UI/UX skill structure.</li>
+      <li>Internal: <code>ai_docs/plugin-authoring.md</code>, <code>ai_docs/meta-artifacts.md</code>, <code>priv/forge/generators/skill.md</code>.</li>
+      <li>Prior UI specs (back refs): console UI parity, provider dropdown, stage swimlanes.</li>
+    </ul>
+
+    <figure>
+      <img src="orchestrator-iterative-ui-ux-polish-phase/notes.png" alt="Triptych: knowledge (skill/expertise cards) to process (looped phase machine) to evidence (browser, terminal, and window thumbnails)">
+      <figcaption>Knowledge feeds process; process emits evidence — all on primitives the platform already has.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== AMENDMENTS ===== -->
+  <section id="amendments">
+    <h2>Amendments</h2>
+    <details>
+      <summary>2026-07-01 — Plan created</summary>
+      <p>Initial authoring via planf3. Scope corrected mid-session: firecrawl is a research tool for this plan, not a repo dependency. Image slots left as commented placeholders pending the image-generation subworkflow.</p>
+    </details>
+    <details>
+      <summary>2026-07-01 — Phase 4 tool stack refined + images embedded</summary>
+      <p>All 7 images generated (gpt-image-2) and embedded. Phase 4 restructured into a two-layer browser tool stack: <code>playwright-cli</code> (harness-agnostic shell tool) as the deterministic pass/fail gate emitting a durable <code>.spec.ts</code> regression test, and <code>chrome-devtools-mcp</code> + Tidewave <code>browser_eval</code> (Claude-worker MCP) as the on-failure troubleshooting layer (console, network bodies/timing, Core Web Vitals, throttling, LiveView state). Added the corresponding Relevant Files entries and a Questionable on gate-vs-enrichment / harness-agnosticism.</p>
+    </details>
+  </section>
+
+</main>
+</body>
+</html>

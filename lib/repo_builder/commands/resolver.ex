@@ -18,22 +18,8 @@ defmodule RepoBuilder.Commands.Resolver do
   alias RepoBuilder.Orchestrator.Template
   alias RepoBuilder.Plugins.Activation
   alias RepoBuilder.Projects.Capabilities
+  alias RepoBuilder.Projects.CapabilityTokens
   alias RepoBuilder.Projects.Project
-  alias RepoBuilder.PromptStandard.Builder
-
-  # Capability `{{TOKEN}}` → the `Capabilities` struct field it is filled from.
-  @token_fields %{
-    "{{TEST_COMMAND}}" => :test_command,
-    "{{BUILD_COMMAND}}" => :build_command,
-    "{{LINT_COMMAND}}" => :lint_command,
-    "{{FORMAT_COMMAND}}" => :format_command,
-    "{{TYPECHECK_COMMAND}}" => :typecheck_command,
-    "{{RUN_COMMAND}}" => :run_command,
-    "{{PACKAGE_MANAGER}}" => :package_manager,
-    "{{SPEC_DIR}}" => :spec_dir,
-    "{{SOURCE_DIRS}}" => :source_dirs,
-    "{{TEST_DIR}}" => :test_dir
-  }
 
   @doc """
   Resolve `name` for `project`, returning `{:ok, %Resolved{}}` or `{:error, :not_found}`
@@ -190,32 +176,12 @@ defmodule RepoBuilder.Commands.Resolver do
     end
   end
 
-  # Fill capability tokens via the Builder.render/2 machinery; on any error (e.g. a
-  # body carrying an unrelated `{{…}}`) fall back to a direct replace of just the
-  # capability tokens so resolution never fails.
+  # Fill capability tokens via the shared `CapabilityTokens` machinery (extracted so the
+  # command resolver and the quality-gate resolver share one token registry + fill).
   @spec fill_tokens(String.t(), Project.t()) :: String.t()
   defp fill_tokens(body, %Project{capabilities: capabilities}) do
-    tokens = token_map(Capabilities.from_map(capabilities))
-
-    case Builder.render(body, tokens) do
-      {:ok, rendered} -> rendered
-      {:error, _} -> Enum.reduce(tokens, body, fn {t, v}, acc -> String.replace(acc, t, v) end)
-    end
+    CapabilityTokens.fill(body, Capabilities.from_map(capabilities))
   end
-
-  # Build the full `{{TOKEN}} => value` map (nil → "" so no token is ever left dangling).
-  @spec token_map(Capabilities.t()) :: %{optional(String.t()) => String.t()}
-  defp token_map(%Capabilities{} = caps) do
-    Map.new(@token_fields, fn {token, field} ->
-      {token, stringify(Map.get(caps, field))}
-    end)
-  end
-
-  @spec stringify(term()) :: String.t()
-  defp stringify(nil), do: ""
-  defp stringify(value) when is_binary(value), do: value
-  defp stringify(value) when is_list(value), do: Enum.join(value, ", ")
-  defp stringify(value), do: to_string(value)
 
   # All command names reachable for a project across every layer.
   @spec available_names(Project.t()) :: [String.t()]

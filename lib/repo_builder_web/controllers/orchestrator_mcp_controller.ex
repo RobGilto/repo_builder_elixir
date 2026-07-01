@@ -89,6 +89,13 @@ defmodule RepoBuilderWeb.OrchestratorMCPController do
   # stringified at that boundary), so those two clauses fully cover the input.
   @spec reason_text(atom() | String.t()) :: String.t()
   defp reason_text(reason) when is_binary(reason), do: reason
+
+  defp reason_text(:focus_required),
+    do:
+      "Declare your focus with set_focus before commanding or spawning a worker — " <>
+        "name the workstream for a workstream-scoped worker (set_focus with `workstream`), " <>
+        "or omit it to focus the orchestrator itself for untagged work."
+
   defp reason_text(reason), do: to_string(reason)
 
   defp tool_descriptor(%{name: name, description: description, input_schema: schema}) do

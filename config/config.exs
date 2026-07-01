@@ -345,13 +345,25 @@ config :repo_builder, :orchestrator,
   drive_on_boot: true,
   max_stall: 2,
   escalate_after_stall: 3,
+  # Focus discipline (orchestrator focus). When true (default), a budget-spending worker tool
+  # (`command_agent`/`create_agent`/`start_adw`) is BLOCKED until the scope it targets has a
+  # focus: a workstream-tagged call needs that workstream focused, an untagged call needs the
+  # orchestrator's own focus. The Driver also nudges an unfocused active-goal orchestrator to
+  # `set_focus` before spending budget. Set false to disable the gate (full back-compat).
+  focus_gate: true,
   turn_deadline_ms: 180_000,
   breaker_max_failures: 3,
   breaker_cooldown_ms: 60_000,
   # Writable root for self-improving domain mental models (self-healing Phase 5): versioned
   # `.md` files shadowing the read-only `priv/orchestrator/experts` seed root (same dual-root
   # mechanism as agent templates). Overridden to a tmp dir in test.exs.
-  experts_dir: Path.expand("~/.repo_builder/experts")
+  experts_dir: Path.expand("~/.repo_builder/experts"),
+  # Iterative UI/UX polish phase (iterative-ui-ux). `ui_iteration_cap` bounds a `:ui_ux`
+  # phase's review→fix loop before it auto-completes at MVP (no infinite polishing);
+  # `ui_ux_enabled` is the global off-switch so pure-backend/library builds skip surface
+  # detection entirely. Both default-on/3; raise the cap per project to hold a higher bar.
+  ui_iteration_cap: 3,
+  ui_ux_enabled: true
 
 # Editor integration: open files in the operator's editor from the file-diff event cards.
 # Disabled by default in config/test.exs; overridable at runtime via RB_EDITOR_CMD /

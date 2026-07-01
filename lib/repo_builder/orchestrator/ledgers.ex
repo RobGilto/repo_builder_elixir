@@ -39,6 +39,8 @@ defmodule RepoBuilder.Orchestrator.Ledgers do
           plan: [map()],
           status: TaskLedger.status(),
           stall_count: non_neg_integer(),
+          focus: String.t() | nil,
+          focus_set_at: DateTime.t() | nil,
           progress: progress_view() | nil
         }
 
@@ -162,6 +164,25 @@ defmodule RepoBuilder.Orchestrator.Ledgers do
   end
 
   @doc """
+  Set the orchestrator-level focus — the single concrete thing the brain is working on for
+  untagged (non-workstream) work. Overwrites any prior focus (single-focus invariant) and
+  refreshes `focus_set_at`. Blank rejection lives at the tool boundary. `{:error,
+  :no_active_ledger}` when no goal is set.
+  """
+  @spec set_focus(Ecto.UUID.t(), String.t()) :: {:ok, TaskLedger.t()} | {:error, reason()}
+  def set_focus(orchestrator_id, focus) do
+    update_active(orchestrator_id, fn _ledger ->
+      %{focus: focus, focus_set_at: DateTime.utc_now()}
+    end)
+  end
+
+  @doc "Clear the orchestrator-level focus (its stretch of work is verified done)."
+  @spec clear_focus(Ecto.UUID.t()) :: {:ok, TaskLedger.t()} | {:error, reason()}
+  def clear_focus(orchestrator_id) do
+    update_active(orchestrator_id, fn _ledger -> %{focus: nil, focus_set_at: nil} end)
+  end
+
+  @doc """
   A flat, render-ready view of the orchestrator's current ledger + its latest Progress entry
   for the console / `ledger_updated` broadcast. `nil` when no goal is set.
   """
@@ -179,6 +200,8 @@ defmodule RepoBuilder.Orchestrator.Ledgers do
           plan: ledger.plan,
           status: ledger.status,
           stall_count: ledger.stall_count,
+          focus: ledger.focus,
+          focus_set_at: ledger.focus_set_at,
           progress: progress_view(progress)
         }
 

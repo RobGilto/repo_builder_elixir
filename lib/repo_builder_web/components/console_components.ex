@@ -14,6 +14,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   import RepoBuilderWeb.DashboardComponents, only: [cost_badge: 1]
 
   alias RepoBuilder.Agents.Agent
+  alias RepoBuilder.ExternalApis.ExternalApi
   alias RepoBuilder.Orchestrator.ContextWindow
   alias RepoBuilder.StackLayers.StackLayer
 
@@ -993,6 +994,46 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     """
   end
 
+  # --- goal-card collapse toggle (bottom orchestrator drawer) ----------------
+
+  attr :ledger, :map, default: nil, doc: "the Orchestrator.Ledgers.view/1 map, or nil"
+  attr :workstreams, :list, default: [], doc: "the Workstreams.list_records/1 list, or []"
+
+  @doc """
+  The compact one-line summary shown in the goal-card handle bar WHILE COLLAPSED: the current
+  `🎯 focus` when set, else the goal, else a workstream-count fallback — single-line truncated so a
+  long goal can't blow out the handle height. Keeps "what is it working on" glanceable without
+  expanding the drawer.
+  """
+  @spec goal_card_summary(map()) :: Phoenix.LiveView.Rendered.t()
+  def goal_card_summary(assigns) do
+    assigns = assign(assigns, :summary, summary_text(assigns.ledger, assigns.workstreams))
+
+    ~H"""
+    <span
+      id="goal-card-summary"
+      class="truncate whitespace-nowrap"
+      style="color: var(--cns-text-2)"
+    >
+      {@summary}
+    </span>
+    """
+  end
+
+  # The collapsed-strip text: focus > goal > workstream count > a neutral label. Total over a nil
+  # ledger and an empty workstream list.
+  @spec summary_text(map() | nil, [map()]) :: String.t()
+  defp summary_text(%{focus: focus}, _workstreams) when is_binary(focus) and focus != "",
+    do: "🎯 " <> focus
+
+  defp summary_text(%{goal: goal}, _workstreams) when is_binary(goal) and goal != "",
+    do: "Goal: " <> goal
+
+  defp summary_text(_ledger, [_ | _] = workstreams),
+    do: "#{length(workstreams)} workstream(s)"
+
+  defp summary_text(_ledger, _workstreams), do: "Goal card"
+
   # --- autonomy panel (self-healing Phase 6) --------------------------------
 
   attr :ledger, :map, default: nil, doc: "the Orchestrator.Ledgers.view/1 map, or nil"
@@ -1032,6 +1073,21 @@ defmodule RepoBuilderWeb.ConsoleComponents do
       <div :if={@ledger}>
         <div id="ledger-goal" class="font-semibold" style="color: var(--cns-text)">
           Goal: {@ledger.goal}
+        </div>
+        <div
+          :if={@ledger.focus}
+          id="orchestrator-focus"
+          class="font-semibold"
+          style="color: var(--cns-cyan)"
+        >
+          🎯 FOCUS: {@ledger.focus}
+        </div>
+        <div
+          :if={is_nil(@ledger.focus) && @ledger.status == :active}
+          id="orchestrator-focus-hint"
+          style="color: var(--cns-text-2)"
+        >
+          🎯 no focus set
         </div>
         <div id="ledger-dod" style="color: var(--cns-text-2)">
           Done when: {@ledger.definition_of_done}
@@ -1090,6 +1146,21 @@ defmodule RepoBuilderWeb.ConsoleComponents do
         </div>
         <div :if={ws.next_action} style="color: var(--cns-text-2)">next: {ws.next_action}</div>
         <div
+          :if={ws.focus}
+          id={"workstream-#{ws.id}-focus"}
+          class="font-semibold"
+          style="color: var(--cns-text)"
+        >
+          🎯 FOCUS: {ws.focus}
+        </div>
+        <div
+          :if={is_nil(ws.focus) && ws.status == :running}
+          id={"workstream-#{ws.id}-focus-hint"}
+          style="color: var(--cns-text-2)"
+        >
+          no focus set
+        </div>
+        <div
           :for={phase <- ws.phases}
           id={"workstream-#{ws.id}-phase-#{phase.position}"}
           class="flex items-center gap-1"
@@ -1103,6 +1174,17 @@ defmodule RepoBuilderWeb.ConsoleComponents do
             {phase.position}. {phase.title}
           </span>
           <span
+            :if={phase.kind == :ui_ux}
+            id={"workstream-#{ws.id}-phase-#{phase.position}-uiux"}
+            class="cns-chip shrink-0"
+            data-phase-kind="ui_ux"
+            data-surface={phase.surface && to_string(phase.surface)}
+            style="background: #6d3fb2; color: #fff"
+            title="iterative UI/UX polish phase"
+          >
+            {ui_ux_badge(phase)}
+          </span>
+          <span
             :for={stage <- ~w(spec implement test review)}
             id={"workstream-#{ws.id}-phase-#{phase.position}-#{stage}"}
             class="cns-chip"
@@ -1110,6 +1192,25 @@ defmodule RepoBuilderWeb.ConsoleComponents do
             style={stage_chip_style(phase, stage)}
           >
             {stage_glyph(stage)}
+          </span>
+          <span
+            :if={gate_result(phase)}
+            id={"workstream-#{ws.id}-phase-#{phase.position}-gate"}
+            class="flex items-center gap-0.5 shrink-0"
+            data-gate-green={to_string(gate_green?(phase))}
+            title="quality gate: format · lint · type · test · mutation"
+          >
+            <span
+              :for={g <- ~w(format lint type test mutation)}
+              id={"workstream-#{ws.id}-phase-#{phase.position}-gate-#{g}"}
+              class="cns-dot"
+              data-gate-stage={g}
+              data-gate-status={gate_stage_status(phase, g)}
+              style={gate_dot_style(gate_stage_status(phase, g))}
+              title={"#{g}: #{gate_stage_status(phase, g)}"}
+            >
+              •
+            </span>
           </span>
         </div>
       </div>
@@ -1122,6 +1223,24 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   defp workstream_done_count(%{phases: phases}) do
     done = Enum.count(phases, &(&1.status == :done))
     "#{done}/#{length(phases)}"
+  end
+
+  # The `:ui_ux` phase badge (iterative-ui-ux polish phase): surface + iteration N/cap so the
+  # operator sees which surface is being polished and how close it is to the MVP cap.
+  # Inference-only spec — the success typing narrows the return below a hand-written
+  # `String.t()` (mirrors `workstream_done_count/1`), which Dialyzer rejects as a supertype.
+  defp ui_ux_badge(%{surface: surface, iteration: iteration}) do
+    label = if is_nil(surface), do: "ui/ux", else: to_string(surface)
+    "#{label} #{iteration}/#{ui_iteration_cap()}"
+  end
+
+  # The active `:ui_ux` review→fix iteration cap for display (mirrors Workstreams' config knob).
+  @spec ui_iteration_cap() :: pos_integer()
+  defp ui_iteration_cap do
+    case Application.get_env(:repo_builder, :orchestrator, [])[:ui_iteration_cap] do
+      cap when is_integer(cap) and cap > 0 -> cap
+      _invalid -> 3
+    end
   end
 
   # Highlight the workstream's CURRENT phase (the one at current_phase_position).
@@ -1151,6 +1270,60 @@ defmodule RepoBuilderWeb.ConsoleComponents do
       _ -> "color: var(--cns-text-2)"
     end
   end
+
+  # --- quality-gate strip (quality-gate-plugins) ---------------------------
+
+  # The structured GateResult recorded on the phase's `test` stage, or nil when none.
+  @spec gate_result(map()) :: map() | nil
+  defp gate_result(%{stages: stages}) when is_map(stages) do
+    case get_in(stages, ["test", "gate"]) do
+      %{} = gate -> gate
+      _ -> nil
+    end
+  end
+
+  defp gate_result(_phase), do: nil
+
+  # Whether the recorded gate is fully green (drives the strip's `data-gate-green`).
+  @spec gate_green?(map()) :: boolean()
+  defp gate_green?(phase) do
+    case gate_result(phase) do
+      %{"green" => green} -> green == true
+      _ -> false
+    end
+  end
+
+  # One canonical gate dot's status from the recorded GateResult: the `type` dot folds in the
+  # `type-coverage` sub-stage (a red in either shows red). "pending" when the stage isn't in
+  # the result (e.g. dropped by typed_enforcement / cadence).
+  @spec gate_stage_status(map(), String.t()) :: String.t()
+  defp gate_stage_status(phase, dot) do
+    stages = gate_stages(phase)
+    ids = if dot == "type", do: ["type", "type-coverage"], else: [dot]
+
+    matched = Enum.filter(stages, &(&1["stage_id"] in ids))
+
+    cond do
+      matched == [] -> "pending"
+      Enum.any?(matched, &(&1["status"] == "failed")) -> "failed"
+      Enum.any?(matched, &(&1["status"] == "skipped")) -> "skipped"
+      true -> "passed"
+    end
+  end
+
+  @spec gate_stages(map()) :: [map()]
+  defp gate_stages(phase) do
+    case gate_result(phase) do
+      %{"stages" => stages} when is_list(stages) -> stages
+      _ -> []
+    end
+  end
+
+  @spec gate_dot_style(String.t()) :: String.t()
+  defp gate_dot_style("passed"), do: "color: #4ade80"
+  defp gate_dot_style("failed"), do: "color: #f87171"
+  defp gate_dot_style("skipped"), do: "color: #fbbf24"
+  defp gate_dot_style(_pending), do: "color: var(--cns-text-2)"
 
   @spec stage_glyph(String.t()) :: String.t()
   defp stage_glyph("spec"), do: "S"
@@ -1388,6 +1561,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
       :templates,
       :cost_center,
       :default_models,
+      :external_apis,
       :logs
     ]
 
@@ -1423,6 +1597,14 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   attr :editing_layer_id, :any, default: nil
   attr :default_model_rows, :list, default: []
   attr :default_model_saved, :boolean, default: false
+  attr :user_apis, :list, default: []
+  attr :project_apis, :list, default: []
+  attr :api_form, :any, default: nil
+  attr :editing_api_id, :any, default: nil
+  attr :api_secret_names, :any, default: nil
+  attr :smart_import, :map, default: %{status: :idle, request_id: nil}
+  attr :api_secret_prefill, :map, default: %{scope: nil, name: nil, value: nil}
+  attr :active_project_id, :any, default: nil
 
   @doc """
   Settings modal with a vertical tab rail (General / Appearance / About). Shown and
@@ -1468,6 +1650,11 @@ defmodule RepoBuilderWeb.ConsoleComponents do
               tab={:default_models}
               active={@settings_tab}
               label="Default Models"
+            />
+            <.settings_tab_button
+              tab={:external_apis}
+              active={@settings_tab}
+              label="Registered APIs"
             />
             <.settings_tab_button tab={:logs} active={@settings_tab} label="Log Database" />
             <.settings_tab_button tab={:about} active={@settings_tab} label="About" />
@@ -1940,6 +2127,19 @@ defmodule RepoBuilderWeb.ConsoleComponents do
               </form>
             </div>
 
+            <div :if={@settings_tab == :external_apis}>
+              <.external_apis_panel
+                user_apis={@user_apis}
+                project_apis={@project_apis}
+                api_form={@api_form}
+                editing_api_id={@editing_api_id}
+                api_secret_names={@api_secret_names}
+                smart_import={@smart_import}
+                api_secret_prefill={@api_secret_prefill}
+                active_project_id={@active_project_id}
+              />
+            </div>
+
             <div :if={@settings_tab == :about} class="flex flex-col gap-2 text-xs">
               <div
                 class="text-[0.625rem] font-semibold uppercase"
@@ -1961,6 +2161,428 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     </div>
     """
   end
+
+  attr :user_apis, :list, default: []
+  attr :project_apis, :list, default: []
+  attr :api_form, :any, required: true
+  attr :editing_api_id, :any, default: nil
+  attr :api_secret_names, :any, default: nil
+  attr :smart_import, :map, default: %{status: :idle, request_id: nil}
+  attr :api_secret_prefill, :map, default: %{scope: nil, name: nil, value: nil}
+  attr :active_project_id, :any, default: nil
+
+  @doc """
+  Registered external APIs / MCP providers panel (issue-external-api-mcp-provisioning):
+  two scoped lists (user/platform + active project) the orchestrator may transfer to
+  workers, plus a register/edit form and a vault secret-deposit field. The token is never
+  shown — only a "secret present?" hint derived from the masked vault names.
+  """
+  @spec external_apis_panel(map()) :: Phoenix.LiveView.Rendered.t()
+  def external_apis_panel(assigns) do
+    assigns =
+      assign(assigns,
+        transports: ExternalApi.transports(),
+        auth_schemes: ExternalApi.auth_schemes()
+      )
+
+    ~H"""
+    <div id="external-apis-panel" class="flex flex-col gap-4">
+      <span class="text-xs font-semibold" style="color: var(--cns-cyan)">
+        REGISTERED APIs — capabilities the orchestrator may delegate to workers
+      </span>
+      <p class="text-[0.625rem]" style="color: var(--cns-text-2)">
+        Register an external API / MCP server once; the orchestrator transfers it to a
+        worker on demand (it never calls these itself). The auth token lives only in the
+        encrypted vault — the registration holds the secret NAME, never the value.
+      </p>
+
+      <.smart_import_box smart_import={@smart_import} />
+
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <div class="text-[0.625rem] font-semibold uppercase" style="color: var(--cns-text-2)">
+            User scope (all orchestrators)
+          </div>
+          <ul id="api-list-user" class="mt-1 space-y-1">
+            <.api_row
+              :for={api <- @user_apis}
+              api={api}
+              present?={secret_present?(@api_secret_names, api)}
+            />
+            <li :if={@user_apis == []} class="text-xs" style="color: var(--cns-text-3)">
+              None registered.
+            </li>
+          </ul>
+        </div>
+
+        <div>
+          <div class="text-[0.625rem] font-semibold uppercase" style="color: var(--cns-text-2)">
+            Project scope (this project's orchestrator)
+          </div>
+          <ul id="api-list-project" class="mt-1 space-y-1">
+            <.api_row
+              :for={api <- @project_apis}
+              api={api}
+              present?={secret_present?(@api_secret_names, api)}
+            />
+            <li :if={@project_apis == []} class="text-xs" style="color: var(--cns-text-3)">
+              {if @active_project_id,
+                do: "None registered for this project.",
+                else: "Select a project to register a project-scope API."}
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <.form
+        :let={f}
+        for={@api_form}
+        id="register-api-form"
+        phx-submit={if @editing_api_id, do: "update_api", else: "register_api"}
+        class="flex flex-col gap-2 border-t pt-3"
+        style="border-color: var(--cns-border)"
+      >
+        <input :if={@editing_api_id} type="hidden" name="_id" value={@editing_api_id} />
+
+        <div class="text-[0.625rem] font-semibold uppercase" style="color: var(--cns-text-2)">
+          {if @editing_api_id, do: "Edit registration", else: "Register a new API"}
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <label class="flex flex-col gap-1 text-xs">
+            Name (MCP server key)
+            <input
+              name="api[name]"
+              value={Phoenix.HTML.Form.input_value(f, :name)}
+              class="cns-chip"
+              placeholder="pixellab"
+            />
+          </label>
+          <label class="flex flex-col gap-1 text-xs">
+            Scope
+            <select name="api[scope]" class="cns-chip">
+              <option value="user" selected={is_nil(Phoenix.HTML.Form.input_value(f, :project_id))}>
+                User (all orchestrators)
+              </option>
+              <option
+                value="project"
+                selected={not is_nil(Phoenix.HTML.Form.input_value(f, :project_id))}
+                disabled={is_nil(@active_project_id)}
+              >
+                Project (this project)
+              </option>
+            </select>
+          </label>
+          <label class="flex flex-col gap-1 text-xs">
+            Provider (label)
+            <input
+              name="api[provider]"
+              value={Phoenix.HTML.Form.input_value(f, :provider)}
+              class="cns-chip"
+              placeholder="Pixellab"
+            />
+          </label>
+          <label class="flex flex-col gap-1 text-xs">
+            Transport
+            <select name="api[transport]" class="cns-chip">
+              <option
+                :for={t <- @transports}
+                value={t}
+                selected={to_string(Phoenix.HTML.Form.input_value(f, :transport)) == to_string(t)}
+              >
+                {t}
+              </option>
+            </select>
+          </label>
+          <label class="flex flex-col gap-1 text-xs">
+            URL (http/sse)
+            <input
+              name="api[url]"
+              value={Phoenix.HTML.Form.input_value(f, :url)}
+              class="cns-chip"
+              placeholder="https://api.pixellab.ai/mcp"
+            />
+          </label>
+          <label class="flex flex-col gap-1 text-xs">
+            Command (stdio)
+            <input
+              name="api[command]"
+              value={Phoenix.HTML.Form.input_value(f, :command)}
+              class="cns-chip"
+              placeholder="npx"
+            />
+          </label>
+          <label class="flex flex-col gap-1 text-xs">
+            Args (stdio, comma-separated)
+            <input
+              name="api[args]"
+              value={join_list(Phoenix.HTML.Form.input_value(f, :args))}
+              class="cns-chip"
+              placeholder="-y, firecrawl-mcp"
+            />
+          </label>
+          <label class="flex flex-col gap-1 text-xs">
+            Auth scheme
+            <select name="api[auth_scheme]" class="cns-chip">
+              <option
+                :for={s <- @auth_schemes}
+                value={s}
+                selected={to_string(Phoenix.HTML.Form.input_value(f, :auth_scheme)) == to_string(s)}
+              >
+                {s}
+              </option>
+            </select>
+          </label>
+          <label class="flex flex-col gap-1 text-xs">
+            Auth header (override)
+            <input
+              name="api[auth_header]"
+              value={Phoenix.HTML.Form.input_value(f, :auth_header)}
+              class="cns-chip"
+              placeholder="Authorization"
+            />
+          </label>
+          <label class="flex flex-col gap-1 text-xs">
+            Secret name (vault reference)
+            <input
+              name="api[secret_name]"
+              value={Phoenix.HTML.Form.input_value(f, :secret_name)}
+              class="cns-chip"
+              placeholder="PIXELLAB_API_KEY"
+            />
+          </label>
+          <label class="flex flex-col gap-1 text-xs">
+            Allowed tools (comma-separated)
+            <input
+              name="api[allowed_tools]"
+              value={join_list(Phoenix.HTML.Form.input_value(f, :allowed_tools))}
+              class="cns-chip"
+              placeholder="mcp__pixellab__*"
+            />
+          </label>
+          <label class="flex flex-col gap-1 text-xs">
+            Doc URLs (comma-separated)
+            <input
+              name="api[doc_urls]"
+              value={join_list(Phoenix.HTML.Form.input_value(f, :doc_urls))}
+              class="cns-chip"
+              placeholder="https://api.pixellab.ai/mcp/docs"
+            />
+          </label>
+        </div>
+
+        <label class="flex flex-col gap-1 text-xs">
+          Description (one line, shown to the orchestrator)
+          <input
+            name="api[description]"
+            value={Phoenix.HTML.Form.input_value(f, :description)}
+            class="cns-chip"
+          />
+        </label>
+        <label class="flex flex-col gap-1 text-xs">
+          Instructions (how a worker should use it) <textarea
+            name="api[instructions]"
+            class="cns-chip"
+            rows="2"
+          >{Phoenix.HTML.Form.input_value(f, :instructions)}</textarea>
+        </label>
+
+        <.api_errors form={f} />
+
+        <div class="flex items-center gap-2">
+          <button type="submit" class="rounded bg-cyan-700 px-3 py-1 text-xs">
+            {if @editing_api_id, do: "Update", else: "Register"}
+          </button>
+          <button
+            :if={@editing_api_id}
+            type="button"
+            phx-click="cancel_edit_api"
+            class="cns-chip"
+          >
+            Cancel
+          </button>
+        </div>
+      </.form>
+
+      <form
+        id="deposit-api-secret-form"
+        phx-submit="deposit_api_secret"
+        class="flex flex-wrap items-end gap-2 border-t pt-3"
+        style="border-color: var(--cns-border)"
+      >
+        <div
+          class="text-[0.625rem] font-semibold uppercase"
+          style="color: var(--cns-text-2); width: 100%"
+        >
+          Deposit a secret into the vault
+        </div>
+        <label class="flex flex-col gap-1 text-xs">
+          Scope
+          <select name="scope" class="cns-chip">
+            <option value="user" selected={@api_secret_prefill[:scope] == "user"}>
+              User (platform)
+            </option>
+            <option
+              value="project"
+              disabled={is_nil(@active_project_id)}
+              selected={@api_secret_prefill[:scope] == "project"}
+            >
+              Project
+            </option>
+          </select>
+        </label>
+        <label class="flex flex-col gap-1 text-xs">
+          Secret name
+          <input
+            name="name"
+            class="cns-chip"
+            placeholder="PIXELLAB_API_KEY"
+            value={@api_secret_prefill[:name]}
+          />
+        </label>
+        <label class="flex flex-col gap-1 text-xs">
+          Value
+          <input
+            name="value"
+            type="password"
+            class="cns-chip"
+            placeholder="token"
+            value={@api_secret_prefill[:value]}
+          />
+        </label>
+        <button type="submit" class="rounded bg-cyan-700 px-3 py-1 text-xs">Deposit</button>
+      </form>
+    </div>
+    """
+  end
+
+  attr :smart_import, :map, default: %{status: :idle, request_id: nil}
+
+  @doc """
+  Smart import box (issue-external-api-mcp-provisioning): a textarea where the operator
+  pastes an MCP config (mcpServers JSON / a single server object) or a description. The
+  deterministic parser registers/pre-fills well-formed JSON instantly; fuzzy input is
+  interpreted by the orchestrator's Fast tier. Tokens are stripped locally and staged for
+  the vault — never stored on the row. `@smart_import.status` drives the status banner.
+  """
+  @spec smart_import_box(map()) :: Phoenix.LiveView.Rendered.t()
+  def smart_import_box(assigns) do
+    ~H"""
+    <div
+      id="smart-import-box"
+      class="flex flex-col gap-2 rounded border p-3"
+      style="border-color: var(--cns-border)"
+    >
+      <div class="text-[0.625rem] font-semibold uppercase" style="color: var(--cns-text-2)">
+        Smart import (Fast agent)
+      </div>
+      <form id="smart-import-form" phx-submit="smart_import_api" class="flex flex-col gap-2">
+        <textarea
+          name="blob"
+          rows="4"
+          class="cns-chip font-mono text-xs"
+          placeholder="Paste an MCP config (mcpServers JSON, a single server object) or describe the server.\nTokens are stripped locally and staged for the vault — never stored on the row."
+        ></textarea>
+        <div class="flex items-center gap-2">
+          <button type="submit" class="rounded bg-cyan-700 px-3 py-1 text-xs">
+            Parse with Fast agent
+          </button>
+          <.smart_import_status status={@smart_import.status} />
+        </div>
+      </form>
+    </div>
+    """
+  end
+
+  attr :status, :any, required: true
+
+  @doc false
+  @spec smart_import_status(map()) :: Phoenix.LiveView.Rendered.t()
+  def smart_import_status(%{status: :running} = assigns) do
+    ~H"""
+    <span id="smart-import-status" class="text-xs" style="color: var(--cns-text-3)">Parsing…</span>
+    """
+  end
+
+  def smart_import_status(%{status: {:question, text}} = assigns) do
+    assigns = assign(assigns, :text, text)
+
+    ~H"""
+    <span id="smart-import-status" class="text-xs" style="color: var(--cns-cyan)">{@text}</span>
+    """
+  end
+
+  def smart_import_status(%{status: {:error, text}} = assigns) do
+    assigns = assign(assigns, :text, text)
+
+    ~H"""
+    <span id="smart-import-status" class="text-xs" style="color: var(--cns-red, #f87171)">
+      {@text}
+    </span>
+    """
+  end
+
+  def smart_import_status(assigns) do
+    ~H"""
+    <span id="smart-import-status" class="sr-only">idle</span>
+    """
+  end
+
+  attr :api, :any, required: true
+  attr :present?, :boolean, default: false
+
+  @doc false
+  @spec api_row(map()) :: Phoenix.LiveView.Rendered.t()
+  def api_row(assigns) do
+    ~H"""
+    <li id={"api-row-#{@api.id}"} class="flex items-center justify-between gap-2 text-xs">
+      <span class="flex min-w-0 flex-col">
+        <span class="font-mono">{@api.name}</span>
+        <span class="text-[0.625rem]" style="color: var(--cns-text-3)">
+          {@api.transport}{if @api.secret_name,
+            do: " · #{@api.secret_name} #{if @present?, do: "✓", else: "(missing)"}"}
+        </span>
+      </span>
+      <span class="flex items-center gap-1">
+        <button type="button" phx-click="edit_api" phx-value-id={@api.id} class="cns-chip">edit</button>
+        <button
+          type="button"
+          phx-click="delete_api"
+          phx-value-id={@api.id}
+          data-confirm={"Delete #{@api.name}?"}
+          class="cns-chip"
+        >
+          ✕
+        </button>
+      </span>
+    </li>
+    """
+  end
+
+  attr :form, :any, required: true
+
+  @doc false
+  @spec api_errors(map()) :: Phoenix.LiveView.Rendered.t()
+  def api_errors(assigns) do
+    ~H"""
+    <ul :if={@form.errors != []} class="text-xs" style="color: var(--cns-red, #f87171)">
+      <li :for={{field, {msg, _opts}} <- @form.errors}>{field} {msg}</li>
+    </ul>
+    """
+  end
+
+  # Whether the API's referenced vault secret is present (masked names only — never the
+  # value). `nil`/missing secret_name or no auth ⇒ not flagged.
+  @spec secret_present?(MapSet.t() | nil, ExternalApi.t()) :: boolean()
+  defp secret_present?(%MapSet{} = names, %{secret_name: secret}) when is_binary(secret),
+    do: MapSet.member?(names, secret)
+
+  defp secret_present?(_names, _api), do: false
+
+  # Render a JSONB string-array field back into a comma-separated text input value.
+  @spec join_list(term()) :: String.t()
+  defp join_list(list) when is_list(list), do: Enum.join(list, ", ")
+  defp join_list(_other), do: ""
 
   attr :tab, :atom, required: true
   attr :active, :atom, required: true

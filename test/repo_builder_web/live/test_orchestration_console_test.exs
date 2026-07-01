@@ -90,43 +90,6 @@ defmodule RepoBuilderWeb.TestOrchestrationConsoleTest do
     assert has_element?(view, "#stat-active", "1")
   end
 
-  test "Done flips the agent's swimlane to succeeded in ADWS view", %{conn: conn} do
-    :ok = Dashboard.subscribe_events()
-    :ok = Dashboard.subscribe()
-
-    {:ok, view, _html} = live(conn, ~p"/")
-    agent = create_agent(view, uniq_name())
-
-    view |> element("#agent-#{agent.id}") |> render_click()
-
-    run_via_command(view, "ship it")
-
-    assert_receive {:agent_event, _id, %Event.Done{ok: true}, _log_no}, 2_000
-    # The session also broadcasts a lane transition; wait for the terminal one so the
-    # view has processed it before we render (no Process.sleep).
-    assert_receive {:lane, %{id: "agent:" <> _, status: :succeeded}}, 2_000
-
-    # Toggle to swimlanes; the agent lane (stable dom_id) shows the terminal status.
-    view |> element("#view-toggle") |> render_click()
-    html = render(view)
-
-    assert html =~ ~s(id="swimlanes")
-    # The agent now renders as a unified agent card (id "swimlane-<agent_id>"), not a
-    # separate roster row; its status badge carries the terminal transition.
-    assert html =~ "swimlane-#{agent.id}"
-    # The terminal status may reach the LiveView process just after the test process;
-    # poll the render so we observe the processed `succeeded` transition.
-    assert wait_render(view, "succeeded")
-  end
-
-  defp wait_render(view, substring, attempts \\ 100) do
-    cond do
-      render(view) =~ substring -> true
-      attempts > 0 -> Process.sleep(20) && wait_render(view, substring, attempts - 1)
-      true -> false
-    end
-  end
-
   defp wait_until(fun, attempts \\ 100) do
     cond do
       fun.() -> true

@@ -101,15 +101,25 @@ const tools = loadTools();
 // INSIDE this function with an `execute` callback returning canonical content.
 export default function (pi: ExtensionAPI) {
   for (const tool of tools) {
-    pi.registerTool({
-      name: tool.name,
-      label: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
-      async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-        const text = await callTool(tool.name, params as Record<string, unknown>);
-        return { content: [{ type: "text", text }] };
-      },
-    });
+    // Isolate each registration: if pi's parameter validator rejects ONE tool's
+    // schema, that must not abort the loop and silently drop every tool after it
+    // (the failure mode that lost `inspect_repo` + the workstream suite). Catch,
+    // surface to stderr, and keep going so the rest of the surface stays intact.
+    try {
+      pi.registerTool({
+        name: tool.name,
+        label: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+        async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+          const text = await callTool(tool.name, params as Record<string, unknown>);
+          return { content: [{ type: "text", text }] };
+        },
+      });
+    } catch (err) {
+      process.stderr.write(
+        `orchestrator-tools: failed to register ${tool.name}: ${String(err)}\n`,
+      );
+    }
   }
 }

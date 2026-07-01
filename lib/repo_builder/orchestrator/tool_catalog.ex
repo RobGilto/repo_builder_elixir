@@ -243,9 +243,15 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
             },
             "numbers" => %{
               "type" => "array",
-              "items" => %{"type" => ["integer", "string"]},
+              # Single (non-union) item type: pi's parameter validator rejects an
+              # array-valued JSON-Schema `type` (e.g. ["integer","string"]) and that
+              # rejection aborts the pi extension's registration loop, silently
+              # dropping every tool registered AFTER this one. The handler's
+              # `parse_log_no/1` coerces bare ints AND "log-<n>"/"<n>" strings, so
+              # "string" is the safe, lossless schema for both bindings.
+              "items" => %{"type" => "string"},
               "description" =>
-                "Explicit list of log numbers (bare ints or \"log-<n>\" strings), e.g. [8219, \"log-8225\", 8228]."
+                "Explicit list of log numbers as strings (bare \"<n>\" or \"log-<n>\"), e.g. [\"8219\", \"log-8225\", \"8228\"]. Bare integers are also accepted."
             },
             "include_hidden" => %{
               "type" => "boolean",
@@ -463,6 +469,48 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
         input_schema: %{"type" => "object", "properties" => %{}, "required" => []}
       },
       %{
+        name: "set_focus",
+        description:
+          "Declare your FOCUS — the single concrete thing you are working on right now. Set it " <>
+            "BEFORE commanding or spawning a worker: an unfocused scope is blocked from spending " <>
+            "budget. Pass `workstream` (id or title) to focus a specific parallel workstream " <>
+            "before commanding a worker on it; omit it to focus the orchestrator itself for " <>
+            "untagged work. Exactly one focus per scope — calling this again replaces it.",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "focus" => %{
+              "type" => "string",
+              "description" => "The single concrete thing you are working on right now."
+            },
+            "workstream" => %{
+              "type" => "string",
+              "description" =>
+                "Workstream id or title to focus; omit to focus the orchestrator itself."
+            }
+          },
+          "required" => ["focus"]
+        }
+      },
+      %{
+        name: "clear_focus",
+        description:
+          "Clear a focus once it is VERIFIED done against the tree, then set the next one. Pass " <>
+            "`workstream` (id or title) to clear that stream's focus; omit it to clear the " <>
+            "orchestrator's own focus.",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "workstream" => %{
+              "type" => "string",
+              "description" =>
+                "Workstream id or title to clear; omit to clear the orchestrator's focus."
+            }
+          },
+          "required" => []
+        }
+      },
+      %{
         name: "report_complete",
         description:
           "Declare the GOAL complete: marks the Task Ledger done (the drive loop stops) and " <>
@@ -486,14 +534,16 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
         description:
           "Read-only inspection of your working directory so you can verify work against the " <>
             "ACTUAL tree (not a worker's self-report). `op`: `git_status` (short status + branch), " <>
-            "`changed_files` (the porcelain change list), or `read_file` (read one file by `path`). " <>
+            "`changed_files` (the porcelain change list), `read_file` (read one file by `path`), " <>
+            "or `surfaces` (detect the app's front-end surface(s) — web/desktop/tui — to decide " <>
+            "whether to append a UI/UX phase; an empty list means no front end). " <>
             "Path-jailed to the working dir and capped; makes NO edits.",
         input_schema: %{
           "type" => "object",
           "properties" => %{
             "op" => %{
               "type" => "string",
-              "enum" => ["git_status", "changed_files", "read_file"],
+              "enum" => ["git_status", "changed_files", "read_file", "surfaces"],
               "description" => "Which inspection to run."
             },
             "path" => %{
@@ -574,7 +624,21 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
                 "properties" => %{
                   "title" => %{"type" => "string"},
                   "description" => %{"type" => "string"},
-                  "definition_of_done" => %{"type" => "string"}
+                  "definition_of_done" => %{"type" => "string"},
+                  "kind" => %{
+                    "type" => "string",
+                    "enum" => ["backend", "ui_ux"],
+                    "description" =>
+                      "Phase kind — omit/`backend` for normal work; `ui_ux` for an " <>
+                        "iterative front-end polish phase (bounded review→fix loop to a decent MVP)."
+                  },
+                  "surface" => %{
+                    "type" => "string",
+                    "enum" => ["web", "desktop", "tui"],
+                    "description" =>
+                      "For a `ui_ux` phase, the front-end surface it polishes " <>
+                        "(from surface detection). Omit for a backend phase."
+                  }
                 },
                 "required" => ["title"]
               }
@@ -612,7 +676,13 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
                 "Stage artifact, e.g. the `specs/…md` path for the spec stage (becomes spec_path)."
             },
             "worker" => %{"type" => "string", "description" => "Worker that ran the stage."},
-            "note" => %{"type" => "string", "description" => "One-line note for this stage."}
+            "note" => %{"type" => "string", "description" => "One-line note for this stage."},
+            "gate" => %{
+              "type" => "object",
+              "description" =>
+                "Optional quality-gate GateResult (from `run_quality_gate` result mode) for a " <>
+                  "`test` stage — persisted as stage evidence and rendered as the console gate strip."
+            }
           },
           "required" => ["workstream", "stage", "outcome"]
         }
@@ -656,6 +726,61 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
             }
           },
           "required" => ["workstream", "status"]
+        }
+      },
+      %{
+        name: "run_quality_gate",
+        description:
+          "Resolve and run this project's stack-aware QUALITY GATE for a workstream phase " <>
+            "(quality-gate-plugins) — the ordered five-stage green gate (format · lint · type · " <>
+            "test · mutation). Call it during a phase's `:test` stage. Two modes: with NO " <>
+            "`outputs` it returns the ordered, token-filled COMMAND PLAN for the requested " <>
+            "`cadence` (default `per_phase`) — dispatch a worker to run those commands in order " <>
+            "in the repo. Once the worker reports each command's exit code + output, call it " <>
+            "AGAIN with `outputs` to get the structured GateResult (green/red per stage + parsed " <>
+            "file:line diagnostics + which stage failed). On any red stage, dispatch a fix worker " <>
+            "with the diagnostics, re-run, and loop until green before recording the test stage " <>
+            "passed. A `pre_merge` cadence runs the slow mutation/property stages once at workstream close.",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "workstream" => %{
+              "type" => "string",
+              "description" => "Optional workstream id or title this gate run belongs to."
+            },
+            "cadence" => %{
+              "type" => "string",
+              "enum" => ["per_phase", "pre_merge"],
+              "description" =>
+                "Which stages to run: `per_phase` (fast: format/lint/type/test, default) or " <>
+                  "`pre_merge` (slow: mutation/property, run once at workstream close)."
+            },
+            "outputs" => %{
+              "type" => "array",
+              "description" =>
+                "The worker's captured results for each stage command, in order. When present, " <>
+                  "the gate is EVALUATED into a GateResult instead of returning the plan.",
+              "items" => %{
+                "type" => "object",
+                "properties" => %{
+                  "stage_id" => %{
+                    "type" => "string",
+                    "description" => "The stage this output is for."
+                  },
+                  "exit_code" => %{
+                    "type" => "integer",
+                    "description" => "The command's exit code (0 = pass)."
+                  },
+                  "output" => %{
+                    "type" => "string",
+                    "description" => "The command's combined stdout/stderr."
+                  }
+                },
+                "required" => ["stage_id", "exit_code"]
+              }
+            }
+          },
+          "required" => []
         }
       },
       %{

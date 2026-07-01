@@ -108,6 +108,24 @@ defmodule RepoBuilder.Orchestrator.SystemPromptTest do
     assert prompt =~ ~s(tools: ["firecrawl"])
   end
 
+  test "teaches the focus discipline (set_focus before commanding workers)" do
+    prompt = SystemPrompt.build(orchestrator())
+
+    assert prompt =~ "set_focus"
+    assert prompt =~ "clear_focus"
+    assert prompt =~ "DECLARE YOUR FOCUS"
+  end
+
+  test "teaches the quality-gate protocol at the :test stage" do
+    prompt = SystemPrompt.build(orchestrator())
+
+    assert prompt =~ "Quality gate (per-phase rigorous testing"
+    assert prompt =~ "run_quality_gate"
+    assert prompt =~ "format · lint · type · test · mutation"
+    assert prompt =~ ~r/mutation.*pre_merge/s
+    assert prompt =~ ~r/test:.*run_quality_gate/s
+  end
+
   test "documents clear_context and the clear-vs-compact distinction" do
     prompt = SystemPrompt.build(orchestrator())
 

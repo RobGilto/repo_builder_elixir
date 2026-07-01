@@ -1,0 +1,13 @@
+{
+  "schema": "agentic.plugin/1",
+  "id": "quality-gates-ruby",
+  "name": "Quality Gate — Ruby",
+  "version": "1.0.0",
+  "description": "The stack-aware five-stage green gate (format · lint · type · test · mutant mutation) for Ruby repos: a quality_gate descriptor the orchestrator runs at each workstream phase's :test stage, plus a foundations skill teaching the worker the five-stage discipline and why mutation/property testing catches vacuous LLM-written tests.",
+  "author": "repo_builder",
+  "compat": { "platform": ">= 0.0.0" },
+  "contributions": [
+    { "kind": "quality_gate", "path": "gate.json" },
+    { "kind": "skill", "path": "skills" }
+  ]
+}

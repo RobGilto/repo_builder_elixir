@@ -19,6 +19,9 @@ defmodule RepoBuilder.Plugins.Contribution do
       `RepoBuilder.Plugins.SkillPack`)
     * `:context_fragment` — a markdown file appended to the orchestrator system prompt
     * `:capability`       — a JSON file of stack markers + capability defaults
+    * `:quality_gate`     — a JSON gate descriptor: an ordered, stack-aware set of
+      quality stages (format · lint · type · test · mutation) the orchestrator runs at
+      each workstream phase's `:test` stage (see `RepoBuilder.Plugins.QualityGate`)
     * `:harness_adapter`  — registered by a code plugin (see `RepoBuilder.Plugins.Code`)
     * `:mcp_tools`        — a tool-bundle descriptor (kind reserved; wiring is follow-on)
   """
@@ -32,10 +35,11 @@ defmodule RepoBuilder.Plugins.Contribution do
           | :skill
           | :context_fragment
           | :capability
+          | :quality_gate
           | :harness_adapter
           | :mcp_tools
 
-  @kinds ~w(command_pack workflow_type agent_template skill context_fragment capability harness_adapter mcp_tools)a
+  @kinds ~w(command_pack workflow_type agent_template skill context_fragment capability quality_gate harness_adapter mcp_tools)a
   @kind_strings Enum.map(@kinds, &Atom.to_string/1)
 
   typedstruct enforce: true do

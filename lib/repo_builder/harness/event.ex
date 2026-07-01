@@ -120,13 +120,22 @@ defmodule RepoBuilder.Harness.Event do
   end
 
   defmodule Status do
-    @moduledoc "Non-terminal lifecycle signal (retry, rate limit, plugin install, init detail)."
+    @moduledoc """
+    Non-terminal lifecycle signal (retry, rate limit, plugin install, init detail,
+    missing provisioned-API secret).
+
+    `kind: :missing_secret` (issue-provisioned-api-secret-missing-silent) is emitted at
+    spawn when a worker is provisioned an external API whose `secret_name` did NOT resolve
+    into the child env (fail-soft drop). `detail` carries `%{api: name, secret_name: name}`
+    — the secret's NAME only, NEVER its value — so the operator sees a loud, queryable signal
+    instead of decoding a downstream MCP `401`.
+    """
     use TypedStruct
 
     typedstruct enforce: true do
       field :type, :status, default: :status
       field :harness, atom()
-      field :kind, :retry | :init_detail | :plugin_install | :rate_limit
+      field :kind, :retry | :init_detail | :plugin_install | :rate_limit | :missing_secret
       field :attempt, integer(), enforce: false
       field :detail, map(), default: %{}
       field :raw, map(), default: %{}

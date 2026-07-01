@@ -27,6 +27,8 @@ defmodule RepoBuilder.Orchestrator.TaskLedger do
           plan: [map()],
           status: status(),
           stall_count: non_neg_integer(),
+          focus: String.t() | nil,
+          focus_set_at: DateTime.t() | nil,
           progress_entries: [ProgressEntry.t()] | Ecto.Association.NotLoaded.t(),
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
@@ -49,6 +51,9 @@ defmodule RepoBuilder.Orchestrator.TaskLedger do
     field :plan, {:array, :map}, default: []
     field :status, Ecto.Enum, values: @statuses, default: :active
     field :stall_count, :integer, default: 0
+    # The single concrete thing the orchestrator is focused on right now (focus discipline).
+    field :focus, :string
+    field :focus_set_at, :utc_datetime_usec
 
     has_many :progress_entries, ProgressEntry, foreign_key: :task_ledger_id
 
@@ -67,10 +72,13 @@ defmodule RepoBuilder.Orchestrator.TaskLedger do
       :guesses,
       :plan,
       :status,
-      :stall_count
+      :stall_count,
+      :focus,
+      :focus_set_at
     ])
     |> validate_required([:orchestrator_id, :goal, :definition_of_done])
     |> validate_inclusion(:status, @statuses)
     |> validate_number(:stall_count, greater_than_or_equal_to: 0)
+    |> validate_length(:focus, max: 2_000)
   end
 end

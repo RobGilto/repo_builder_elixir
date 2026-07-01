@@ -94,3 +94,11 @@ config :phoenix_live_view,
 
 # Disable swoosh api client as it is only required for production adapters.
 config :swoosh, :api_client, false
+
+# Per-project secrets vault master key for LOCAL DEV ONLY
+# (issue-per-project-encrypted-secrets-vault). Base64 of 32 random bytes. This is a
+# throwaway dev key so the vault works out of the box at http://localhost:4000 (deposit
+# a secret, provision an external API). It is NOT a production secret — prod sources the
+# key from the `SECRETS_KEY` OS env var in config/runtime.exs, which OVERRIDES this when
+# set (the runtime.exs guard never clobbers it). Rotate or remove freely.
+config :repo_builder, RepoBuilder.Secrets, key: "bl02HB0PGQHUMERy2XPtYOhMKpRB6E2IXs5am1Gqgaw="

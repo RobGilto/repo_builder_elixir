@@ -1,0 +1,64 @@
+{
+  "stack": "go",
+  "stages": [
+    {
+      "id": "format",
+      "label": "format",
+      "command": "{{FORMAT_COMMAND}}",
+      "strict": true,
+      "cadence": "per_phase",
+      "diagnostic": "summary"
+    },
+    {
+      "id": "lint",
+      "label": "lint",
+      "command": "{{LINT_COMMAND}}",
+      "strict": true,
+      "cadence": "per_phase",
+      "diagnostic": "file_line"
+    },
+    {
+      "id": "type",
+      "label": "type",
+      "command": "{{TYPECHECK_COMMAND}}",
+      "strict": true,
+      "cadence": "per_phase",
+      "diagnostic": "file_line",
+      "variant": "standard"
+    },
+    {
+      "id": "type",
+      "label": "type (strict)",
+      "command": "{{TYPECHECK_STRICT_COMMAND}}",
+      "strict": true,
+      "cadence": "per_phase",
+      "diagnostic": "file_line",
+      "variant": "strict"
+    },
+    {
+      "id": "type-coverage",
+      "label": "staticcheck",
+      "command": "{{TYPE_COVERAGE_COMMAND}}",
+      "strict": true,
+      "cadence": "per_phase",
+      "diagnostic": "file_line",
+      "variant": "strict"
+    },
+    {
+      "id": "test",
+      "label": "test",
+      "command": "{{TEST_COMMAND}} -race -shuffle=on -count=1",
+      "strict": true,
+      "cadence": "per_phase",
+      "diagnostic": "summary"
+    },
+    {
+      "id": "mutation",
+      "label": "mutation",
+      "command": "{{MUTATION_COMMAND}}",
+      "strict": false,
+      "cadence": "pre_merge",
+      "diagnostic": "summary"
+    }
+  ]
+}

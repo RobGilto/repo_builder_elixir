@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan: Quality-Gate Plugins — Phase-Level Rigorous Testing Across Stacks</title>
+<style>
+  :root {
+    /* Synced visual identity: a CI "red/green gate" theme — professional, minimal, focused. */
+    --bg:        #0f1419;
+    --panel:     #161c24;
+    --panel-2:   #1d252f;
+    --ink:       #e6edf3;
+    --ink-soft:  #9fb0c0;
+    --line:      #2a3542;
+    --accent:    #4ade80; /* pass / green gate */
+    --accent-2:  #38bdf8; /* signal / links */
+    --warn:      #fbbf24; /* strict-warning tier */
+    --fail:      #f87171; /* failed gate */
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --radius: 10px;
+    --maxw: 960px;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: var(--sans); line-height: 1.62; font-size: 16px;
+  }
+  main { max-width: var(--maxw); margin: 0 auto; padding: 2.5rem 1.4rem 6rem; }
+  header h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 .6rem; letter-spacing: -0.01em; }
+  h2 { font-size: 1.4rem; margin: 2.6rem 0 .8rem; padding-bottom: .35rem; border-bottom: 1px solid var(--line); letter-spacing: -0.01em; }
+  h3 { font-size: 1.12rem; margin: 1.6rem 0 .5rem; }
+  h4 { font-size: 1rem; margin: 1.1rem 0 .35rem; color: var(--accent-2); }
+  p { margin: .55rem 0; color: var(--ink); }
+  a { color: var(--accent-2); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font-family: var(--mono); font-size: .86em; background: var(--panel-2); padding: .12em .4em; border-radius: 5px; color: #cfe8ff; }
+  pre { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem 1.1rem; overflow-x: auto; }
+  pre code { background: none; padding: 0; color: var(--ink); }
+  section { margin-top: .5rem; }
+  ul, ol { padding-left: 1.3rem; }
+  li { margin: .28rem 0; }
+  figure { margin: 1.3rem 0; text-align: center; }
+  figure img { max-width: 100%; height: auto; border-radius: var(--radius); border: 1px solid var(--line); }
+  figcaption { color: var(--ink-soft); font-size: .85rem; margin-top: .5rem; font-style: italic; }
+  details.meta { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: .3rem .9rem; margin-top: .8rem; }
+  details.meta summary { cursor: pointer; font-weight: 600; color: var(--ink-soft); }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1.1rem; margin: .8rem 0 .3rem; }
+  dt { color: var(--accent-2); font-family: var(--mono); font-size: .8rem; }
+  dd { margin: 0; color: var(--ink-soft); font-size: .86rem; word-break: break-word; }
+  .tag { font-family: var(--mono); font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; padding: .12em .5em; border-radius: 4px; vertical-align: middle; }
+  .tag.existing { background: #23313f; color: var(--accent-2); }
+  .tag.new { background: #143024; color: var(--accent); }
+  .files ul { list-style: none; padding-left: 0; }
+  .files li { padding: .3rem 0; border-bottom: 1px dashed var(--line); }
+  .phase { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent-2); border-radius: var(--radius); padding: 1rem 1.3rem 1.3rem; margin: 1.1rem 0; }
+  .checklist { list-style: none; padding-left: 0; }
+  .checklist li { margin: .3rem 0; }
+  .status { color: var(--warn); font-weight: 700; margin-right: .3rem; }
+  .loop { background: var(--panel-2); border: 1px dashed var(--accent); border-radius: var(--radius); padding: .7rem 1rem; margin-top: 1rem; font-size: .92rem; color: var(--ink); }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .9rem; }
+  th, td { border: 1px solid var(--line); padding: .5rem .7rem; text-align: left; vertical-align: top; }
+  th { background: var(--panel-2); color: var(--accent-2); font-weight: 600; }
+  #questionables details, #amendments details { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: .4rem 1rem; margin: .55rem 0; }
+  #questionables summary, #amendments summary { cursor: pointer; font-weight: 600; }
+  .qa-answer { color: var(--ink-soft); }
+  .pill { display:inline-block; font-family: var(--mono); font-size:.72rem; padding:.1em .55em; border-radius: 999px; border:1px solid var(--line); margin-right:.3rem; }
+  .pill.g { color: var(--accent); border-color:#1f5137; }
+  .pill.a { color: var(--warn); border-color:#5a4a1a; }
+  .pill.r { color: var(--fail); border-color:#5a2626; }
+  .lead { color: var(--ink-soft); font-size: 1.02rem; }
+</style>
+</head>
+<body>
+<main>
+
+  <!-- ===== HEADER + UPDATABLE METADATA ===== -->
+  <header>
+    <h1>Plan: Quality-Gate Plugins — Phase-Level Rigorous Testing Across Stacks</h1>
+    <p class="lead">A pluggable, stack-aware <strong>five-stage green gate</strong> (format · lint · type · test · mutation/property) that the orchestrator runs at the <code>:test</code> stage of every workstream phase — so issues are caught and stamped out <em>while the phase is being built</em>, not after.</p>
+    <details class="meta">
+      <summary>Metadata</summary>
+      <dl>
+        <dt>created</dt>      <dd>2026-07-02T00:00:00Z</dd>
+        <dt>modified</dt>     <dd>2026-07-02T00:00:00Z</dd>
+        <dt>commits</dt>      <dd>pending</dd>
+        <dt>agent name</dt>   <dd>Claude Opus 4.8, Claude Opus 4.8</dd>
+        <dt>session id</dt>   <dd>8fffe312-733a-4a29-af57-5e7f5ac66e66</dd>
+        <dt>back refs</dt>    <dd>specs/agentic-plugin-system-foundation.html, specs/stack-layers-crud-and-worker-stack-contract.html, specs/orchestrator-iterative-ui-ux-polish-phase.html, specs/agentic-layer-adaptor-and-planning-wizard.html</dd>
+        <dt>forward refs</dt> <dd>pending</dd>
+      </dl>
+    </details>
+  </header>
+
+  <!-- Hero image — synced to the :root visual identity. Replace with <img> once generated. -->
+  <figure>
+    <!-- {{HERO_IMAGE: a stylized CI pipeline of five sequential gates (format, lint, type, test, mutation) each a lit checkpoint; a phase artifact passes left-to-right, one gate glowing red and looping back. Dark slate bg, green/amber/red signal accents. Minimal, professional.}} -->
+    <figcaption>The five-stage green gate, run per phase: an artifact only advances when every checkpoint is green.</figcaption>
+  </figure>
+
+  <!-- ===== PURPOSE / PROBLEM / SOLUTION ===== -->
+  <section id="purpose">
+    <h2>Purpose</h2>
+    <p>Give <strong>repo_builder</strong> a rigorous, per-stack testing discipline that the orchestrator enforces <em>at the phase level</em>. Today the platform's own Elixir gate (<code>compile --warnings-as-errors · format · credo --strict · test · dialyzer</code>) is a strong agent feedback loop, but that discipline is hardwired to <em>this</em> repo. When repo_builder builds a Rust, Go, Python, TypeScript, or Ruby repo, there is no equivalent single "am I done?" oracle for the worker to satisfy. This plan makes the green gate a <strong>plugin object</strong>: a stack-aware, ordered set of quality stages the orchestrator runs during each workstream phase's <code>:test</code> stage, looping fix-workers until the gate is green.</p>
+  </section>
+
+  <section id="problem">
+    <h2>Problem</h2>
+    <p>LLM-written code satisfices. Three failure modes matter for autonomous, phased building:</p>
+    <ul>
+      <li><strong>Permitted warnings ship.</strong> Without a binary red/green gate, a model treats a warning as "good enough". The platform already knows this — <code>elixirc_options: [warnings_as_errors: true]</code> and <code>mix test --warnings-as-errors</code> are in CI — but that rule lives only in this repo, not in the repos the orchestrator <em>builds</em>.</li>
+      <li><strong>Hallucinated APIs slip past tests.</strong> A static type stage (Dialyzer here; <code>tsc --noEmit</code>, mypy/pyright/ty, <code>cargo check</code>, Sorbet elsewhere) is the cheapest verifier — it catches invented methods and contract drift <em>without executing anything</em>. Most stacks the orchestrator targets have a type gate available, but nothing wires it into the phase loop.</li>
+      <li><strong>Vacuous tests pass.</strong> Models are exceptionally good at writing tests that hit coverage lines while asserting nothing. A line-coverage gate actively rewards this. The antidote — <strong>mutation testing</strong> — has no place to live in the current phase machine.</li>
+    </ul>
+    <p>Structurally, the workstream <code>:test</code> stage (<code>lib/repo_builder/orchestrator/workstream_phase.ex</code>) is a single "dispatch <code>/test</code>, record passed/failed" step. It has no notion of an ordered, strict, per-stack gate, and no seam for a plugin to supply one.</p>
+    <figure>
+      <!-- {{PROBLEM_IMAGE: a worker agent handing off code that visually looks green ("tests pass") but a magnifying glass reveals hollow/empty assertions inside; a single line-coverage meter reads 100% while a mutation reveals the test never fails. Dark theme, amber warning accent.}} -->
+      <figcaption>Coverage lies: passing tests with empty assertions clear a line-coverage gate but not a mutation gate.</figcaption>
+    </figure>
+  </section>
+
+  <section id="solution">
+    <h2>Solution</h2>
+    <p>Add a <strong>Quality-Gate subsystem</strong>, delivered through the existing agentic plugin system, with four moving parts that all reuse seams already in the codebase:</p>
+    <ol>
+      <li><strong>A new closed contribution kind <code>:quality_gate</code></strong> (<code>RepoBuilder.Plugins.Contribution</code>). Per the plugin doctrine — "open plugin id, CLOSED set of kinds; adding a kind is a deliberate core edit because it means a new extension point" — a gate <em>is</em> a genuinely new extension point, so it earns a kind rather than overloading <code>:capability</code>.</li>
+      <li><strong>A gate descriptor + domain type</strong> (<code>RepoBuilder.Plugins.QualityGate</code>): a JSON file declaring an ordered list of stages for a stack, each stage a capability-tokenized command with a <code>strict</code> flag, a <code>cadence</code> (<code>per_phase</code> | <code>pre_merge</code>), and a diagnostic format. Validated wire→domain via TypeCheck, exactly like <code>Manifest</code>/<code>Contribution</code>.</li>
+      <li><strong>A resolver + runner</strong> (<code>GateResolver</code> + <code>Orchestrator.GateRunner</code>): resolve the active gate for a project's <code>stack</code> across a precedence chain (active plugin → builtin stack default under <code>priv/quality_gates/</code> → generic), fill capability tokens with the <em>same</em> <code>{{TEST_COMMAND}}…</code> machinery the command <code>Resolver</code> already uses, run each <code>per_phase</code> stage in order, and parse <code>file:line:rule</code> diagnostics so the fix-worker can self-correct.</li>
+      <li><strong>Orchestrator integration</strong>: a <code>run_quality_gate</code> tool the orchestrator calls during the <code>:test</code> stage. Any red stage → dispatch a fix worker → re-run → loop, bounded by the existing <code>@stall_limit</code>. <code>pre_merge</code> stages (mutation, property depth) run once at <code>close_workstream</code>. Gate outcomes persist in the phase's <code>stages</code> JSONB and surface on the Workstreams console panel.</li>
+    </ol>
+    <p>Stacks ship as plugins in <code>plugin_library/quality-gates-&lt;stack&gt;/</code> (elixir, rust, go, python, ts, ruby), each pairing a <code>quality_gate</code> descriptor with a <code>context_fragment</code>/<code>skill</code> that teaches the worker the five-stage discipline plus mutation/property testing. Builtin defaults under <code>priv/</code> mean the gate works with zero plugins installed (mirroring stack packs → generic).</p>
+    <figure>
+      <!-- {{SOLUTION_IMAGE: an architecture diagram — a Plugin box (quality_gate JSON + skill) feeds a GateResolver, which feeds a GateRunner embedded in the workstream phase :test stage; a fix-loop arrow returns on red; green advances to :review. Label three stacks (Elixir, Rust, Python) as interchangeable plug-ins. Blue/green accents on dark slate.}} -->
+      <figcaption>Gate-as-plugin: one descriptor per stack plugs into the same phase-level runner and fix-loop.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== RELEVANT FILES ===== -->
+  <section id="files" class="files">
+    <h2>Relevant Files</h2>
+
+    <h3>Existing Files</h3>
+    <ul>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/plugins/contribution.ex</code> — the CLOSED sum type of contribution kinds; add <code>:quality_gate</code> here (the one deliberate core edit to the kind set).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/plugins/manifest.ex</code> — wire→domain TypeCheck validation pattern to mirror for the gate descriptor.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/plugins/activation.ex</code> — <code>contributions/2</code> is the per-project active-contribution lookup the resolver calls (<code>contributions(project_id, :quality_gate)</code>).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/commands/resolver.ex</code> — owns the <code>@token_fields</code> capability-token map and <code>fill_tokens/2</code>; reuse/extract its token machinery for gate commands.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/projects/capabilities.ex</code> — per-project command capabilities; add <code>mutation_command</code> (+ optional <code>mutation_min_score</code>).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/workstream_phase.ex</code> — the phase <code>spec→implement→test→review</code> machine; the <code>:test</code> stage is the integration point.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/workstreams.ex</code> — <code>record_stage/3</code> state machine + <code>close_workstream</code>; where <code>pre_merge</code> gates fire and gate evidence is recorded.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/tool_catalog.ex</code> + <code>tools.ex</code> — where the <code>run_quality_gate</code> tool is declared and handled.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/system_prompt.ex</code> — <code>phased_delivery_block/0</code>; the <code>:test</code> stage instruction changes to run the gate, plus a new <code>quality_gate_block/0</code>.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/stack_layers.ex</code> + <code>orchestrator/surface_detector.ex</code> — stack detection that selects which builtin gate default applies.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/components/dashboard_components.ex</code> (workstreams panel) — surfaces per-phase gate results.</li>
+      <li><span class="tag existing">existing</span> <code>plugin_library/ui-ux-mvp/plugin.json</code> — the manifest shape to mirror for gate plugins.</li>
+    </ul>
+
+    <h3>New Files</h3>
+    <ul>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/plugins/quality_gate.ex</code> — the gate descriptor domain type + wire→domain TypeCheck parse/validate (never raises on untrusted JSON).</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/orchestrator/gate_resolver.ex</code> — precedence chain (plugin → builtin stack → generic) + capability-token fill; returns a resolved, ordered gate.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/orchestrator/gate_runner.ex</code> — executes <code>per_phase</code> stages in order, parses diagnostics, returns a structured <code>GateResult</code>.</li>
+      <li><span class="tag new">new</span> <code>priv/quality_gates/{elixir,rust,go,python,typescript,ruby,generic}.json</code> — builtin default gate descriptors (work with zero plugins installed).</li>
+      <li><span class="tag new">new</span> <code>plugin_library/quality-gates-&lt;stack&gt;/plugin.json</code> (×6) — per-stack gate plugins: a <code>quality_gate</code> contribution + a <code>skill</code>/<code>context_fragment</code>.</li>
+      <li><span class="tag new">new</span> <code>plugin_library/quality-gates-&lt;stack&gt;/skills/quality-gate-foundations/SKILL.md</code> — teaches the worker the five-stage discipline + mutation/property testing for that stack.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/plugins/quality_gate_test.exs</code>, <code>test/repo_builder/orchestrator/gate_resolver_test.exs</code>, <code>test/repo_builder/orchestrator/gate_runner_test.exs</code> — descriptor validation, precedence, token fill, and diagnostic parsing.</li>
+      <li><span class="tag new">new</span> <code>ai_docs/quality-gate-plugins.md</code> — how to author a gate plugin for a new stack (routed via <code>conditional_docs.md</code>).</li>
+    </ul>
+  </section>
+
+  <!-- ===== IMPLEMENTATION PHASES ===== -->
+  <section id="phases">
+    <h2>Implementation Phases</h2>
+    <p><strong>IMPORTANT:</strong> Execute every phase and task step by step, in order, top to bottom.</p>
+    <p>Status markers: <code>[]</code> idle · <code>[wip]</code> in progress · <code>[x]</code> complete · <code>[f]</code> failed. All start as <code>[]</code>; the Build Plan workflow updates them as it works.</p>
+
+    <!-- ===== PHASE 0 ===== -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 0: Gate descriptor domain + new contribution kind</h3>
+      <p>Establish the data spine: a new closed kind, a validated descriptor type, the mutation capability field, and builtin defaults for every stack — with zero orchestrator behavior change yet.</p>
+      <figure>
+        <!-- {{PHASE_IMAGE: a JSON gate descriptor on the left (ordered stages with strict/cadence flags) validated through a TypeCheck boundary into a typed Elixir struct on the right. Minimal, code-forward, green accent.}} -->
+        <figcaption>Untrusted gate JSON is validated wire→domain, exactly like the plugin Manifest.</figcaption>
+      </figure>
+
+      <h4>1. Add the <code>:quality_gate</code> contribution kind</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add <code>:quality_gate</code> to <code>@kinds</code> and the <code>@type kind</code> union in <code>lib/repo_builder/plugins/contribution.ex</code>, with a moduledoc line describing the asset (a JSON gate descriptor).</li>
+        <li><code class="status">[]</code> Confirm <code>cast_kind/1</code>/<code>from_wire/1</code> accept it via the existing <code>String.to_existing_atom</code> path (no new logic needed).</li>
+      </ul>
+
+      <h4>2. Author the <code>QualityGate</code> descriptor domain</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Create <code>lib/repo_builder/plugins/quality_gate.ex</code> with a TypedStruct: <code>stack</code>, and <code>stages :: [Stage.t()]</code> where a <code>Stage</code> has <code>id</code>, <code>label</code>, <code>command</code> (capability-tokenized string), <code>strict :: boolean</code>, <code>cadence :: :per_phase | :pre_merge</code>, <code>diagnostic :: :file_line | :summary | :none</code>, and optional <code>continue_on_fail</code>.</li>
+        <li><code class="status">[]</code> Add <code>from_wire/1 :: {:ok, t()} | {:error, reason}</code> validating an untrusted JSON map, mirroring <code>Manifest.from_wire</code>: closed cadence/diagnostic atoms via <code>to_existing_atom</code> against a pre-declared set; never raises; unknown stage shapes rejected.</li>
+        <li><code class="status">[]</code> Keep the TypeCheck wire boundary Dialyzer-clean per the project standard (nested type module + compile-time <code>conforms?</code>, not runtime dynamic checks).</li>
+      </ul>
+
+      <h4>3. Add the mutation + typed-enforcement capability fields</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add <code>field :mutation_command, String.t() | nil</code> (and optional <code>field :mutation_min_score, float() | nil</code>) to <code>lib/repo_builder/projects/capabilities.ex</code>; it round-trips through the existing string-keyed JSONB (no migration).</li>
+        <li><code class="status">[]</code> Add <code>field :typed_enforcement, atom(), default: :strict</code> with a closed set <code>:off | :standard | :strict</code> (cast wire→domain via <code>to_existing_atom</code> against the declared set; the changeset validates inclusion). Default <code>:strict</code> generalizes the platform's own typed discipline ([[typed-coding-standard]]) to built repos; <code>:standard</code>/<code>:off</code> are the opt-outs.</li>
+        <li><code class="status">[]</code> Add companion capability tokens the strict type stage needs: <code>{{TYPECHECK_STRICT_COMMAND}}</code> (e.g. <code>pyright --strict</code>, <code>mypy --strict</code>, strict-<code>tsconfig</code> <code>tsc</code>, <code>srb tc</code> with <code>typed: strict</code>) and <code>{{TYPE_COVERAGE_COMMAND}}</code> (the annotation-coverage / <code>@spec</code>-coverage check).</li>
+        <li><code class="status">[]</code> Register <code>"{{MUTATION_COMMAND}}"</code>, <code>"{{TYPECHECK_STRICT_COMMAND}}"</code>, <code>"{{TYPE_COVERAGE_COMMAND}}"</code> in the <code>@token_fields</code> map (Phase 1 extracts this map to a shared module).</li>
+      </ul>
+
+      <h4>4. Ship builtin default descriptors for every stack</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Write <code>priv/quality_gates/{elixir,rust,go,python,typescript,ruby,generic}.json</code> encoding the five-stage discipline per the stack matrix in Notes (format-check · lint-strict · typecheck · test · mutation@pre_merge), commands as capability tokens.</li>
+        <li><code class="status">[]</code> Encode the type stage in TWO forms per descriptor so <code>typed_enforcement</code> can select at resolve time: a <code>:standard</code> variant (<code>{{TYPECHECK_COMMAND}}</code>) and a <code>:strict</code> variant (<code>{{TYPECHECK_STRICT_COMMAND}}</code> + a <code>{{TYPE_COVERAGE_COMMAND}}</code> sub-stage). Dynamically-typed stacks (Python/JS/Ruby) get a real strict config in <code>:strict</code>; statically-typed stacks (Rust/Go/Elixir) map <code>:strict</code> to their existing type gate plus the coverage check (Elixir = <code>@spec</code> coverage via Credo).</li>
+        <li><code class="status">[]</code> Elixir default reproduces the platform's own gate (<code>compile --warnings-as-errors</code> · <code>format --check-formatted</code> · <code>credo --strict</code> · <code>dialyzer</code> · <code>test --warnings-as-errors</code>) as the reference implementation and self-test — and is itself a <code>:strict</code> typed-enforcement gate (the Credo <code>@spec</code> gate is the annotation-coverage sub-stage).</li>
+      </ul>
+
+      <h4>5. Testing Strategy</h4>
+      <p>Pure-data phase — property/boundary tests on the descriptor parser + capability round-trip, no runtime yet.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/plugins/quality_gate_test.exs</code> — malformed/partial/unknown-cadence JSON never raises and returns <code>:error</code>; valid descriptors parse to the typed struct; all 7 builtin JSON files load.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/plugins/contribution_test.exs</code> — <code>:quality_gate</code> casts and round-trips; unknown kinds still rejected.</li>
+        <li><code class="status">[]</code> <code>mix compile --warnings-as-errors &amp;&amp; mix dialyzer</code> — TypeCheck boundary is Dialyzer-clean.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- ===== PHASE 1 ===== -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 1: Gate resolution + runner</h3>
+      <p>Turn a descriptor into an executable, token-filled, ordered gate and a runner that produces a structured pass/fail result with parsed diagnostics — still callable in isolation (no orchestrator wiring).</p>
+
+      <h4>1. Extract shared capability-token machinery</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Extract the <code>@token_fields</code> map + <code>fill_tokens/2</code> from <code>commands/resolver.ex</code> into a shared <code>RepoBuilder.Projects.CapabilityTokens</code> module; have the command resolver delegate to it (behavior-preserving refactor, keep its tests green).</li>
+      </ul>
+
+      <h4>2. Build <code>GateResolver</code></h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Create <code>lib/repo_builder/orchestrator/gate_resolver.ex</code> with <code>resolve(project) :: {:ok, ResolvedGate.t()} | {:error, :none}</code> walking precedence: active plugin <code>:quality_gate</code> (via <code>Activation.contributions/2</code>) → builtin <code>priv/quality_gates/&lt;stack&gt;.json</code> → <code>generic.json</code>.</li>
+        <li><code class="status">[]</code> Fill each stage's <code>command</code> with the project's capabilities via <code>CapabilityTokens</code>; drop stages whose required token is empty (e.g. no <code>typecheck_command</code> → skip the type stage, don't emit a broken command). Fail-silent, never raises — mirror the command resolver's doctrine.</li>
+        <li><code class="status">[]</code> <strong>Select the type-stage variant by <code>project.capabilities.typed_enforcement</code></strong>: <code>:off</code> drops the type stage entirely; <code>:standard</code> keeps the plain <code>{{TYPECHECK_COMMAND}}</code> stage; <code>:strict</code> swaps in the strict command and appends the annotation-coverage sub-stage. A <code>:strict</code> stage whose strict token is empty degrades to <code>:standard</code> (never emit a broken command) and the runner notes the degradation.</li>
+      </ul>
+
+      <h4>3. Build <code>GateRunner</code></h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Create <code>lib/repo_builder/orchestrator/gate_runner.ex</code>: given a <code>ResolvedGate</code>, a working dir, and a cadence filter, return a <code>GateResult</code> = ordered <code>[%{stage_id, status: :passed|:failed|:skipped, exit_code, diagnostics}]</code>.</li>
+        <li><code class="status">[]</code> Parse <code>file:line</code> diagnostics for <code>diagnostic: :file_line</code> stages into structured entries so the fix-worker gets located, self-correctable findings; <code>:summary</code> stages capture tail output; stop at first strict failure unless <code>continue_on_fail</code>.</li>
+        <li><code class="status">[]</code> Decide the execution surface (see Questionables): the runner formats the ordered command plan; the actual shell execution happens in the worker's sandbox via the tool handler, not by the orchestrator BEAM shelling out directly.</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>Fixture-driven: fake capability maps + captured tool-output fixtures assert precedence, token fill, skip logic, and diagnostic parsing deterministically.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/gate_resolver_test.exs</code> — plugin wins over builtin wins over generic; empty-token stages are dropped; unknown stack falls back to generic; <code>typed_enforcement: :off</code> drops the type stage, <code>:standard</code> keeps the plain checker, <code>:strict</code> swaps in the strict command + coverage sub-stage, and an empty strict token degrades to <code>:standard</code>.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/gate_runner_test.exs</code> — ordered execution stops at first strict red; <code>file:line</code> diagnostics parse; <code>pre_merge</code> stages excluded from a <code>per_phase</code> run.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/commands/</code> — the extracted token module left command resolution unchanged.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- ===== PHASE 2 ===== -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 2: Orchestrator integration — the phase-level gate loop</h3>
+      <p>Wire the gate into the workstream <code>:test</code> stage as a tool, with a bounded fix-loop, and run <code>pre_merge</code> gates at workstream close. This is where "catch and stamp out issues during the phase" becomes real.</p>
+      <figure>
+        <!-- {{PHASE_IMAGE: the workstream phase state machine spec→implement→test→review, with the :test node exploded into a mini fix-loop (run gate → red → dispatch fix worker → re-run → green → advance). Bounded-by-stall-limit badge. Blue/green on dark.}} -->
+        <figcaption>The <code>:test</code> stage becomes a bounded gate-and-fix loop before a phase may advance to <code>:review</code>.</figcaption>
+      </figure>
+
+      <h4>1. Declare the <code>run_quality_gate</code> tool</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add <code>run_quality_gate</code> to <code>orchestrator/tool_catalog.ex</code> (args: <code>workstream</code>/phase ref, optional <code>cadence</code>) and a handler in <code>orchestrator/tools.ex</code> that resolves the gate, has the worker execute the ordered plan, and returns the structured <code>GateResult</code> (green/red per stage + diagnostics).</li>
+        <li><code class="status">[]</code> Regenerate the MCP tool manifest from <code>ToolCatalog</code> (per commit <code>6d18280</code>'s "derive manifest from ToolCatalog" rule) so <code>run_quality_gate</code> advertises correctly.</li>
+      </ul>
+
+      <h4>2. Record gate evidence into the phase</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Extend <code>Workstreams.record_stage/3</code> so a <code>test</code> outcome carries the <code>GateResult</code> as the stage <code>artifact</code>/<code>note</code> in the <code>stages</code> JSONB (which stage failed, diagnostic count) — no schema change, JSONB is already a free map.</li>
+        <li><code class="status">[]</code> On a red gate, <code>record_stage("test", "failed")</code> keeps the phase on <code>:test</code> (existing retry branch); a fully-green gate records <code>"test"/"passed"</code> and advances to <code>:review</code>.</li>
+      </ul>
+
+      <h4>3. Run <code>pre_merge</code> gates at workstream close</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> In <code>close_workstream</code>, run the <code>pre_merge</code>-cadence stages (mutation, property depth) once across the finished workstream; a failure blocks close (or records an honest <code>[f]</code> with the mutation score) rather than gold-plating per phase.</li>
+      </ul>
+
+      <h4>4. Teach the orchestrator the protocol</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Edit the <code>:test</code> bullet of <code>phased_delivery_block/0</code> in <code>system_prompt.ex</code>: dispatch <code>/test</code>, then call <code>run_quality_gate</code>; on any red stage dispatch a fix worker with the diagnostics and re-run — loop until green (bounded by <code>@stall_limit</code>) before <code>record_stage("test","passed")</code>.</li>
+        <li><code class="status">[]</code> Add a public <code>quality_gate_block/0</code> explaining the five-stage discipline, the strict/no-warnings tier, and that mutation/property gates run at close — asserted in tests like the other prompt blocks.</li>
+      </ul>
+
+      <h4>5. Testing Strategy</h4>
+      <p>Drive the full phase machine under the Fake harness / registry seam; assert the gate loop transitions and evidence persistence without spawning real toolchains.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/workstreams_test.exs</code> — a red gate holds the phase on <code>:test</code>; green advances to <code>:review</code>; <code>GateResult</code> persists in the <code>stages</code> JSONB; the loop is bounded by <code>@stall_limit</code> (blocks, no infinite retry).</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/tools_test.exs</code> — <code>run_quality_gate</code> is catalogued, handled, and present in the derived MCP manifest.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/system_prompt_test.exs</code> — <code>quality_gate_block/0</code> and the edited <code>:test</code> instruction are present.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- ===== PHASE 3 ===== -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 3: Stack gate plugins + foundations skills</h3>
+      <p>Package each stack's gate as an installable plugin pairing a descriptor with a teaching skill, so a worker on that stack both runs the gate and knows <em>why</em> each stage exists.</p>
+      <figure>
+        <!-- {{PHASE_IMAGE: six plugin cards (Elixir, Rust, Go, Python, TypeScript, Ruby) each showing a gate icon + a skill scroll icon, slotting into a shared registry. Uniform, professional, minimal, green/blue accents.}} -->
+        <figcaption>One gate plugin per stack — a descriptor plus a foundations skill — all through the one plugin registry seam.</figcaption>
+      </figure>
+
+      <h4>1. Author the six stack gate plugins</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Create <code>plugin_library/quality-gates-{elixir,rust,go,python,typescript,ruby}/plugin.json</code>, each declaring a <code>quality_gate</code> contribution (pointing at its descriptor) and a <code>skill</code> contribution.</li>
+        <li><code class="status">[]</code> Encode current, researched tool choices per the Notes matrix: Rust <code>cargo fmt --check · clippy -D warnings · check · nextest · cargo-mutants</code>; Go <code>gofmt -l · golangci-lint v2 · go build · go test -race -shuffle=on · Stryker-n/a→mutesting</code>; Python <code>ruff format --check · ruff check · pyright|pyrefly · pytest · mutmut</code>; TS <code>biome ci · tsc --noEmit · vitest · Stryker</code>; Ruby <code>rubocop · srb tc · rspec · mutant</code>.</li>
+      </ul>
+
+      <h4>2. Author the foundations skills</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Write <code>skills/quality-gate-foundations/SKILL.md</code> per stack: the five transferable properties (one command/one exit code, no-warnings tier, static types as cheapest verifier, deterministic parseable output, fast), plus the mutation-testing "coverage lies" rationale and a property-based-testing pointer (StreamData/Hypothesis/fast-check/proptest).</li>
+        <li><code class="status">[]</code> Mark <code>pre_merge</code> mutation/property stages as nightly/close cadence in the skill so workers don't run them per edit.</li>
+      </ul>
+
+      <h4>3. Register in the local library</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Ensure <code>Plugins.Source.LocalLibrary</code> discovers the new plugins; smoke an install→activate against a scratch project per stack.</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>Validate every shipped descriptor and manifest loads and activates; assert the resolver picks the plugin gate over the builtin default once active.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/plugins/</code> — all six manifests validate; each <code>quality_gate</code> descriptor parses; activation exposes it via <code>Activation.contributions/2</code>.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/orchestrator/gate_resolver_test.exs</code> — with a stack plugin active, its gate wins over the builtin default for that stack.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- ===== PHASE 4 ===== -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 4: Console evidence surface</h3>
+      <p>Make gate outcomes visible: which stage failed, how many diagnostics, and the mutation score at close — so the operator sees the phase-level testing working.</p>
+
+      <h4>1. Render gate results on the Workstreams panel</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Extend the workstreams panel component to show, per phase, a compact gate strip (five dots — format/lint/type/test/mutation — green/amber/red) sourced from the <code>stages</code> JSONB <code>GateResult</code>.</li>
+        <li><code class="status">[]</code> Add unique DOM IDs to the gate strip elements for LiveViewTest assertions (<code>has_element?/2</code>, not raw HTML).</li>
+      </ul>
+
+      <h4>2. Broadcast gate updates</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Reuse the existing <code>{:workstreams_updated, ...}</code> broadcast path so a recorded gate outcome pushes to the live panel; no new topic.</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>LiveViewTest against element IDs; assert the strip reflects a persisted <code>GateResult</code> and updates on broadcast.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder_web/live/test_workstreams_panel_test.exs</code> — a phase with a red <code>type</code> stage renders a red type dot; a green phase renders all-green; assertions use <code>has_element?/2</code>.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- ===== PHASE 5 ===== -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 5: End-to-end validation + docs</h3>
+      <p>Prove the whole loop under the harness seam and document how to add a stack.</p>
+
+      <h4>1. End-to-end phase-with-gate run</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add an E2E test: a workstream phase whose <code>:test</code> stage runs a resolved gate, goes red on a seeded lint failure, drives a fix, re-runs green, and advances to <code>:review</code> — under the Fake harness/registry seam (no real CLIs).</li>
+        <li><code class="status">[]</code> Assert a <code>pre_merge</code> mutation gate runs exactly once at <code>close_workstream</code> and records its score.</li>
+      </ul>
+
+      <h4>2. Documentation</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Write <code>ai_docs/quality-gate-plugins.md</code> (how to author a gate for a new stack) and add a router line to <code>conditional_docs.md</code>.</li>
+        <li><code class="status">[]</code> Note the new <code>:quality_gate</code> kind + <code>run_quality_gate</code> tool in <code>AGENTS.md</code>/<code>BUILD_PROMPT.md</code> §10/§13 as appropriate.</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>The full platform green gate must pass — this feature is judged by the same discipline it ships.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix precommit</code> — compile-warnings-as-errors · deps.unlock --unused · format · test, all green.</li>
+        <li><code class="status">[]</code> <code>mix credo --strict &amp;&amp; mix dialyzer</code> — every new public fn has an <code>@spec</code>; zero new dialyzer warnings.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+  </section>
+
+  <!-- ===== GLOBAL VALIDATION ===== -->
+  <section id="validation">
+    <h2>Validation Commands</h2>
+    <p>Execute these to validate the entire plan is complete:</p>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>mix compile --warnings-as-errors</code> — the new modules and the <code>:quality_gate</code> kind compile warning-free.</li>
+      <li><code class="status">[]</code> <code>mix format --check-formatted</code> — formatting clean.</li>
+      <li><code class="status">[]</code> <code>mix credo --strict</code> — every new public function carries an <code>@spec</code>.</li>
+      <li><code class="status">[]</code> <code>mix test</code> — full suite green, including the new gate/descriptor/runner/resolver/panel tests.</li>
+      <li><code class="status">[]</code> <code>mix dialyzer --list-unused-filters</code> — TypeCheck wire boundary is Dialyzer-clean; no stale ignores.</li>
+      <li><code class="status">[]</code> Manual: activate <code>quality-gates-python</code> on a scratch Python project and confirm the orchestrator's <code>:test</code> stage runs <code>ruff → type → pytest</code> in order and loops a fix on a seeded failure.</li>
+    </ul>
+    <div class="loop">🔁 <strong>The plan is not complete until every box is checked and every command passes. If a step is genuinely impossible, mark it <code>[f]</code> and move on if possible.</strong></div>
+  </section>
+
+  <!-- ===== QUESTIONABLES ===== -->
+  <section id="questionables">
+    <h2>Questionables</h2>
+    <figure>
+      <!-- {{QUESTIONABLES_IMAGE: a decision fork — one path "new :quality_gate kind" (clean new extension point), one path "overload :capability" (crossed out); and a Python type-checker sub-fork pyright/pyrefly/ty. Minimal, amber accent, dark.}} -->
+      <figcaption>The load-bearing open decisions: a new kind vs. overloading capability, and the unsettled Python type stage.</figcaption>
+    </figure>
+
+    <details open>
+      <summary>New <code>:quality_gate</code> contribution kind vs. reusing <code>:capability</code>?</summary>
+      <p class="qa-answer"><strong>Chosen: new kind.</strong> The plugin doctrine is "open plugin id, CLOSED kind set; a new kind is a deliberate core edit because it marks a new extension point." A gate is a genuinely new extension point (ordered, strict, cadence-bearing, diagnostic-parsed) — not just a capability default value. Overloading <code>:capability</code> (which is a flat JSON of stack markers/defaults) would blur that contract and make resolution ambiguous. The one-line edit to <code>@kinds</code> is exactly the intended "deliberate core edit."</p>
+    </details>
+    <details>
+      <summary>Which Python type checker is the default gate stage?</summary>
+      <p class="qa-answer"><strong>Chosen: Pyright (or Pyrefly) now; watch <code>ty</code>.</strong> Verified 2026-07: Astral's <code>ty</code> is in <em>beta</em> with a stable release targeted for 2026 and ~53% conformance / no plugins; Meta's Pyrefly hit 1.0 (~58%, auto-migrates mypy/pyright config); Pyright leads correctness (~98% conformance). For spec-driven work where the type stage is the primary hallucination catcher, default to Pyright/Pyrefly and make it swappable via the descriptor's capability token, so a project can adopt the Ruff+uv+<code>ty</code> single-vendor stack once it stabilizes without a core change.</p>
+    </details>
+    <details open>
+      <summary>Should the gate enforce a <em>typed system</em>, optionally, per stack?</summary>
+      <p class="qa-answer"><strong>Yes — a first-class, optional <code>typed_enforcement</code> policy, default <code>:strict</code>.</strong> A type checker <em>passing</em> is not a typed system <em>enforced</em>: plain JS clears <code>tsc</code> trivially, un-annotated Python clears pyright in non-strict mode, Ruby without Sorbet has nothing to check. So the capability <code>typed_enforcement :: :off | :standard | :strict</code> selects a type-stage variant in <code>GateResolver</code>: <code>:strict</code> (default) runs the strict checker (<code>pyright --strict</code> / <code>mypy --strict</code> / strict-<code>tsconfig</code> / Sorbet <code>typed: strict</code>) <em>and</em> an annotation-coverage sub-stage — the generalization of this platform's own hard Credo "every public fn has an <code>@spec</code>" gate ([[typed-coding-standard]]). <code>:standard</code> runs the plain checker; <code>:off</code> skips it for fast/dynamic prototypes. Default <code>:strict</code> because in spec-driven work the types <em>are</em> the machine-checkable spec, and it makes repo_builder impose on the repos it builds exactly the discipline it imposes on itself. No new contribution kind — one capability field + a resolver variant selector, reusing the <code>Stage.strict</code> flag.</p>
+    </details>
+    <details>
+      <summary>Cadence: should mutation/property gates run per phase?</summary>
+      <p class="qa-answer"><strong>Chosen: <code>pre_merge</code> (workstream close), not per-phase.</strong> Mutation testing is slow (it re-runs the suite per mutant). Running it per edit would poison the fast feedback loop. The descriptor's <code>cadence</code> field lets format/lint/type/test run <code>per_phase</code> (fast, every phase) while mutation/property depth run once at <code>close_workstream</code> — the "nightly/pre-merge" tier. Verified against 2026 mutation-testing guidance (Stryker/cargo-mutants CI threshold patterns).</p>
+    </details>
+    <details>
+      <summary>Where does the gate actually execute — orchestrator BEAM or worker sandbox?</summary>
+      <p class="qa-answer"><strong>Chosen: worker sandbox via the tool handler.</strong> The orchestrator BEAM must not shell out into target-repo toolchains (wrong cwd, no isolation, blocks the scheduler). <code>GateRunner</code> produces the ordered, token-filled command <em>plan</em>; the <code>run_quality_gate</code> tool has the phase's worker execute it in its own working directory and returns the structured result. This reuses the existing worker-execution + session-runtime seam.</p>
+    </details>
+    <details>
+      <summary>Diagnostic parsing: generic <code>file:line</code> or per-stack parsers?</summary>
+      <p class="qa-answer"><strong>Chosen: generic <code>file:line</code> now, per-stack later.</strong> A <code>diagnostic: :file_line | :summary | :none</code> flag per stage covers the common case (nearly all these tools emit <code>path:line[:col]</code>). Structured JSON parsers (e.g. <code>biome ci --reporter=json</code>, <code>cargo clippy --message-format=json</code>) are a follow-on refinement per descriptor, not a v1 blocker.</p>
+    </details>
+    <details>
+      <summary>Does this duplicate the platform's own CI gate?</summary>
+      <p class="qa-answer"><strong>No — it generalizes it.</strong> The Elixir builtin descriptor <em>is</em> the platform's own five-command gate, made data-driven. repo_builder's own CI stays as-is; the gate subsystem is what the orchestrator applies to the repos it <em>builds</em>. The Elixir descriptor doubles as the reference implementation and a self-test.</p>
+    </details>
+  </section>
+
+  <!-- ===== NOTES ===== -->
+  <section id="notes">
+    <h2>Notes</h2>
+
+    <h3>The five transferable properties (why the Elixir gate works as an agent loop)</h3>
+    <p>These are the design invariants every stack descriptor must preserve — the reason the gate is a feedback loop, not just a command list:</p>
+    <ul>
+      <li><strong>One command, one exit code.</strong> The gate is the worker's "am I done?" oracle. Each stack needs a single wrapper.</li>
+      <li><strong>No-warnings tier.</strong> <code>--warnings-as-errors</code> everywhere — the single most important trait for LLM-written code. A permitted warning is a warning that ships. Binary red/green.</li>
+      <li><strong>Static types as the cheapest verifier.</strong> Type stages catch hallucinated APIs without executing anything. In spec-driven work, type signatures <em>are</em> machine-checkable spec fragments — maximize where the spec is expressed as types (strict <code>tsconfig</code>, Sorbet <code>srb</code>, Dialyzer specs).</li>
+      <li><strong>Deterministic, parseable output.</strong> <code>file:line:rule</code> diagnostics let the worker locate and self-correct. A flaky red teaches the model nothing.</li>
+      <li><strong>Fast.</strong> The loop runs dozens of times per task — the underrated reason Rust-based tools (Biome, Ruff, ty) matter for agentic dev: sub-second checks change what the worker can afford per edit.</li>
+    </ul>
+
+    <h3>Per-stack gate matrix (descriptor targets — verified mid-2026)</h3>
+    <table>
+      <thead>
+        <tr><th>Stack</th><th>Format (check)</th><th>Lint (strict)</th><th>Type</th><th>Test</th><th>Mutation <span class="pill a">pre_merge</span></th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Elixir</strong> (reference)</td><td><code>mix format --check-formatted</code></td><td><code>mix credo --strict</code></td><td><code>mix dialyzer</code></td><td><code>mix test --warnings-as-errors</code></td><td>muzak</td></tr>
+        <tr><td><strong>Rust</strong></td><td><code>cargo fmt --check</code></td><td><code>cargo clippy -- -D warnings</code></td><td><code>cargo check</code> (compiler is the gate; <code>RUSTFLAGS="-D warnings"</code>)</td><td><code>cargo nextest run</code></td><td>cargo-mutants</td></tr>
+        <tr><td><strong>Go</strong></td><td><code>gofmt -l</code> (any file listed = fail)</td><td><code>golangci-lint run</code> (v2 aggregates vet+staticcheck)</td><td><code>go build ./...</code> + staticcheck</td><td><code>go test -race -shuffle=on -count=1 ./...</code></td><td>go-mutesting</td></tr>
+        <tr><td><strong>Python</strong></td><td><code>ruff format --check</code></td><td><code>ruff check</code></td><td>pyright / pyrefly (ty when stable)</td><td><code>pytest --cov --cov-fail-under=N</code></td><td>mutmut</td></tr>
+        <tr><td><strong>TS / Node</strong></td><td><code>biome format --check</code></td><td><code>biome lint</code> (v2 type-aware, ~75% floating-promise vs tsc-eslint)</td><td><code>tsc --noEmit</code> (the real type gate) + strict tsconfig</td><td><code>vitest run --coverage</code></td><td>Stryker</td></tr>
+        <tr><td><strong>Ruby</strong></td><td colspan="2"><code>rubocop</code> / <code>standardrb</code> (style + lint in one)</td><td><code>srb tc</code> (Sorbet) or Steep+RBS</td><td><code>rspec</code> + SimpleCov <code>--fail-under</code></td><td>mutant</td></tr>
+      </tbody>
+    </table>
+    <p class="qa-answer" style="font-size:.86rem;">Nuances that don't fit the grid: <strong>Rust</strong> is the closest analog to the Elixir gate (the compiler is a stronger Dialyzer; add <code>cargo-deny</code> for licenses/advisories). <strong>Go</strong>'s differentiator is <code>-race</code> — catches a class of concurrency bug no linter will. <strong>TS</strong>'s real gate is <code>tsc --noEmit</code>, not the linter; Biome v2 replaces ESLint+Prettier as one Rust binary but has no plugin ecosystem and skips <code>.vue</code>/<code>.svelte</code> templates — keep ESLint if you lean on framework/a11y plugins.</p>
+
+    <h3>Optional typed-system enforcement (<code>typed_enforcement</code>, default <code>:strict</code>)</h3>
+    <p>Enforcing typedness is distinct from running a type checker — the three levers, generalized from this platform's own typed-Elixir standard ([[typed-coding-standard]]: TypeCheck wire boundaries + Dialyzer + a hard Credo <code>@spec</code> gate):</p>
+    <ol>
+      <li><strong>Strictness config</strong> — the <code>:strict</code> type-stage command per stack.</li>
+      <li><strong>Annotation coverage</strong> — a sub-stage that fails when public surface is untyped (the generalized <code>@spec</code> gate).</li>
+      <li><strong>Typed-language preference</strong> — prefer the typed variant (TS over JS, annotated Python, Sorbet-sigil Ruby); surfaced as a lint/skill expectation.</li>
+    </ol>
+    <table>
+      <thead><tr><th>Stack</th><th><code>:strict</code> type command</th><th>Annotation-coverage sub-stage</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Elixir</strong></td><td><code>mix dialyzer</code></td><td><code>mix credo --strict</code> (@spec gate — the reference)</td></tr>
+        <tr><td><strong>TypeScript</strong></td><td><code>tsc --noEmit</code> + strict <code>tsconfig</code> (<code>strict</code>, <code>noUncheckedIndexedAccess</code>, <code>exactOptionalPropertyTypes</code>)</td><td>ban <code>.js</code>/<code>any</code> via <code>biome</code>/eslint rule</td></tr>
+        <tr><td><strong>Python</strong></td><td><code>pyright --strict</code> or <code>mypy --strict</code></td><td><code>--disallow-untyped-defs</code> (defs annotated)</td></tr>
+        <tr><td><strong>Ruby</strong></td><td><code>srb tc</code> with <code># typed: strict</code></td><td>sigil-level check (min <code># typed: true</code>)</td></tr>
+        <tr><td><strong>Rust</strong></td><td><code>cargo check</code> (compiler is the gate)</td><td><code>clippy</code> pedantic; ban <code>unwrap</code> in libs</td></tr>
+        <tr><td><strong>Go</strong></td><td><code>go build</code> + staticcheck</td><td>lint: ban bare <code>interface{}</code>/<code>any</code></td></tr>
+      </tbody>
+    </table>
+    <p class="qa-answer" style="font-size:.86rem;"><code>:strict</code> is the default; <code>:standard</code> drops the coverage sub-stage and strict flags; <code>:off</code> skips the type stage entirely (quick prototypes / genuinely dynamic repos). A <code>:strict</code> descriptor with no strict command degrades to <code>:standard</code> rather than emitting a broken command.</p>
+
+    <h3>Mutation + property testing: the layer most gates miss</h3>
+    <p>LLMs excel at tests that pass and hit coverage while asserting nothing — the vacuous-test failure mode a line-coverage gate actively rewards. <strong>Mutation testing</strong> is the antidote: perturb the code, require some test to fail; if none does, the test was theater. It's the single highest-leverage addition to a spec-driven gate — run it at <code>pre_merge</code>/close, not per edit. <strong>Property-based tests</strong> (StreamData, Hypothesis, fast-check, proptest) are the other spec-encoding lever: assert invariants from the spec directly, which is far harder for a model to trivially satisfy than example-based tests.</p>
+
+    <h3>Dependencies / follow-ons</h3>
+    <ul>
+      <li>No new hex deps for the platform (descriptors are data). Target-repo tools are the <em>target</em> project's concern, surfaced via capabilities.</li>
+      <li><code>:mcp_tools</code> kind stays reserved; this plan touches only <code>:quality_gate</code>, <code>:skill</code>, <code>:context_fragment</code>.</li>
+      <li>Follow-on: structured JSON diagnostic parsers per stack; a <code>cargo-deny</code>-style supply-chain stage kind; wiring gate results into the per-project cost/quality history.</li>
+    </ul>
+
+    <figure>
+      <!-- {{NOTES_IMAGE: a "coverage vs mutation" split panel — left: a green 100% coverage bar with a hollow test underneath; right: a mutant altering code and a test finally going red catching it. Amber-to-green, minimal, dark.}} -->
+      <figcaption>Why mutation testing is the highest-leverage gate for agent-written code.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== AMENDMENTS ===== -->
+  <section id="amendments">
+    <h2>Amendments</h2>
+    <details open>
+      <summary>2026-07-02 — Added optional typed-system enforcement (default <code>:strict</code>)</summary>
+      <p>Folded in a first-class <code>typed_enforcement :: :off | :standard | :strict</code> capability (default <code>:strict</code>) after review found the original plan covered typedness only implicitly (via the <code>Stage.strict</code> flag + skip-on-empty-token + a "types as spec fragments" note). Changes: Phase 0 adds the capability field + <code>{{TYPECHECK_STRICT_COMMAND}}</code>/<code>{{TYPE_COVERAGE_COMMAND}}</code> tokens and two-form type stages in the builtin descriptors; Phase 1 <code>GateResolver</code> selects the type-stage variant by <code>typed_enforcement</code> (with degrade-to-standard on empty strict token) + tests; new Questionable + a Notes subsection with the per-stack strict/coverage matrix. Generalizes the platform's own typed-Elixir standard ([[typed-coding-standard]]) to the repos it builds. No new contribution kind.</p>
+    </details>
+    <details>
+      <summary>2026-07-02 — Plan created</summary>
+      <p>Initial authoring. Firecrawl-verified the fast-moving tool facts (Biome v2 type-aware linting shipped with ~75% floating-promise detection; Astral <code>ty</code> in beta, stable targeted 2026; Pyrefly 1.0; mutation-testing CI-threshold guidance). Grounded against current code: <code>Plugins.Contribution</code> closed-kind set, <code>Commands.Resolver</code> capability tokens, <code>WorkstreamPhase</code>/<code>Workstreams</code> <code>:test</code>-stage machine, <code>Activation.contributions/2</code>. Image slots left as commented placeholders (the planf3 image-generation script is not present in this repo).</p>
+    </details>
+  </section>
+
+</main>
+</body>
+</html>

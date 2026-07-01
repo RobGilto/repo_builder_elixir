@@ -124,6 +124,18 @@ defmodule RepoBuilder.Orchestrator.ToolsLedgerTest do
                Tools.call("inspect_repo", orch.id, %{"op" => "read_file", "path" => ".git/config"})
     end
 
+    test "surfaces detects the working dir's front-end surface(s)", %{orch: orch, dir: dir} do
+      # A bare git repo (README only) has no front end.
+      assert {:ok, %{"op" => "surfaces", "surfaces" => []}} =
+               Tools.call("inspect_repo", orch.id, %{"op" => "surfaces"})
+
+      # Add a web signal and it is detected.
+      File.write!(Path.join(dir, "package.json"), ~s({"devDependencies": {"vite": "^5"}}))
+
+      assert {:ok, %{"op" => "surfaces", "surfaces" => ["web"]}} =
+               Tools.call("inspect_repo", orch.id, %{"op" => "surfaces"})
+    end
+
     test "inspect_repo errors when the orchestrator has no working dir" do
       {:ok, orch} =
         Orchestrators.create(%{
