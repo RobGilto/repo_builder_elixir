@@ -1,8 +1,10 @@
 defmodule RepoBuilderWeb.WorkstreamsPanelTest do
   @moduledoc """
-  Spec-driven phased orchestration (orchestration-adw-loop): the console Workstreams panel —
-  one row per workstream with its phases and four stage chips renders at mount, and updates
-  live when a `record_stage` change is broadcast over PubSub (`workstreams_updated`).
+  Workstreams are now shown as a Kanban swimlane board in the ADWS view
+  (adws-phase-swimlane) rather than the bottom drawer panel. The old
+  `#workstreams-panel` no longer exists; `#workstreams-swimlane` is the live
+  render target. This file verifies the basic mount and live-update behaviour
+  after the migration from the drawer panel.
   """
   use RepoBuilderWeb.ConnCase, async: false
 
@@ -30,33 +32,51 @@ defmodule RepoBuilderWeb.WorkstreamsPanelTest do
     ws
   end
 
-  test "renders one row per workstream with phase + stage chips", %{conn: conn} do
+  test "workstreams swimlane renders in ADWS view with phase cards", %{conn: conn} do
     orch = default_orchestrator()
-    a = seed(orch, "Stream Alpha")
-    b = seed(orch, "Stream Beta")
-
-    {:ok, view, html} = live(conn, "/")
-
-    assert html =~ "Workstreams"
-    assert html =~ "Stream Alpha"
-    assert html =~ "Stream Beta"
-    assert has_element?(view, "#workstream-#{a.id}")
-    assert has_element?(view, "#workstream-#{b.id}")
-
-    # Each phase renders its four stage chips; phase 1 spec is the current stage.
-    assert has_element?(view, "#workstream-#{a.id}-phase-1-spec")
-    assert has_element?(view, "#workstream-#{a.id}-phase-1-review")
-    assert has_element?(view, ~s(#workstream-#{a.id}-phase-1-spec[data-stage-status="current"]))
-  end
-
-  test "updates the stage chip live on a broadcast record_stage change", %{conn: conn} do
-    orch = default_orchestrator()
-    ws = seed(orch, "Live Stream")
+    ws = seed(orch, "Stream Alpha")
+    first_phase = List.first(ws.phases)
 
     {:ok, view, _html} = live(conn, "/")
-    assert has_element?(view, ~s(#workstream-#{ws.id}-phase-1-spec[data-stage-status="current"]))
 
-    # Advance the spec stage, then broadcast the refreshed records (as the tools layer does).
+    # Toggle to ADWS view.
+    view |> element("#adw-controls") |> render()
+    render_click(view, "toggle_view")
+
+    # The swimlane board renders when workstreams exist.
+    assert has_element?(view, "#workstreams-swimlane")
+
+    # The four column IDs are present.
+    assert has_element?(view, "#swimlane-spec")
+    assert has_element?(view, "#swimlane-implement")
+    assert has_element?(view, "#swimlane-test")
+    assert has_element?(view, "#swimlane-review")
+
+    # Phase 1 is in :spec column (its initial current_stage).
+    assert has_element?(view, "#swimlane-spec #phase-card-#{first_phase.id}")
+  end
+
+  test "no workstreams-panel in drawer (old panel removed)", %{conn: conn} do
+    orch = default_orchestrator()
+    _ws = seed(orch, "Stream Beta")
+
+    {:ok, view, _html} = live(conn, "/")
+
+    refute has_element?(view, "#workstreams-panel")
+  end
+
+  test "updates the swimlane live on a broadcast record_stage change", %{conn: conn} do
+    orch = default_orchestrator()
+    ws = seed(orch, "Live Stream")
+    first_phase = List.first(ws.phases)
+
+    {:ok, view, _html} = live(conn, "/")
+    render_click(view, "toggle_view")
+
+    # Phase 1 starts in the spec column.
+    assert has_element?(view, "#swimlane-spec #phase-card-#{first_phase.id}")
+
+    # Advance spec → implement, then broadcast.
     {:ok, _} =
       Workstreams.record_stage(orch.id, ws.id, %{
         stage: :spec,
@@ -66,18 +86,14 @@ defmodule RepoBuilderWeb.WorkstreamsPanelTest do
 
     :ok = Dashboard.broadcast_workstreams(orch.id, Workstreams.list_records(orch.id))
 
-    # The spec chip is now passed and the current pointer moved to implement.
-    assert has_element?(view, ~s(#workstream-#{ws.id}-phase-1-spec[data-stage-status="passed"]))
-
-    assert has_element?(
-             view,
-             ~s(#workstream-#{ws.id}-phase-1-implement[data-stage-status="current"])
-           )
+    # Phase card now appears in the implement column.
+    assert has_element?(view, "#swimlane-implement #phase-card-#{first_phase.id}")
   end
 
   test "renders nothing when the orchestrator has no workstreams (back-compat)", %{conn: conn} do
     _orch = default_orchestrator()
     {:ok, view, _html} = live(conn, "/")
-    refute has_element?(view, "#workstreams-panel")
+    render_click(view, "toggle_view")
+    refute has_element?(view, "#workstreams-swimlane")
   end
 end

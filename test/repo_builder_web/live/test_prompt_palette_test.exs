@@ -77,9 +77,10 @@ defmodule RepoBuilderWeb.TestPromptPaletteTest do
 
     # The broadcast command is :working_dir, so it lives under the PROJECT tab (the BASE tab
     # is active by default and the inactive tab is not in the DOM). Switch tabs to see it.
-    refute render(view) =~ "/brandnewcmd"
+    # Scope to the palette row to avoid matching the data-autocomplete attribute.
+    refute element(view, "#palette-slash-base") |> render() =~ "/brandnewcmd"
     view |> element("#palette-tab-project") |> render_click()
-    assert render(view) =~ "/brandnewcmd"
+    assert element(view, "#palette-slash-project") |> render() =~ "/brandnewcmd"
   end
 
   test "base and project source tabs separate artifacts by provenance", %{conn: conn} do
@@ -114,12 +115,14 @@ defmodule RepoBuilderWeb.TestPromptPaletteTest do
     )
 
     # BASE tab (default): the :app command shows, the :working_dir one does not.
-    base = render(view)
+    # Scope to the palette row to avoid matching the data-autocomplete attribute.
+    base = element(view, "#palette-slash-base") |> render()
     assert base =~ "/basecmd"
     refute base =~ "/projcmd"
 
     # PROJECT tab: the reverse.
-    project = view |> element("#palette-tab-project") |> render_click()
+    view |> element("#palette-tab-project") |> render_click()
+    project = element(view, "#palette-slash-project") |> render()
     assert project =~ "/projcmd"
     refute project =~ "/basecmd"
   end

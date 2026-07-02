@@ -2230,6 +2230,48 @@ defmodule RepoBuilderWeb.ConsoleLive do
     end
   end
 
+  @impl true
+  def handle_event("clear_escalation", _params, socket) do
+    case socket.assigns.orchestrator_id do
+      nil ->
+        {:noreply, socket}
+
+      orchestrator_id ->
+        _ = Orchestrators.clear_holding_reason(orchestrator_id)
+        {:noreply, assign(socket, :orchestrator_holding_reason, nil)}
+    end
+  end
+
+  # Operator quick-action from the workstreams swimlane board (adws-phase-swimlane): record the
+  # outcome of a phase's current stage and advance the state machine. Broadcasts the refreshed
+  # records so any open console re-renders immediately.
+  @impl true
+  def handle_event(
+        "record_stage",
+        %{"ref" => ref, "stage" => stage, "outcome" => outcome},
+        socket
+      ) do
+    orchestrator_id = socket.assigns.orchestrator_id
+
+    attrs = %{
+      stage: String.to_existing_atom(stage),
+      outcome: String.to_existing_atom(outcome)
+    }
+
+    socket =
+      case Workstreams.record_stage(orchestrator_id, ref, attrs) do
+        {:ok, _} ->
+          records = Workstreams.list_records(orchestrator_id)
+          :ok = Dashboard.broadcast_workstreams(orchestrator_id, records)
+          assign(socket, :workstreams, records)
+
+        {:error, _reason} ->
+          socket
+      end
+
+    {:noreply, socket}
+  end
+
   defp launch_adw_builder(steps, name, harness, socket) do
     step_list =
       steps
@@ -3721,6 +3763,12 @@ defmodule RepoBuilderWeb.ConsoleLive do
                   Start an ADW from the orchestrator chat.
                 </div>
               </div>
+
+              <.workstreams_swimlane
+                orchestrator_id={@orchestrator_id}
+                workstreams={@workstreams}
+                context_tokens={@orchestrator_context}
+              />
             </div>
 
             <.event_detail_panel event={@selected_event} />
@@ -3809,11 +3857,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
               style="max-height: 45vh"
             >
               <.autonomy_panel ledger={@ledger} holding_reason={@orchestrator_holding_reason} />
-
-              <.workstreams_panel
-                workstreams={@workstreams}
-                context_tokens={@orchestrator_context}
-              />
             </div>
           </div>
 

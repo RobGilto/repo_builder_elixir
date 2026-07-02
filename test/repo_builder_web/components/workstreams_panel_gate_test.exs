@@ -1,9 +1,10 @@
 defmodule RepoBuilderWeb.Components.WorkstreamsPanelGateTest do
   @moduledoc """
-  The Workstreams panel renders a per-phase QUALITY-GATE strip (quality-gate-plugins,
-  Phase 4): five dots (format · lint · type · test · mutation) sourced from the recorded
-  GateResult on the phase's `test` stage — a red type stage renders a red type dot, a green
-  gate renders all-green. Assertions target the stable DOM IDs.
+  The workstreams swimlane board (adws-phase-swimlane) replaced the old drawer panel.
+  Quality-gate strips are no longer rendered in the console workstreams view — the swimlane
+  focuses on phase placement (Spec→Implement→Test→Review columns) and quick-action buttons.
+  These tests verify the swimlane renders correctly for phases with gate data in their stages
+  map, without surfacing the gate dots.
   """
   use ExUnit.Case, async: true
 
@@ -19,13 +20,14 @@ defmodule RepoBuilderWeb.Components.WorkstreamsPanelGateTest do
 
   defp phase(stages) do
     %{
+      id: "ph-1",
       position: 1,
       title: "Phase one",
       description: nil,
       definition_of_done: nil,
       spec_path: nil,
       status: :running,
-      current_stage: :test,
+      current_stage: :review,
       kind: :backend,
       surface: nil,
       iteration: 0,
@@ -48,32 +50,14 @@ defmodule RepoBuilderWeb.Components.WorkstreamsPanelGateTest do
   end
 
   defp render_ws(ws) do
-    render_component(&ConsoleComponents.workstreams_panel/1, workstreams: [ws], context_tokens: 0)
+    render_component(&ConsoleComponents.workstreams_swimlane/1,
+      orchestrator_id: "orch-1",
+      workstreams: [ws],
+      context_tokens: 0
+    )
   end
 
-  test "renders a red type dot for a phase with a red type stage" do
-    green_stages =
-      gate(
-        [
-          gate_stage("format", "passed"),
-          gate_stage("lint", "passed"),
-          gate_stage("type", "failed"),
-          gate_stage("test", "skipped")
-        ],
-        false
-      )
-
-    ws = workstream([phase(%{"test" => %{"status" => "failed", "gate" => green_stages}})])
-    html = render_ws(ws)
-
-    assert html =~ ~s(id="workstream-ws-1-phase-1-gate")
-    assert html =~ ~s(data-gate-green="false")
-    # The type dot is red (failed); format/lint green.
-    assert html =~ ~r/id="workstream-ws-1-phase-1-gate-type"[^>]*data-gate-status="failed"/
-    assert html =~ ~r/gate-format"[^>]*data-gate-status="passed"/
-  end
-
-  test "renders an all-green gate strip" do
+  test "phase card renders in review column regardless of gate data" do
     all_green =
       gate(
         [
@@ -88,17 +72,27 @@ defmodule RepoBuilderWeb.Components.WorkstreamsPanelGateTest do
     ws = workstream([phase(%{"test" => %{"status" => "passed", "gate" => all_green}})])
     html = render_ws(ws)
 
-    assert html =~ ~s(data-gate-green="true")
-    assert html =~ ~r/gate-type"[^>]*data-gate-status="passed"/
-    assert html =~ ~r/gate-test"[^>]*data-gate-status="passed"/
-    # `type` folds in `type-coverage`.
-    assert html =~ ~s(data-gate-stage="type")
+    assert html =~ ~s(id="phase-card-ph-1")
+    assert html =~ ~s(id="swimlane-review")
   end
 
-  test "omits the gate strip when the phase has no recorded gate" do
-    ws = workstream([phase(%{})])
+  test "gate strip is not rendered in the swimlane" do
+    green_stages =
+      gate(
+        [
+          gate_stage("format", "passed"),
+          gate_stage("lint", "passed"),
+          gate_stage("type", "failed"),
+          gate_stage("test", "skipped")
+        ],
+        false
+      )
+
+    ws = workstream([phase(%{"test" => %{"status" => "failed", "gate" => green_stages}})])
     html = render_ws(ws)
 
+    # Gate strip DOM IDs are no longer emitted.
     refute html =~ ~s(id="workstream-ws-1-phase-1-gate")
+    refute html =~ ~s(data-gate-green)
   end
 end

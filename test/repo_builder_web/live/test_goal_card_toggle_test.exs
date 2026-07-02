@@ -1,9 +1,10 @@
 defmodule RepoBuilderWeb.GoalCardToggleTest do
   @moduledoc """
-  The goal-card collapse toggle: the bottom orchestrator drawer (autonomy panel + Workstreams
-  panel + queued messages) collapses and expands via `#toggle-goal-card`, and while collapsed a
-  compact `#goal-card-summary` strip surfaces the current focus. Session-local state, mirroring the
-  left-rail collapse toggle.
+  The goal-card collapse toggle: the bottom orchestrator drawer (autonomy panel + queued
+  messages) collapses and expands via `#toggle-goal-card`, and while collapsed a compact
+  `#goal-card-summary` strip surfaces the current focus. Workstreams are now shown in the ADWS
+  view swimlane (adws-phase-swimlane), not the drawer — but an open workstream still triggers the
+  goal-card toggle to appear (via `goal_card_present?/1`).
   """
   use RepoBuilderWeb.ConnCase, async: false
 
@@ -22,7 +23,7 @@ defmodule RepoBuilderWeb.GoalCardToggleTest do
     {:ok, _} = Ledgers.upsert_goal(orch.id, %{goal: "ship it", definition_of_done: "green"})
     {:ok, _} = Ledgers.set_focus(orch.id, "land the collapse toggle")
 
-    {:ok, ws} =
+    {:ok, _ws} =
       Workstreams.create_workstream(orch.id, %{
         title: "Stream Alpha",
         goal: "g",
@@ -35,7 +36,6 @@ defmodule RepoBuilderWeb.GoalCardToggleTest do
     assert has_element?(view, "#toggle-goal-card")
     assert has_element?(view, "#autonomy-panel")
     assert has_element?(view, "#orchestrator-focus")
-    assert has_element?(view, "#workstream-#{ws.id}")
     assert render(view) =~ "▼"
     refute has_element?(view, "#goal-card-summary")
 
@@ -43,7 +43,6 @@ defmodule RepoBuilderWeb.GoalCardToggleTest do
     render_click(element(view, "#toggle-goal-card"))
 
     refute has_element?(view, "#autonomy-panel")
-    refute has_element?(view, "#workstream-#{ws.id}")
     assert has_element?(view, "#goal-card-summary")
     assert render(view) =~ "▲"
     assert render(view) =~ "land the collapse toggle"
@@ -52,8 +51,23 @@ defmodule RepoBuilderWeb.GoalCardToggleTest do
     render_click(element(view, "#toggle-goal-card"))
 
     assert has_element?(view, "#autonomy-panel")
-    assert has_element?(view, "#workstreams-panel")
     refute has_element?(view, "#goal-card-summary")
+  end
+
+  test "goal card toggle appears when an open workstream exists", %{conn: conn} do
+    orch = default_orchestrator()
+
+    {:ok, _ws} =
+      Workstreams.create_workstream(orch.id, %{
+        title: "Stream Beta",
+        goal: "g",
+        definition_of_done: "d"
+      })
+
+    {:ok, view, _html} = live(conn, "/")
+
+    # A workstream alone (no ledger) still triggers the goal-card toggle.
+    assert has_element?(view, "#toggle-goal-card")
   end
 
   test "no toggle handle renders for an empty orchestrator", %{conn: conn} do

@@ -62,8 +62,9 @@ const ClipboardCopy = {
   },
 }
 
-const CommandPaste = {
+const CommandAutocomplete = {
   mounted() {
+    // --- existing CommandPaste: paste-to-upload ---
     this._onPaste = (e) => {
       const items = Array.from(e.clipboardData?.items ?? [])
       const imageItems = items.filter(item => item.kind === "file" && item.type.startsWith("image/"))
@@ -90,9 +91,7 @@ const CommandPaste = {
     }
     this.el.addEventListener("paste", this._onPaste)
 
-    // File-driven prompt palette: a chip dispatches "rb:insert-token" at this
-    // textarea; append the token at the caret with space padding and refocus —
-    // no server round-trip. Folded into CommandPaste so the element keeps one hook.
+    // --- existing CommandPaste: rb:insert-token (palette chip click) ---
     this._onInsertToken = (e) => {
       const token = e.detail?.token
       if (!token) return
@@ -113,11 +112,169 @@ const CommandPaste = {
       el.focus()
     }
     this.el.addEventListener("rb:insert-token", this._onInsertToken)
+
+    // --- new: autocomplete ---
+    this._items = []           // parsed from data-autocomplete
+    this._activeIdx = -1
+    this._dropEl = document.getElementById("autocomplete-dropdown")
+
+    this._readItems()          // parse data attr on mount
+
+    this._onInput = () => this._handleInput()
+    this._onKeydown = (e) => this._handleKeydown(e)
+    this.el.addEventListener("input", this._onInput)
+    this.el.addEventListener("keydown", this._onKeydown)
+    if (this._dropEl) {
+      this._dropEl.addEventListener("mousedown", (e) => this._handleDropClick(e))
+    }
   },
+
+  updated() {
+    // Re-read items when LiveView re-renders the textarea (new defs loaded).
+    this._readItems()
+  },
+
   destroyed() {
     this.el.removeEventListener("paste", this._onPaste)
     this.el.removeEventListener("rb:insert-token", this._onInsertToken)
-  }
+    this.el.removeEventListener("input", this._onInput)
+    this.el.removeEventListener("keydown", this._onKeydown)
+  },
+
+  // Parse the data-autocomplete JSON attr into this._items.
+  _readItems() {
+    try {
+      this._items = JSON.parse(this.el.dataset.autocomplete || "[]")
+    } catch (_) {
+      this._items = []
+    }
+  },
+
+  // Detect the active trigger+query at the caret.
+  // Returns {trigger, query, triggerStart} or null.
+  _detectTrigger() {
+    const el = this.el
+    const caret = el.selectionStart ?? el.value.length
+    const before = el.value.slice(0, caret)
+    // Walk backwards to find trigger char with no intervening whitespace.
+    const match = before.match(/([\/\@\!])([^\s\/\@\!]*)$/)
+    if (!match) return null
+    return {
+      trigger: match[1],
+      query: match[2],
+      triggerStart: caret - match[0].length
+    }
+  },
+
+  _handleInput() {
+    const det = this._detectTrigger()
+    if (!det) { this._hide(); return }
+    const {trigger, query} = det
+    const matches = this._items
+      .filter(item => item.trigger === trigger)
+      .filter(item => item.label.toLowerCase().startsWith(query.toLowerCase()))
+      .slice(0, 10)
+    if (matches.length === 0) { this._hide(); return }
+    this._activeIdx = 0
+    this._render(matches, query)
+    this._show()
+  },
+
+  _handleKeydown(e) {
+    if (!this._dropEl || this._dropEl.style.display === "none") return
+    const items = this._dropEl.querySelectorAll("[data-idx]")
+    if (e.key === "ArrowDown") {
+      e.preventDefault()
+      this._activeIdx = Math.min(this._activeIdx + 1, items.length - 1)
+      this._updateActive(items)
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault()
+      this._activeIdx = Math.max(this._activeIdx - 1, 0)
+      this._updateActive(items)
+    } else if (e.key === "Enter" && this._activeIdx >= 0) {
+      e.preventDefault()
+      const active = items[this._activeIdx]
+      if (active) this._select(active.dataset.token)
+    } else if (e.key === "Escape") {
+      this._hide()
+    }
+  },
+
+  _handleDropClick(e) {
+    const item = e.target.closest("[data-idx]")
+    if (item) {
+      e.preventDefault() // prevent textarea blur
+      this._select(item.dataset.token)
+    }
+  },
+
+  _select(token) {
+    const det = this._detectTrigger()
+    if (!det) return
+    const el = this.el
+    const caret = el.selectionStart ?? el.value.length
+    const before = el.value.slice(0, det.triggerStart)
+    const after = el.value.slice(caret)
+    const lead = before.length > 0 && !/\s$/.test(before) ? " " : ""
+    const trail = after.length > 0 && !/^\s/.test(after) ? " " : ""
+    el.value = before + lead + token + trail + after
+    const pos = det.triggerStart + lead.length + token.length + trail.length
+    el.setSelectionRange(pos, pos)
+    el.dispatchEvent(new Event("input", { bubbles: true }))
+    el.focus()
+    this._hide()
+  },
+
+  // Render matched items into the dropdown div with cyan prefix highlighting.
+  _render(matches, query) {
+    if (!this._dropEl) return
+    this._dropEl.innerHTML = matches.map((item, idx) => {
+      const labelLo = item.label.toLowerCase()
+      const qLo = query.toLowerCase()
+      const matchLen = qLo.length
+      const prefix = item.label.slice(0, matchLen)   // typed portion
+      const rest = item.label.slice(matchLen)
+      const triggerHtml = item.trigger === "/" ? "/" : item.trigger === "@" ? "@" : "!"
+      const active = idx === this._activeIdx ? "background: var(--cns-surface-1, #222);" : ""
+      return `<div
+        data-idx="${idx}"
+        data-token="${escapeHtml(item.token)}"
+        class="cns-autocomplete__item"
+        role="option"
+        style="padding:4px 8px;cursor:pointer;${active}display:flex;flex-direction:column;gap:1px"
+        title="${escapeHtml(item.description || item.token)}"
+      >
+        <span style="font-size:0.7rem;color:var(--cns-text)">
+          <span style="color:var(--cns-cyan)">${escapeHtml(triggerHtml + prefix)}</span>${escapeHtml(rest)}
+        </span>
+        ${item.description ? `<span style="font-size:0.6rem;color:var(--cns-text-2)">${escapeHtml(item.description)}</span>` : ""}
+      </div>`
+    }).join("")
+  },
+
+  _updateActive(items) {
+    items.forEach((el, i) => {
+      el.style.background = i === this._activeIdx ? "var(--cns-surface-1, #222)" : ""
+    })
+  },
+
+  _show() {
+    if (this._dropEl) this._dropEl.style.display = "block"
+  },
+
+  _hide() {
+    if (this._dropEl) { this._dropEl.style.display = "none"; this._activeIdx = -1 }
+  },
+}
+
+// Safe HTML escaper used by the dropdown renderer.
+function escapeHtml(str) {
+  return String(str ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
 }
 
 // Spreadsheet-style click-and-drag range selection of log-row checkboxes
@@ -486,7 +643,7 @@ const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks, AutoScroll, ClipboardCopy, CommandPaste, DragSelect, LogCopy, LogDragSelect},
+  hooks: {...colocatedHooks, AutoScroll, ClipboardCopy, CommandAutocomplete, DragSelect, LogCopy, LogDragSelect},
 })
 
 // Show progress bar on live navigation and form submits

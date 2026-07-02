@@ -968,7 +968,11 @@ defmodule RepoBuilder.Session.Server do
             holding_reason: holding_reason(event),
             # Workstream-tagged return routing (orchestration-adw-loop): the workstream this
             # worker was advancing (nil when untagged), so the Queue resumes the right scratchpad.
-            workstream_id: worker_workstream_id(agent_id)
+            workstream_id: worker_workstream_id(agent_id),
+            # Usage-limit visibility (issue usage-limit): the terminal error's reason/message,
+            # so the Queue's auto-resume prompt can name the cause instead of a generic failure.
+            error_reason: worker_error_reason(event),
+            error_message: worker_error_message(event)
           })
 
         _ ->
@@ -1088,7 +1092,21 @@ defmodule RepoBuilder.Session.Server do
   # the handover signal would ride in. An Error terminal carries no handover signal → nil.
   @spec terminal_text(Event.t()) :: String.t() | nil
   defp terminal_text(%Event.Done{final_text: text}) when is_binary(text), do: text
+  defp terminal_text(%Event.Error{message: msg}) when is_binary(msg) and msg != "", do: msg
   defp terminal_text(_event), do: nil
+
+  # The terminal error's `reason` atom (issue usage-limit), e.g. `:auto_retry_exhausted` for a
+  # usage-limit exhaustion. Nil for `%Event.Done{}` (no error).
+  @spec worker_error_reason(Event.t()) :: atom() | nil
+  defp worker_error_reason(%Event.Error{reason: reason}), do: reason
+  defp worker_error_reason(_event), do: nil
+
+  # The terminal error's raw `message` (issue usage-limit), e.g. "429 Usage limit reached...".
+  @spec worker_error_message(Event.t()) :: String.t() | nil
+  defp worker_error_message(%Event.Error{message: msg}) when is_binary(msg) and msg != "",
+    do: msg
+
+  defp worker_error_message(_event), do: nil
 
   # The holding reason for a held terminal (issue holding-status-for-blocked-agents),
   # parsed from the (already-annotated) final text. nil for non-holding terminals.

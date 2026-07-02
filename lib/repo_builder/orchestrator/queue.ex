@@ -1021,13 +1021,41 @@ defmodule RepoBuilder.Orchestrator.Queue do
   # reconciling against the ledger instead of re-deriving intent from CLI memory.
   defp auto_resume_prompt(orchestrator_id, info) do
     name = Map.get(info, :name) || "a worker"
-    outcome = if Map.get(info, :ok?), do: "completed successfully", else: "finished with errors"
 
     base =
-      "Worker #{name} #{outcome} and returned. Review its work and decide the next steps " <>
-        "(report back, dispatch follow-up work, or stop)."
+      if Map.get(info, :ok?) do
+        "Worker #{name} completed successfully and returned. Review its work and decide the " <>
+          "next steps (report back, dispatch follow-up work, or stop)."
+      else
+        error_detail = worker_error_detail(info)
+
+        "Worker #{name} failed and returned.#{error_detail} Review the failure and decide the " <>
+          "next steps: retry with a different harness/model/provider if the error is a " <>
+          "provider-level limit or exhaustion, or investigate and fix the root cause."
+      end
 
     prepend_resume_context(orchestrator_id, info, base)
+  end
+
+  # The error reason/message surfaced onto the auto-resume prompt (issue usage-limit), so the
+  # orchestrator brain can distinguish a hard provider-level exhaustion (e.g. a usage-limit 429)
+  # from generic flakiness instead of re-dispatching into the same dead end. Empty when neither
+  # field is present (older callers / non-error terminals).
+  @spec worker_error_detail(map()) :: String.t()
+  defp worker_error_detail(info) do
+    msg = Map.get(info, :error_message)
+    reason = Map.get(info, :error_reason)
+
+    cond do
+      is_binary(msg) and msg != "" ->
+        " Error (#{reason}): #{msg}."
+
+      is_atom(reason) and not is_nil(reason) ->
+        " Error reason: #{reason}."
+
+      true ->
+        ""
+    end
   end
 
   # Workstream-tagged return routing (orchestration-adw-loop): when the returning worker was

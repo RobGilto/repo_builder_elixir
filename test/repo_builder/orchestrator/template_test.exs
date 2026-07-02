@@ -61,6 +61,34 @@ defmodule RepoBuilder.Orchestrator.TemplateTest do
     test "errors with no frontmatter" do
       assert {:error, _reason} = Template.from_markdown("just a body, no fences")
     end
+
+    test "strips a second stacked frontmatter block from the body (issue-log-40568)" do
+      markdown = """
+      ---
+      command: build
+      version: 1.0.0
+      ---
+
+      ---
+      description: Build the codebase based on the plan
+      argument-hint: [path-to-plan]
+      allowed-tools: Read, Write, Bash
+      ---
+
+      # Build
+
+      Follow the workflow.
+      """
+
+      assert {:ok, attrs} = Template.from_markdown(markdown)
+      # First block's keys are authoritative.
+      assert attrs["command"] == "build"
+      assert attrs["version"] == "1.0.0"
+      # The embedded second frontmatter must not survive into the body.
+      refute String.starts_with?(attrs["body"], "---")
+      assert String.starts_with?(attrs["body"], "# Build")
+      assert String.contains?(attrs["body"], "Follow the workflow.")
+    end
   end
 
   describe "validate/1" do

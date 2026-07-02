@@ -1,9 +1,6 @@
 ---
 command: implement_elixir
 version: 1.0.0
----
-
----
 description: Elixir-native implement step — build a plan/spec (or inline request) into this Phoenix/OTP app and make the mix green gate pass. Immune to slash-command argument garbling.
 argument-hint: [path-to-plan | inline request]
 allowed-tools: Read, Write, Edit, Bash

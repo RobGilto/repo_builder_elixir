@@ -258,8 +258,13 @@ defmodule RepoBuilder.Dashboard do
   unchanged. The OPTIONAL `idle?` field (issue quiescent-worker-reengages-orchestrator)
   marks a soft quiescence demotion (`ok?: true`, `holding?: false`): the worker went idle
   after producing output without a clean terminal, so the Queue frames a review-flavored
-  resume rather than a generic completion. Additive seam (issue message-queue; enriched in
-  issue graceful-agent-handover and issue holding-status-for-blocked-agents).
+  resume rather than a generic completion. The OPTIONAL `error_reason` (an atom, e.g.
+  `:auto_retry_exhausted`) and `error_message` (the raw terminal error text, e.g. "429 Usage
+  limit reached...") fields (issue usage-limit) carry a failed worker's terminal error
+  forward so the Queue's auto-resume prompt names the specific cause instead of a generic
+  "finished with errors" — both are nil for `ok?: true` terminals and for callers that don't
+  track them. Additive seam (issue message-queue; enriched in issue graceful-agent-handover,
+  issue holding-status-for-blocked-agents, and issue usage-limit).
   """
   @spec broadcast_worker_terminal(Ecto.UUID.t(), %{
           required(:worker_id) => Ecto.UUID.t(),
@@ -270,7 +275,9 @@ defmodule RepoBuilder.Dashboard do
           optional(:holding?) => boolean(),
           optional(:holding_reason) => String.t() | nil,
           optional(:idle?) => boolean(),
-          optional(:workstream_id) => Ecto.UUID.t() | nil
+          optional(:workstream_id) => Ecto.UUID.t() | nil,
+          optional(:error_reason) => atom() | nil,
+          optional(:error_message) => String.t() | nil
         }) :: :ok
   def broadcast_worker_terminal(orchestrator_id, info) do
     _ =

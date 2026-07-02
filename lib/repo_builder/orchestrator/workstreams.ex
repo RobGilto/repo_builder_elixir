@@ -44,6 +44,7 @@ defmodule RepoBuilder.Orchestrator.Workstreams do
 
   @typedoc "One phase inside the full rehydration RECORD (`get_workstream/2`)."
   @type phase_view :: %{
+          id: Ecto.UUID.t(),
           position: pos_integer(),
           title: String.t(),
           description: String.t() | nil,
@@ -457,6 +458,7 @@ defmodule RepoBuilder.Orchestrator.Workstreams do
   @spec phase_view(WorkstreamPhase.t()) :: phase_view()
   defp phase_view(%WorkstreamPhase{} = phase) do
     %{
+      id: phase.id,
       position: phase.position,
       title: phase.title,
       description: phase.description,

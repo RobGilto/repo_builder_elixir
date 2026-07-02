@@ -1,8 +1,8 @@
 defmodule RepoBuilderWeb.Components.WorkstreamsPanelUiUxTest do
   @moduledoc """
-  The Workstreams panel renders a `:ui_ux` phase distinctly
-  (orchestrator-iterative-ui-ux-polish-phase, Phase 5): a surface + iteration N/cap badge, so
-  the operator sees which surface is being polished and how close it is to the MVP cap.
+  The workstreams swimlane board renders a `:ui_ux` phase distinctly
+  (orchestrator-iterative-ui-ux-polish-phase): a surface + iteration N/cap badge, so the
+  operator sees which surface is being polished and how close it is to the MVP cap.
   """
   use ExUnit.Case, async: true
 
@@ -13,6 +13,7 @@ defmodule RepoBuilderWeb.Components.WorkstreamsPanelUiUxTest do
   defp phase(overrides) do
     Map.merge(
       %{
+        id: "ph-1",
         position: 1,
         title: "Web polish",
         description: nil,
@@ -47,13 +48,13 @@ defmodule RepoBuilderWeb.Components.WorkstreamsPanelUiUxTest do
     ws = workstream([phase(%{kind: :ui_ux, surface: :web, iteration: 2})])
 
     html =
-      render_component(&ConsoleComponents.workstreams_panel/1,
+      render_component(&ConsoleComponents.workstreams_swimlane/1,
+        orchestrator_id: "orch-1",
         workstreams: [ws],
         context_tokens: 0
       )
 
     assert html =~ ~s(data-phase-kind="ui_ux")
-    assert html =~ ~s(data-surface="web")
     assert html =~ "web 2/3"
   end
 
@@ -61,7 +62,8 @@ defmodule RepoBuilderWeb.Components.WorkstreamsPanelUiUxTest do
     ws = workstream([phase(%{kind: :backend})])
 
     html =
-      render_component(&ConsoleComponents.workstreams_panel/1,
+      render_component(&ConsoleComponents.workstreams_swimlane/1,
+        orchestrator_id: "orch-1",
         workstreams: [ws],
         context_tokens: 0
       )

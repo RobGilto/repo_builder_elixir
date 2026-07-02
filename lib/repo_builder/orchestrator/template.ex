@@ -148,17 +148,37 @@ defmodule RepoBuilder.Orchestrator.Template do
   defp validate_category(_category), do: {:error, :invalid_category}
 
   # Split a `---`-fenced document into {frontmatter_yaml, body}. Tolerant of a
-  # leading blank line; a doc with no frontmatter is an error.
+  # leading blank line; a doc with no frontmatter is an error. The FIRST block's YAML
+  # is authoritative; any CONSECUTIVE leading frontmatter blocks in the remaining body
+  # (e.g. a command file wrapped with a pack manifest whose original Claude frontmatter
+  # was never removed) are stripped too, so no residual `---` fence survives into the
+  # body and reaches a harness CLI (issue-log-40568).
   @spec split_frontmatter(String.t()) :: {:ok, String.t(), String.t()} | {:error, reason()}
   defp split_frontmatter(markdown) do
     case String.split(markdown, ~r/^---\s*$/m, parts: 3) do
       [leading, yaml, body] ->
         if String.trim(leading) == "",
-          do: {:ok, yaml, body},
+          do: {:ok, yaml, strip_leading_frontmatter(body)},
           else: {:error, :missing_frontmatter}
 
       _other ->
         {:error, :missing_frontmatter}
+    end
+  end
+
+  # Drop any frontmatter block that still leads `body` (repeatedly), leaving the first
+  # real content. A body whose first non-blank content is a `---`-fenced block has that
+  # block removed; otherwise the body is returned unchanged.
+  @spec strip_leading_frontmatter(String.t()) :: String.t()
+  defp strip_leading_frontmatter(body) do
+    trimmed = String.trim_leading(body)
+
+    with true <- String.match?(trimmed, ~r/\A---\s*$/m),
+         [leading, _yaml, rest] <- String.split(trimmed, ~r/^---\s*$/m, parts: 3),
+         "" <- String.trim(leading) do
+      strip_leading_frontmatter(rest)
+    else
+      _no_leading_block -> body
     end
   end
 

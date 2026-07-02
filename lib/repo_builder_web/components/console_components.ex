@@ -1069,6 +1069,14 @@ defmodule RepoBuilderWeb.ConsoleComponents do
         >
           Resume
         </button>
+        <button
+          type="button"
+          id="clear-escalation"
+          phx-click="clear_escalation"
+          class="ml-2 underline opacity-70"
+        >
+          Clear
+        </button>
       </div>
       <div :if={@ledger}>
         <div id="ledger-goal" class="font-semibold" style="color: var(--cns-text)">
@@ -1104,131 +1112,144 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     """
   end
 
-  # --- workstreams panel (orchestration-adw-loop) ---------------------------
+  # --- workstreams swimlane board (adws-phase-swimlane) ---------------------
 
-  attr :workstreams, :list,
-    default: [],
-    doc: "the Orchestrator.Workstreams.list_records/1 list (full records), or []"
-
+  attr :orchestrator_id, :string, required: true
+  attr :workstreams, :list, default: [], doc: "the Orchestrator.Workstreams.list_records/1 list"
   attr :context_tokens, :integer, default: 0, doc: "the brain's latest-turn context occupancy"
 
   @doc """
-  The Workstreams panel (orchestration-adw-loop): one row per workstream → its phases → four
-  stage chips (spec|implement|test|review), the current phase/stage highlighted, an overall
-  done/total count, and the brain's context occupancy. Renders nothing when there are no
-  workstreams (back-compatible).
+  Workstreams Kanban board for the ADWS view (adws-phase-swimlane): four columns
+  (Spec → Implement → Test → Review), each holding the phase cards whose `current_stage`
+  matches. Cards carry a status chip, spec_path indicator, ui/ux badge, and record-stage
+  quick-action buttons (✓ passed / ✗ failed / ⊘ blocked). Renders nothing when there are
+  no workstreams (back-compatible).
   """
-  @spec workstreams_panel(map()) :: Phoenix.LiveView.Rendered.t()
-  def workstreams_panel(assigns) do
+  @spec workstreams_swimlane(map()) :: Phoenix.LiveView.Rendered.t()
+  def workstreams_swimlane(assigns) do
+    assigns = assign(assigns, :stage_columns, swimlane_columns(assigns.workstreams))
+
     ~H"""
     <div
       :if={@workstreams != []}
-      id="workstreams-panel"
-      class="space-y-2 border-t px-3 py-2 text-[0.7rem]"
+      id="workstreams-swimlane"
+      class="border-t mt-2 pt-2 text-[0.7rem]"
       style="border-color: var(--cns-border)"
     >
-      <div class="flex items-center justify-between">
+      <div class="flex items-center justify-between px-1 mb-2">
         <span class="font-semibold" style="color: var(--cns-text)">Workstreams</span>
-        <span id="workstreams-context" class="cns-chip" title="brain context occupancy">
+        <span id="workstreams-swimlane-context" class="cns-chip" title="brain context occupancy">
           ctx {@context_tokens}
         </span>
       </div>
-      <div
-        :for={ws <- @workstreams}
-        id={"workstream-#{ws.id}"}
-        class="space-y-1 rounded px-2 py-1"
-        style="background: var(--cns-surface-2)"
-      >
-        <div class="flex items-center gap-2">
-          <span class="font-semibold" style="color: var(--cns-text)">{ws.title}</span>
-          <span class="cns-chip">{to_string(ws.status)}</span>
-          <span class="cns-chip">{workstream_done_count(ws)}</span>
-        </div>
-        <div :if={ws.next_action} style="color: var(--cns-text-2)">next: {ws.next_action}</div>
+      <div class="grid grid-cols-4 gap-2">
         <div
-          :if={ws.focus}
-          id={"workstream-#{ws.id}-focus"}
-          class="font-semibold"
-          style="color: var(--cns-text)"
+          :for={{stage, pairs} <- @stage_columns}
+          id={"swimlane-#{stage}"}
+          class="flex flex-col gap-1 rounded p-1 min-h-[4rem]"
+          style="background: var(--cns-surface-2)"
         >
-          🎯 FOCUS: {ws.focus}
-        </div>
-        <div
-          :if={is_nil(ws.focus) && ws.status == :running}
-          id={"workstream-#{ws.id}-focus-hint"}
-          style="color: var(--cns-text-2)"
-        >
-          no focus set
-        </div>
-        <div
-          :for={phase <- ws.phases}
-          id={"workstream-#{ws.id}-phase-#{phase.position}"}
-          class="flex items-center gap-1"
-          data-phase-status={to_string(phase.status)}
-        >
-          <span
-            class="w-28 shrink-0 truncate"
-            style={phase_label_style(phase, ws)}
-            title={phase.title}
+          <div
+            class="text-center font-semibold mb-1 text-[0.625rem] uppercase"
+            style="color: var(--cns-text-2)"
           >
-            {phase.position}. {phase.title}
-          </span>
-          <span
-            :if={phase.kind == :ui_ux}
-            id={"workstream-#{ws.id}-phase-#{phase.position}-uiux"}
-            class="cns-chip shrink-0"
-            data-phase-kind="ui_ux"
-            data-surface={phase.surface && to_string(phase.surface)}
-            style="background: #6d3fb2; color: #fff"
-            title="iterative UI/UX polish phase"
+            {stage |> to_string() |> String.capitalize()}
+          </div>
+          <div
+            :for={{ws, phase} <- pairs}
+            id={"phase-card-#{phase.id}"}
+            class="rounded px-2 py-1 space-y-1"
+            style="background: var(--cns-bg, #1a1a1a)"
+            data-workstream-id={ws.id}
+            data-phase-status={to_string(phase.status)}
           >
-            {ui_ux_badge(phase)}
-          </span>
-          <span
-            :for={stage <- ~w(spec implement test review)}
-            id={"workstream-#{ws.id}-phase-#{phase.position}-#{stage}"}
-            class="cns-chip"
-            data-stage-status={stage_status(phase, stage)}
-            style={stage_chip_style(phase, stage)}
-          >
-            {stage_glyph(stage)}
-          </span>
-          <span
-            :if={gate_result(phase)}
-            id={"workstream-#{ws.id}-phase-#{phase.position}-gate"}
-            class="flex items-center gap-0.5 shrink-0"
-            data-gate-green={to_string(gate_green?(phase))}
-            title="quality gate: format · lint · type · test · mutation"
-          >
+            <div class="flex items-center gap-1 flex-wrap">
+              <span
+                class="font-semibold truncate max-w-[8rem]"
+                style="color: var(--cns-text)"
+                title={phase.title}
+              >
+                {phase.title}
+              </span>
+              <span class="cns-chip" data-phase-status={to_string(phase.status)}>
+                {to_string(phase.status)}
+              </span>
+            </div>
             <span
-              :for={g <- ~w(format lint type test mutation)}
-              id={"workstream-#{ws.id}-phase-#{phase.position}-gate-#{g}"}
-              class="cns-dot"
-              data-gate-stage={g}
-              data-gate-status={gate_stage_status(phase, g)}
-              style={gate_dot_style(gate_stage_status(phase, g))}
-              title={"#{g}: #{gate_stage_status(phase, g)}"}
+              :if={phase.kind == :ui_ux}
+              class="cns-chip"
+              data-phase-kind="ui_ux"
+              style="background: #6d3fb2; color: #fff"
+              title="iterative UI/UX polish phase"
             >
-              •
+              {ui_ux_badge(phase)}
             </span>
-          </span>
+            <div
+              :if={phase.spec_path}
+              class="truncate"
+              style="color: var(--cns-text-2)"
+              title={phase.spec_path}
+            >
+              📄 {phase.spec_path}
+            </div>
+            <div class="flex items-center gap-1 flex-wrap">
+              <button
+                :for={outcome <- ["passed", "failed", "blocked"]}
+                type="button"
+                id={"record-stage-#{phase.id}-#{outcome}"}
+                phx-click="record_stage"
+                phx-value-ref={ws.id}
+                phx-value-stage={to_string(stage)}
+                phx-value-outcome={outcome}
+                class="cns-chip"
+                style={outcome_button_style(outcome)}
+                title={"Record #{stage} as #{outcome}"}
+              >
+                {outcome_glyph(outcome)}
+              </button>
+            </div>
+          </div>
+          <div
+            :if={pairs == []}
+            class="text-center py-2"
+            style="color: var(--cns-text-2)"
+          >
+            —
+          </div>
         </div>
       </div>
     </div>
     """
   end
 
-  # "done/total" phases completed for a workstream. Inference-only spec — the success typing
-  # narrows below a hand-written `map()`/`String.t()` (the record always carries `:phases`).
-  defp workstream_done_count(%{phases: phases}) do
-    done = Enum.count(phases, &(&1.status == :done))
-    "#{done}/#{length(phases)}"
+  # All phases across all workstreams grouped into the four Kanban columns. Done phases
+  # (current_stage: :done) are excluded — they have completed all stages.
+  @spec swimlane_columns([map()]) :: [{atom(), [{map(), map()}]}]
+  defp swimlane_columns(workstreams) do
+    pairs =
+      for ws <- workstreams,
+          phase <- ws.phases,
+          phase.current_stage in [:spec, :implement, :test, :review],
+          do: {ws, phase}
+
+    for stage <- [:spec, :implement, :test, :review] do
+      {stage, Enum.filter(pairs, fn {_ws, phase} -> phase.current_stage == stage end)}
+    end
   end
+
+  @spec outcome_button_style(String.t()) :: String.t()
+  defp outcome_button_style("passed"), do: "background: #2f7d4f; color: #fff"
+  defp outcome_button_style("failed"), do: "background: #b23b3b; color: #fff"
+  defp outcome_button_style("blocked"), do: "background: #8a6d1f; color: #fff"
+
+  @spec outcome_glyph(String.t()) :: String.t()
+  defp outcome_glyph("passed"), do: "✓"
+  defp outcome_glyph("failed"), do: "✗"
+  defp outcome_glyph("blocked"), do: "⊘"
 
   # The `:ui_ux` phase badge (iterative-ui-ux polish phase): surface + iteration N/cap so the
   # operator sees which surface is being polished and how close it is to the MVP cap.
-  # Inference-only spec — the success typing narrows the return below a hand-written
-  # `String.t()` (mirrors `workstream_done_count/1`), which Dialyzer rejects as a supertype.
+  # Inference-only spec — the success typing narrows the return below a hand-written String.t().
   defp ui_ux_badge(%{surface: surface, iteration: iteration}) do
     label = if is_nil(surface), do: "ui/ux", else: to_string(surface)
     "#{label} #{iteration}/#{ui_iteration_cap()}"
@@ -1242,95 +1263,6 @@ defmodule RepoBuilderWeb.ConsoleComponents do
       _invalid -> 3
     end
   end
-
-  # Highlight the workstream's CURRENT phase (the one at current_phase_position).
-  @spec phase_label_style(map(), map()) :: String.t()
-  defp phase_label_style(%{position: position}, %{current_phase_position: position}),
-    do: "color: var(--cns-text); font-weight: 600"
-
-  defp phase_label_style(_phase, _ws), do: "color: var(--cns-text-2)"
-
-  # One stage's recorded status for this phase: "passed"/"failed"/"blocked" from the JSONB
-  # stages map, "current" when it is the phase's active stage, else "pending".
-  @spec stage_status(map(), String.t()) :: String.t()
-  defp stage_status(phase, stage) do
-    case get_in(phase.stages, [stage, "status"]) do
-      status when is_binary(status) -> status
-      _ -> if to_string(phase.current_stage) == stage, do: "current", else: "pending"
-    end
-  end
-
-  @spec stage_chip_style(map(), String.t()) :: String.t()
-  defp stage_chip_style(phase, stage) do
-    case stage_status(phase, stage) do
-      "passed" -> "background: #2f7d4f; color: #fff"
-      "failed" -> "background: #b23b3b; color: #fff"
-      "blocked" -> "background: #8a6d1f; color: #fff"
-      "current" -> "outline: 1px solid var(--cns-accent); color: var(--cns-text)"
-      _ -> "color: var(--cns-text-2)"
-    end
-  end
-
-  # --- quality-gate strip (quality-gate-plugins) ---------------------------
-
-  # The structured GateResult recorded on the phase's `test` stage, or nil when none.
-  @spec gate_result(map()) :: map() | nil
-  defp gate_result(%{stages: stages}) when is_map(stages) do
-    case get_in(stages, ["test", "gate"]) do
-      %{} = gate -> gate
-      _ -> nil
-    end
-  end
-
-  defp gate_result(_phase), do: nil
-
-  # Whether the recorded gate is fully green (drives the strip's `data-gate-green`).
-  @spec gate_green?(map()) :: boolean()
-  defp gate_green?(phase) do
-    case gate_result(phase) do
-      %{"green" => green} -> green == true
-      _ -> false
-    end
-  end
-
-  # One canonical gate dot's status from the recorded GateResult: the `type` dot folds in the
-  # `type-coverage` sub-stage (a red in either shows red). "pending" when the stage isn't in
-  # the result (e.g. dropped by typed_enforcement / cadence).
-  @spec gate_stage_status(map(), String.t()) :: String.t()
-  defp gate_stage_status(phase, dot) do
-    stages = gate_stages(phase)
-    ids = if dot == "type", do: ["type", "type-coverage"], else: [dot]
-
-    matched = Enum.filter(stages, &(&1["stage_id"] in ids))
-
-    cond do
-      matched == [] -> "pending"
-      Enum.any?(matched, &(&1["status"] == "failed")) -> "failed"
-      Enum.any?(matched, &(&1["status"] == "skipped")) -> "skipped"
-      true -> "passed"
-    end
-  end
-
-  @spec gate_stages(map()) :: [map()]
-  defp gate_stages(phase) do
-    case gate_result(phase) do
-      %{"stages" => stages} when is_list(stages) -> stages
-      _ -> []
-    end
-  end
-
-  @spec gate_dot_style(String.t()) :: String.t()
-  defp gate_dot_style("passed"), do: "color: #4ade80"
-  defp gate_dot_style("failed"), do: "color: #f87171"
-  defp gate_dot_style("skipped"), do: "color: #fbbf24"
-  defp gate_dot_style(_pending), do: "color: var(--cns-text-2)"
-
-  @spec stage_glyph(String.t()) :: String.t()
-  defp stage_glyph("spec"), do: "S"
-  defp stage_glyph("implement"), do: "I"
-  defp stage_glyph("test"), do: "T"
-  defp stage_glyph("review"), do: "R"
-  defp stage_glyph(other), do: other
 
   # --- orchestrator message queue strip -------------------------------------
 
@@ -4027,57 +3959,70 @@ defmodule RepoBuilderWeb.ConsoleComponents do
             </button>
           </div>
 
-          <form
-            id="command-form"
-            phx-change="validate_attachments"
-            phx-submit={JS.push("run_command") |> hide_command()}
-          >
-            <div
-              id="cmd-drop-zone"
-              phx-drop-target={@uploads.attachments.ref}
-              class="cns-cmd-drop-zone"
+          <div style="position: relative">
+            <form
+              id="command-form"
+              phx-change="validate_attachments"
+              phx-submit={JS.push("run_command") |> hide_command()}
             >
-              <textarea
-                id="command-textarea"
-                name="command"
-                rows="3"
-                placeholder="Type a command… (Enter ↵ send · Shift+Enter newline · drag & drop or paste images)"
-                class="cns-cmd-textarea"
-                phx-hook="CommandPaste"
-              ></textarea>
-            </div>
-
-            <div :if={@uploads.attachments.entries != []} class="mt-2 flex flex-wrap gap-2">
-              <div :for={entry <- @uploads.attachments.entries} class="cns-attachment-entry">
-                <.live_img_preview
-                  :if={String.starts_with?(entry.client_type, "image/")}
-                  entry={entry}
-                  class="cns-attachment-thumb"
-                />
-                <span
-                  :if={not String.starts_with?(entry.client_type, "image/")}
-                  class="cns-attachment-name"
-                >
-                  {entry.client_name}
-                </span>
-                <button
-                  type="button"
-                  phx-click="cancel_upload"
-                  phx-value-ref={entry.ref}
-                  class="cns-attachment-remove"
-                  aria-label="Remove"
-                >
-                  ✕
-                </button>
-                <p
-                  :for={err <- upload_errors(@uploads.attachments, entry)}
-                  class="cns-attachment-error"
-                >
-                  {upload_error_to_string(err)}
-                </p>
+              <div
+                id="cmd-drop-zone"
+                phx-drop-target={@uploads.attachments.ref}
+                class="cns-cmd-drop-zone"
+              >
+                <textarea
+                  id="command-textarea"
+                  name="command"
+                  rows="3"
+                  placeholder="Type a command… (Enter ↵ send · Shift+Enter newline · drag & drop or paste images)"
+                  class="cns-cmd-textarea"
+                  phx-hook="CommandAutocomplete"
+                  data-autocomplete={autocomplete_json(@slash_commands, @agent_defs, @adws)}
+                ></textarea>
               </div>
+
+              <div :if={@uploads.attachments.entries != []} class="mt-2 flex flex-wrap gap-2">
+                <div :for={entry <- @uploads.attachments.entries} class="cns-attachment-entry">
+                  <.live_img_preview
+                    :if={String.starts_with?(entry.client_type, "image/")}
+                    entry={entry}
+                    class="cns-attachment-thumb"
+                  />
+                  <span
+                    :if={not String.starts_with?(entry.client_type, "image/")}
+                    class="cns-attachment-name"
+                  >
+                    {entry.client_name}
+                  </span>
+                  <button
+                    type="button"
+                    phx-click="cancel_upload"
+                    phx-value-ref={entry.ref}
+                    class="cns-attachment-remove"
+                    aria-label="Remove"
+                  >
+                    ✕
+                  </button>
+                  <p
+                    :for={err <- upload_errors(@uploads.attachments, entry)}
+                    class="cns-attachment-error"
+                  >
+                    {upload_error_to_string(err)}
+                  </p>
+                </div>
+              </div>
+            </form>
+
+            <div
+              id="autocomplete-dropdown"
+              role="listbox"
+              aria-label="Autocomplete suggestions"
+              style="display:none; position:absolute; top:100%; left:0; right:0; z-index:50;
+                   background:var(--cns-surface-2); border:1px solid var(--cns-border);
+                   border-radius:4px; max-height:14rem; overflow-y:auto; margin-top:2px"
+            >
             </div>
-          </form>
+          </div>
 
           <%!-- Source-scoped palette (issue palette-source-tabs): vertical BASE / PROJECT tabs.
                 BASE = artifacts from the platform repo's `.claude/` (source :app); PROJECT =
@@ -4393,6 +4338,55 @@ defmodule RepoBuilderWeb.ConsoleComponents do
         description: adw.description
       }
     end)
+  end
+
+  # Build the three autocomplete item lists (slash commands, agents, adws) and return
+  # them as a single list of maps with trigger, token, label, and description keys.
+  @spec autocomplete_items([struct()], [struct()], [struct()]) :: [
+          %{trigger: String.t(), token: String.t(), label: String.t(), description: String.t()}
+        ]
+  defp autocomplete_items(slash_commands, agent_defs, adws) do
+    slash =
+      Enum.map(slash_commands, fn cmd ->
+        %{
+          trigger: "/",
+          token: "/" <> cmd.name,
+          label: cmd.name,
+          description: cmd.description || ""
+        }
+      end)
+
+    agents =
+      Enum.map(agent_defs, fn agent ->
+        %{
+          trigger: "@",
+          token: agent.name,
+          label: agent.name,
+          description: agent.description || ""
+        }
+      end)
+
+    adw_items =
+      Enum.map(adws, fn adw ->
+        %{
+          trigger: "!",
+          token: "start_adw workflow_type=" <> adw.name,
+          label: adw.name,
+          description: adw.description || ""
+        }
+      end)
+
+    slash ++ agents ++ adw_items
+  end
+
+  # Serialize the three file-derived definition lists into a JSON array for the
+  # CommandAutocomplete hook (issue-autocomplete). Each item carries trigger, token,
+  # label, and description so the client can render a filtering dropdown.
+  @spec autocomplete_json([struct()], [struct()], [struct()]) :: String.t()
+  defp autocomplete_json(slash_commands, agent_defs, adws) do
+    slash_commands
+    |> autocomplete_items(agent_defs, adws)
+    |> Jason.encode!()
   end
 
   # Chips for one category, filtered to a single provenance (`:app` for the BASE tab,

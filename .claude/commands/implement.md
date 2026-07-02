@@ -1,9 +1,6 @@
 ---
 command: implement
 version: 1.0.0
----
-
----
 description: Implement a plan/spec produced by /feature, then make the validation gate pass
 argument-hint: [path-to-plan]
 allowed-tools: Read, Write, Edit, Bash

@@ -1,9 +1,6 @@
 ---
 command: build
 version: 1.0.0
----
-
----
 description: Build the codebase based on the plan
 argument-hint: [path-to-plan]
 allowed-tools: Read, Write, Bash

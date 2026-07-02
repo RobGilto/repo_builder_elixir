@@ -1,9 +1,6 @@
 ---
 command: commit
 version: 1.0.0
----
-
----
 description: Generate a single Conventional Commit message for the current changes
 argument-hint: [agent_name] [issue_type] [issue_json]
 allowed-tools: Read, Bash

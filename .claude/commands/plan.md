@@ -1,9 +1,6 @@
 ---
 command: plan
 version: 1.0.0
----
-
----
 description: Turn a work item into a written specs/*.md implementation plan
 argument-hint: [adw_id] [prompt-or-spec-file]
 allowed-tools: Read, Write, Bash, Grep, Glob
