@@ -8,9 +8,22 @@ version: 1.0.0
 Create a new plan to implement the `Feature` using the exact specified markdown `Plan Format`. Follow the `Instructions` to create the plan use the `Relevant Files` to focus on the right files.
 
 ## Variables
-issue_number: $1
-adw_id: $2
-issue_json: $3
+REQUEST: $ARGUMENTS
+
+> **Argument contract (why `$ARGUMENTS`, not `$1 $2 $3`).** This command takes the
+> **entire** argument string as one lossless value. Do NOT rely on positional variables
+> (`$1`/`$2`/`$3`): the server-side slash expander fills those by splitting on whitespace,
+> so any argument containing spaces — a JSON payload, or a freeform sentence — gets shredded
+> across the slots (`/feature the workstreams ui` → `$1=the`, `$2=workstreams`, `$3=ui`).
+> Binding the whole string to `$ARGUMENTS` keeps the feature request intact.
+
+Derive the plan variables from `REQUEST`:
+
+- If `REQUEST` parses as JSON, use its `number` → `issue_number`, its `title`/`body` as the
+  feature, and any `adw_id` it carries (else synthesize a short one).
+- Otherwise treat the full `REQUEST` string as the freeform feature request; set
+  `issue_number` and `adw_id` to a short descriptive placeholder derived from the request.
+- NEVER bind individual whitespace-separated words to `issue_number`/`adw_id`/`issue_json`.
 
 ## Instructions
 
@@ -130,7 +143,11 @@ Execute every command to validate the feature works correctly with zero regressi
 ```
 
 ## Feature
-Extract the feature details from the `issue_json` variable (parse the JSON and use the title and body fields).
+Interpret `REQUEST` per the `## Variables` contract: if it is JSON, use its `title` and
+`body`; otherwise treat the entire `REQUEST` string as the feature request. If `REQUEST` is
+empty or is only a few stray words (garbled positional fragments), STOP and report that the
+caller should re-invoke with the full feature request (or the issue JSON) as a single
+argument — do not fabricate a feature.
 
 ## Report
 

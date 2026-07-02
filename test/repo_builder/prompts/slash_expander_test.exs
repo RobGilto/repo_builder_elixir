@@ -151,4 +151,47 @@ defmodule RepoBuilder.Prompts.SlashExpanderTest do
   test "an empty prompt is returned unchanged", %{tmp_dir: tmp} do
     assert SlashExpander.expand("", tmp) == ""
   end
+
+  describe "argument-garbling regression (space-bearing args)" do
+    test "$ARGUMENTS preserves a JSON argument intact while $N shreds it", %{tmp_dir: tmp} do
+      write_command(tmp, "planner", "num=$1 id=$2 json=$3\nfull=$ARGUMENTS")
+
+      args = ~s(42 abcd1234 {"number":42,"title":"Boom","body":"it broke"})
+      expanded = SlashExpander.expand("/planner " <> args, tmp)
+
+      # $ARGUMENTS is lossless — the full JSON (with its internal spaces) survives.
+      assert expanded =~ ~s(full=42 abcd1234 {"number":42,"title":"Boom","body":"it broke"})
+      # Positional $N is whitespace-split and therefore lossy: $3 captures only the first
+      # token of the JSON blob, never the whole thing. This is why templates must use
+      # $ARGUMENTS for space-bearing values.
+      assert expanded =~ "num=42"
+      assert expanded =~ "id=abcd1234"
+      assert expanded =~ ~s(json={"number":42,"title":"Boom","body":"it)
+      refute expanded =~ ~s(json={"number":42,"title":"Boom","body":"it broke"})
+    end
+
+    test "freeform prose survives via $ARGUMENTS but is shredded across $N", %{tmp_dir: tmp} do
+      write_command(tmp, "feat", "one=$1 two=$2 three=$3\nall=$ARGUMENTS")
+
+      expanded = SlashExpander.expand("/feat the workstreams ui should show", tmp)
+
+      assert expanded =~ "all=the workstreams ui should show"
+      assert expanded =~ "one=the"
+      assert expanded =~ "two=workstreams"
+      assert expanded =~ "three=ui"
+    end
+
+    # These expand the repo's OWN .claude/commands/*.md (app-root, nil working_dir). They
+    # fail if a template reverts to positional `$1/$2/$3`, because then a freeform request
+    # would be split into words instead of surviving verbatim via $ARGUMENTS.
+    for cmd <- ~w(bug feature chore) do
+      test "/#{cmd} template consumes $ARGUMENTS so a freeform request survives intact" do
+        request = "the login flow throws on empty password"
+        expanded = SlashExpander.expand("/#{unquote(cmd)} " <> request, nil)
+
+        assert expanded =~ request,
+               "/#{unquote(cmd)} must bind $ARGUMENTS (full request), not positional $N"
+      end
+    end
+  end
 end

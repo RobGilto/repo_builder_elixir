@@ -27,6 +27,14 @@ defmodule RepoBuilder.Prompts.SlashExpander do
   a non-empty argument string gets the args appended on a trailing line, so commands
   that don't interpolate still see what the caller passed.
 
+  IMPORTANT — `$N` is lossy for space-bearing values. Positional placeholders are filled
+  by splitting `$ARGUMENTS` on whitespace, so a single argument that itself contains spaces
+  (a JSON blob, a freeform sentence) is shredded across the slots — e.g. `/bug the login
+  flow breaks` binds `$1=the`, `$2=login`, `$3=flow`, dropping the rest. Any command whose
+  argument can contain whitespace (JSON payloads, prose requests) MUST consume `$ARGUMENTS`
+  and interpret it itself, never positional `$N`. The `/feature`, `/bug`, `/chore`, and
+  `/implement_elixir` command files follow this rule.
+
   Pure and fail-silent: it never mutates the filesystem and never raises — a read or
   parse error on a command file degrades to keeping the original line.
   """
