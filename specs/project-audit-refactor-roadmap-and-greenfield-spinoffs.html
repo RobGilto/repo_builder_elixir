@@ -103,8 +103,8 @@
       <summary>Metadata</summary>
       <dl>
         <dt>created</dt>      <dd>2026-07-04T10:00:00+02:00</dd>
-        <dt>modified</dt>     <dd>2026-07-04T10:00:00+02:00</dd>
-        <dt>commits</dt>      <dd>7e712eb (HEAD at authoring time)</dd>
+        <dt>modified</dt>     <dd>2026-07-04T10:00:00+02:00, 2026-07-04T09:10:00+02:00 (build: phases 1–2 complete)</dd>
+        <dt>commits</dt>      <dd>7e712eb (HEAD at authoring time), a5f1547, 42a6cb8, 9f1e1c3, 9a82583 (phase 1), f1e3975 (phase 2)</dd>
         <dt>agent name</dt>   <dd>claude-fable-5</dd>
         <dt>session id</dt>   <dd>b7a51fb4-9455-4099-95b0-269c574492b1</dd>
         <dt>back refs</dt>    <dd>BUILD_PROMPT.md, README.md, docs/engineering-principles.md, ai_docs/typed-elixir-standard.md, specs/issue-custom-adw-observability-adw-custom-adw-obs-sdlc_planner-custom-adw-swimlane-observability.md, specs/quality-gate-plugins-phase-level-testing.html, specs/issue-adw-non-iso-merge-adw-adw-non-iso-merge-sdlc_planner-non-iso-adws-merge-to-trunk.md, specs/issue-adw-builder-combos-adw-adw-prompt-combos-sdlc_planner-adw-builder-spec-prompt-and-combo-scripts.md</dd>
@@ -243,14 +243,14 @@
 
       <h4>2.3 Non-iso ADW merge-to-trunk</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Implement <code>specs/issue-adw-non-iso-merge-…</code> so non-isolated ADW runs land their work on trunk safely.</li>
+        <li><code class="status">[x]</code> Implement <code>specs/issue-adw-non-iso-merge-…</code> so non-isolated ADW runs land their work on trunk safely.</li>
       </ul>
 
       <h4>2.4 Testing Strategy</h4>
       <p>Each feature ships with its LiveViewTest integration test (already scaffolded for 2.1); observability is additionally verified against a live run by querying <code>agent_logs</code> for a fresh custom-ADW workflow id.</p>
       <ul class="checklist">
-        <li><code class="status">[]</code> <code>mix test test/repo_builder_web/live/test_custom_adw_observability_test.exs test/repo_builder_web/live/test_adw_builder_combos_test.exs</code> — feature suites green.</li>
-        <li><code class="status">[]</code> Full five-command green gate — zero regressions.</li>
+        <li><code class="status">[x]</code> <code>mix test test/repo_builder_web/live/test_custom_adw_observability_test.exs test/repo_builder_web/live/test_adw_builder_combos_test.exs</code> — feature suites green.</li>
+        <li><code class="status">[x]</code> Full five-command green gate — zero regressions.</li>
       </ul>
       <div class="loop">
         🔁 <strong>Do not exit this phase until every box above is checked.</strong>
@@ -259,7 +259,7 @@
     </div>
 
     <div class="phase">
-      <h3><code class="status">[]</code> Phase 3: Decompose the god modules <span class="tag p1">P1 · high</span></h3>
+      <h3><code class="status">[x]</code> Phase 3: Decompose the god modules <span class="tag p1">P1 · high</span></h3>
       <p>The structural refactor. Split the three oversized modules along their natural panel/domain seams without changing observable behaviour — the 297-file test suite is the safety net, so this phase is mechanical extraction, not redesign.</p>
       <figure>
         <img src="project-audit-refactor-roadmap-and-greenfield-spinoffs/phase3.png" alt="One large block decomposing into five clean panels connected to a thin coordinator">
