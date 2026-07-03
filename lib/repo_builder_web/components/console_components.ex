@@ -3884,6 +3884,12 @@ defmodule RepoBuilderWeb.ConsoleComponents do
   attr :adw_steps, :list, default: []
   attr :adw_name, :string, default: ""
   attr :adw_local?, :boolean, default: false
+  attr :adw_spec, :string, default: ""
+  attr :adw_prompt, :string, default: ""
+  attr :adw_combos, :list, default: []
+  attr :adw_selected_combo, :string, default: ""
+  attr :adw_harness, :string, default: ""
+  attr :harness_names, :list, default: []
   attr :agents, :list, default: [], doc: "live %Agent{} workers shown in the left rail"
   attr :statuses, :map, default: %{}, doc: "agent id => live runtime status"
 
@@ -4117,7 +4123,7 @@ defmodule RepoBuilderWeb.ConsoleComponents do
 
         <%!-- ADW BUILDER MODE --%>
         <div :if={@adw_builder?} class="flex flex-col gap-3">
-          <%!-- Workflow name + local toggle --%>
+          <%!-- Workflow name + local toggle + harness picker --%>
           <div class="flex items-center gap-2">
             <input
               type="text"
@@ -4136,6 +4142,82 @@ defmodule RepoBuilderWeb.ConsoleComponents do
             >
               local
             </button>
+            <select
+              :if={@harness_names != []}
+              name="harness"
+              phx-change="adw_set_harness"
+              class="cns-cmd-textarea"
+              style="padding: 0.25rem 0.5rem; height: auto"
+              title="Agent harness for this ADW run"
+            >
+              <option value="" selected={@adw_harness == ""}>— harness —</option>
+              <option :for={h <- @harness_names} value={h} selected={h == @adw_harness}>
+                {h}
+              </option>
+            </select>
+          </div>
+
+          <%!-- Load combo: repopulate the builder (steps + flavor + spec + prompt) from a
+               saved combo. The value is the combo's slug name; a blank first option is the
+               "no selection" state. The ✕ deletes the selected combo's sidecar. --%>
+          <div :if={@adw_combos != []} class="flex items-center gap-2">
+            <label class="text-[0.625rem] font-semibold" style="color: var(--cns-text-2)">
+              LOAD COMBO
+            </label>
+            <select
+              name="combo"
+              phx-change="adw_load_combo"
+              class="cns-cmd-textarea"
+              style="padding: 0.25rem 0.5rem; height: auto"
+            >
+              <option value="" selected={@adw_selected_combo == ""}>— pick a saved combo —</option>
+              <option
+                :for={combo <- @adw_combos}
+                value={combo.name}
+                selected={combo.name == @adw_selected_combo}
+              >
+                {combo.name} ({combo.flavor})
+              </option>
+            </select>
+            <button
+              :if={@adw_selected_combo != ""}
+              type="button"
+              phx-click="adw_delete_combo"
+              phx-value-combo={@adw_selected_combo}
+              class="cns-chip"
+              style="color: var(--cns-red, #f87171)"
+              title="Delete the selected combo's sidecar"
+            >
+              ✕
+            </button>
+          </div>
+
+          <%!-- Spec + Initial-prompt inputs: give the built ADW its task context so
+               launched steps render real prompts (not the empty-prompt default). --%>
+          <div class="flex flex-col gap-1">
+            <label class="text-[0.625rem] font-semibold" style="color: var(--cns-text-2)">
+              SPEC (optional)
+            </label>
+            <textarea
+              name="spec"
+              phx-change="adw_set_spec"
+              rows="2"
+              placeholder="Optional pre-written spec the ADW should act on ({{spec}})."
+              class="cns-cmd-textarea"
+            >{@adw_spec}</textarea>
+          </div>
+
+          <div class="flex flex-col gap-1">
+            <label class="text-[0.625rem] font-semibold" style="color: var(--cns-text-2)">
+              INITIAL PROMPT
+            </label>
+            <textarea
+              name="prompt"
+              phx-change="adw_set_prompt"
+              rows="2"
+              placeholder="The feature/task description that drives /feature ({{input}})."
+              class="cns-cmd-textarea"
+            >{@adw_prompt}</textarea>
           </div>
 
           <%!-- Step palette --%>
@@ -4150,8 +4232,9 @@ defmodule RepoBuilderWeb.ConsoleComponents do
                 phx-click="adw_add_step"
                 phx-value-step={step}
                 class="cns-cmd-chip"
+                title={"#{step} step → runs /#{adw_step_command(step)}"}
               >
-                + {step}
+                + {adw_step_command(step)}
               </button>
             </div>
           </div>
@@ -4169,7 +4252,9 @@ defmodule RepoBuilderWeb.ConsoleComponents do
             <div :for={{step, idx} <- Enum.with_index(@adw_steps)} class="cns-adw-step-row">
               <div class="flex items-center gap-1">
                 <span class="cns-adw-step-num">{idx + 1}</span>
-                <span class="cns-adw-step-name">{step.name}</span>
+                <span class="cns-adw-step-name" title={"#{step.name} step"}>
+                  {adw_step_command(step.name)}
+                </span>
 
                 <button
                   type="button"
@@ -4222,21 +4307,43 @@ defmodule RepoBuilderWeb.ConsoleComponents do
                 class="mt-1 rounded p-2 text-[0.6rem]"
                 style="background: var(--cns-surface-3); color: var(--cns-text-2)"
               >
-                {adw_step_hint(step.name)}
+                <textarea
+                  name={"prompt-#{step.id}"}
+                  phx-change="adw_set_step_prompt"
+                  phx-value-id={step.id}
+                  rows="3"
+                  class="cns-cmd-textarea"
+                  style="font-size: 0.65rem"
+                  placeholder={adw_step_hint(step.name)}
+                >{step[:prompt] || ""}</textarea>
               </div>
             </div>
           </div>
 
-          <%!-- Launch button --%>
-          <button
-            type="button"
-            phx-click="run_adw_builder"
-            class="cns-chip"
-            style="align-self: flex-end; color: var(--cns-cyan)"
-            disabled={@adw_steps == []}
-          >
-            ▶ Launch ADW
-          </button>
+          <%!-- Save + Launch buttons. "Save combo" persists the current build as a
+               named JSON sidecar AND materializes a portable adws/adw_<name>_iso.py
+               (or _local_iso.py) that surfaces in the ADWs palette. --%>
+          <div class="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              phx-click="adw_save_combo"
+              class="cns-chip"
+              style="color: var(--cns-green, #4ade80)"
+              disabled={@adw_steps == [] or @adw_name == ""}
+              title="Save this build as a named combo + generate its ADW script"
+            >
+              ⭑ Save combo
+            </button>
+            <button
+              type="button"
+              phx-click="run_adw_builder"
+              class="cns-chip"
+              style="color: var(--cns-cyan)"
+              disabled={@adw_steps == []}
+            >
+              ▶ Launch ADW
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -4433,12 +4540,23 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     end)
   end
 
+  # The command / prompt-markdown a builder step actually invokes at run time (per
+  # adws/adw_modules/workflow_ops.py). Chip + step-row labels show THIS — the md that
+  # runs — so what the operator clicks names the real prompt. The canonical step id
+  # (plan/build/…) stays the pipeline vocabulary the Python dispatch and adw_new.py
+  # VALID_STEPS allowlist match on, so only the DISPLAY label changes here.
+  @spec adw_step_command(String.t()) :: String.t()
+  defp adw_step_command("plan"), do: "feature"
+  defp adw_step_command("build"), do: "implement"
+  defp adw_step_command("ship"), do: "commit + pr"
+  defp adw_step_command(other), do: other
+
   @spec adw_step_hint(String.t()) :: String.t()
   defp adw_step_hint("plan"),
     do: "/feature <spec-file> — AI reads the spec and writes a detailed implementation plan."
 
   defp adw_step_hint("patch"),
-    do: "/feature <spec-file> — like plan but for a targeted patch/hotfix."
+    do: "/patch <spec-file> — plans and applies a targeted patch/hotfix."
 
   defp adw_step_hint("build"),
     do: "/implement <plan-file> — reads the plan and implements all tasks; leaves code green."
@@ -4450,10 +4568,10 @@ defmodule RepoBuilderWeb.ConsoleComponents do
     do: "/review <spec-file> — reviews the git diff against the spec; passes or raises issues."
 
   defp adw_step_hint("document"),
-    do: "/docs — generates or updates documentation based on the implemented changes."
+    do: "/document — generates or updates documentation based on the implemented changes."
 
   defp adw_step_hint("ship"),
-    do: "/ship — finalises the branch, opens a PR, and posts a summary comment."
+    do: "/commit (+ /pull_request on the GitHub flavor) — commits pending changes and opens a PR."
 
   defp adw_step_hint(other), do: "/#{other} — custom step."
 

@@ -116,6 +116,7 @@ defmodule RepoBuilder.WorkflowEngine.Runner do
            harness: step.harness,
            prompt: prompt,
            workflow_run_id: run.id,
+           workflow_run_db_id: run.id,
            # Run THIS step in the target repo (fix planning-wizard target-repo launch).
            # The session runtime (§6) honours these from Phase 4: a nil `cwd` falls back
            # to the managed scratch workspace and a nil `isolation_mode` runs direct, so
@@ -285,9 +286,14 @@ defmodule RepoBuilder.WorkflowEngine.Runner do
 
   @spec render(String.t(), map()) :: String.t()
   defp render(template, artifacts) do
-    Enum.reduce(artifacts, template, fn {key, value}, acc ->
-      String.replace(acc, "{{#{key}}}", to_string(value))
-    end)
+    resolved =
+      Enum.reduce(artifacts, template, fn {key, value}, acc ->
+        String.replace(acc, "{{#{key}}}", to_string(value))
+      end)
+
+    # Drop any tokens whose artifact was never produced (e.g. {{plan}} in a build-only
+    # workflow). Leaving them literal causes agents to see confusing template text.
+    String.replace(resolved, ~r/\{\{[^}]+\}\}/, "")
   end
 
   @spec stringify_keys(map()) :: map()

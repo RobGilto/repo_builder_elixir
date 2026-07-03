@@ -163,6 +163,40 @@ defmodule RepoBuilder.WorkflowEngine.Catalog do
   def steps(_slug, _harness), do: {:error, :unknown_type}
 
   @doc """
+  The canonical default `prompt_template` for a single ADW-Builder step name.
+
+  This is the SINGLE source of truth shared by the catalog step builders (`step/4`)
+  and the console ADW Builder (`ConsoleLive.launch_adw_builder/4`), so a hand-built
+  ADW renders the same prompts as a catalog-built one. Every template references the
+  initial prompt (`{{input}}`) and/or a prior step's output (`{{plan}}`, `{{build}}`,
+  `{{test}}`, `{{review}}`), plus the optional pre-written spec (`{{spec}}`) where
+  relevant, so `Runner.render/2` resolves them against the run's artifacts.
+
+  The names cover the ADW Builder palette (`plan patch build test review document ship`);
+  any other name falls back to a generic `{{input}}`-driven template so a custom step
+  still receives the task context rather than an empty prompt.
+  """
+  @spec default_prompt_template(String.t()) :: String.t()
+  def default_prompt_template("plan"),
+    do: "Plan the work for: {{input}}\n\nSpec (optional): {{spec}}"
+
+  def default_prompt_template("patch"),
+    do: "Plan a targeted patch/hotfix for: {{input}}\n\nSpec (optional): {{spec}}"
+
+  def default_prompt_template("build"), do: "Build from the plan: {{plan}}"
+
+  def default_prompt_template("test"), do: "Test the implementation: {{build}}"
+
+  def default_prompt_template("review"), do: "Review the build: {{build}}"
+
+  def default_prompt_template("document"), do: "Document the implemented changes: {{build}}"
+
+  def default_prompt_template("ship"),
+    do: "Ship the work — finalize the branch and open a PR. Review: {{review}}"
+
+  def default_prompt_template(_other), do: "Work on: {{input}}\n\nSpec (optional): {{spec}}"
+
+  @doc """
   Project-aware steps: a built-in type's steps, else a plugin-contributed type's
   data-defined steps (with `harness` substituted per step where the data omits it).
   """

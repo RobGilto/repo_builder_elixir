@@ -51,6 +51,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
     Workflows
   }
 
+  alias RepoBuilder.Adw.Combos
   alias RepoBuilder.Agents.Agent
   alias RepoBuilder.Budget.Cap
   alias RepoBuilder.Console.EventPresenter
@@ -66,6 +67,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
   alias RepoBuilder.Orchestrator.Workstreams
   alias RepoBuilder.StackLayers
   alias RepoBuilder.StackLayers.StackLayer
+  alias RepoBuilder.WorkflowEngine.Catalog
   alias RepoBuilder.Workflows.TitleHumanizer
   alias RepoBuilderWeb.AgentColors
 
@@ -270,6 +272,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
         adw_name: "",
         adw_harness: nil,
         adw_local?: false,
+        harness_names: HarnessRegistry.known(),
+        adw_spec: "",
+        adw_prompt: "",
+        adw_combos: [],
+        adw_selected_combo: "",
         # Log Database manager (issue-log-db-manager): a paginated, filterable DB browser
         # over `agent_logs`. Selection is a MapSet of `id` UUID STRINGS (distinct from the
         # live view's integer `selected_ids`) so it persists across pages and never collides
@@ -662,10 +669,17 @@ defmodule RepoBuilderWeb.ConsoleLive do
   # changes so the overlay updates immediately.
   @spec seed_definitions(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp seed_definitions(socket) do
-    %{slash_command: slash, agent: agents, adw: adws} =
-      Definitions.all(nilify_blank(socket.assigns.orchestrator_working_dir))
+    working_dir = nilify_blank(socket.assigns.orchestrator_working_dir)
 
-    assign(socket, slash_commands: slash, agent_defs: agents, adws: adws)
+    %{slash_command: slash, agent: agents, adw: adws} =
+      Definitions.all(working_dir)
+
+    assign(socket,
+      slash_commands: slash,
+      agent_defs: agents,
+      adws: adws,
+      adw_combos: Combos.list(working_dir)
+    )
   end
 
   @spec load_agents(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
@@ -1572,7 +1586,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
   def handle_event("adw_add_step", %{"step" => step}, socket) do
     steps = socket.assigns.adw_steps
     id = if steps == [], do: 1, else: Enum.max_by(steps, & &1.id).id + 1
-    new_step = %{id: id, name: step, expanded: false}
+    new_step = %{id: id, name: step, expanded: false, prompt: nil}
     {:noreply, assign(socket, adw_steps: steps ++ [new_step])}
   end
 
@@ -1610,8 +1624,32 @@ defmodule RepoBuilderWeb.ConsoleLive do
     {:noreply, assign(socket, adw_name: name)}
   end
 
+  def handle_event("adw_set_spec", %{"spec" => spec}, socket) do
+    {:noreply, assign(socket, adw_spec: spec)}
+  end
+
+  def handle_event("adw_set_prompt", %{"prompt" => prompt}, socket) do
+    {:noreply, assign(socket, adw_prompt: prompt)}
+  end
+
   def handle_event("adw_toggle_local", _params, socket) do
     {:noreply, assign(socket, adw_local?: !socket.assigns.adw_local?)}
+  end
+
+  def handle_event("adw_set_harness", %{"harness" => h}, socket) do
+    {:noreply, assign(socket, adw_harness: nilify_blank(h))}
+  end
+
+  def handle_event("adw_set_step_prompt", %{"id" => id, "value" => v}, socket) do
+    id = String.to_integer(id)
+    prompt = if String.trim(v) == "", do: nil, else: v
+
+    steps =
+      Enum.map(socket.assigns.adw_steps, fn s ->
+        if s.id == id, do: %{s | prompt: prompt}, else: s
+      end)
+
+    {:noreply, assign(socket, adw_steps: steps)}
   end
 
   def handle_event("run_adw_builder", _params, socket) do
@@ -1628,6 +1666,108 @@ defmodule RepoBuilderWeb.ConsoleLive do
         |> String.replace(" ", "-")
 
       {:noreply, launch_adw_builder(steps, name, harness, socket)}
+    end
+  end
+
+  # Persist the current build as a named combo: writes the JSON sidecar AND
+  # materializes adws/adw_<name>_iso.py (or _local_iso.py) via Combos.save/2, then
+  # re-seeds the combo list so a Load-combo dropdown stays current.
+  def handle_event("adw_save_combo", _params, socket) do
+    %{adw_name: name, adw_steps: steps, adw_local?: local?} = socket.assigns
+
+    cond do
+      String.trim(name) == "" ->
+        {:noreply, put_flash(socket, :error, "Name the combo before saving")}
+
+      steps == [] ->
+        {:noreply, put_flash(socket, :error, "Add at least one step before saving")}
+
+      true ->
+        working_dir = nilify_blank(socket.assigns.orchestrator_working_dir)
+
+        attrs = %{
+          name: name,
+          steps: Enum.map(steps, fn s -> {String.to_existing_atom(s.name), s[:prompt]} end),
+          flavor: if(local?, do: :local_iso, else: :iso),
+          spec: socket.assigns.adw_spec,
+          initial_prompt: socket.assigns.adw_prompt,
+          harness: nilify_blank(socket.assigns.adw_harness || "")
+        }
+
+        case Combos.save(attrs, working_dir) do
+          {:ok, combo} ->
+            socket =
+              socket
+              |> assign(adw_combos: Combos.list(working_dir))
+              |> put_flash(:info, "Saved combo + generated #{Path.basename(combo.script_path)}")
+
+            {:noreply, socket}
+
+          {:error, :exists} ->
+            {:noreply,
+             put_flash(socket, :error, "A script for that name already exists — pick a new name")}
+
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, "Could not save combo: #{inspect(reason)}")}
+        end
+    end
+  end
+
+  # Load-combo reuse: repopulate the builder (steps + flavor + spec + prompt + name)
+  # from a saved combo. A blank selection is a no-op that just clears the highlight.
+  def handle_event("adw_load_combo", %{"combo" => ""}, socket) do
+    {:noreply, assign(socket, adw_selected_combo: "")}
+  end
+
+  def handle_event("adw_load_combo", %{"combo" => name}, socket) do
+    working_dir = nilify_blank(socket.assigns.orchestrator_working_dir)
+
+    case Combos.fetch(name, working_dir) do
+      {:ok, combo} ->
+        steps =
+          combo.steps
+          |> Enum.with_index(1)
+          |> Enum.map(fn {{step_name, custom_prompt}, id} ->
+            %{id: id, name: Atom.to_string(step_name), expanded: false, prompt: custom_prompt}
+          end)
+
+        socket =
+          assign(socket,
+            adw_steps: steps,
+            adw_name: combo.name,
+            adw_local?: combo.flavor == :local_iso,
+            adw_spec: combo.spec || "",
+            adw_prompt: combo.initial_prompt || "",
+            adw_harness: combo.harness || "",
+            adw_selected_combo: combo.name
+          )
+
+        {:noreply, socket}
+
+      {:error, :not_found} ->
+        {:noreply, put_flash(socket, :error, "Combo not found: #{name}")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Could not load combo: #{inspect(reason)}")}
+    end
+  end
+
+  # Delete a saved combo's sidecar (the generated .py stays a normal discovered ADW),
+  # then re-seed the combo list so the dropdown stays fresh.
+  def handle_event("adw_delete_combo", %{"combo" => name}, socket) do
+    working_dir = nilify_blank(socket.assigns.orchestrator_working_dir)
+
+    case Combos.delete(name, working_dir) do
+      :ok ->
+        socket =
+          socket
+          |> assign(adw_combos: Combos.list(working_dir), adw_selected_combo: "")
+          |> put_flash(:info, "Deleted combo #{name}")
+
+        {:noreply, socket}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Could not delete combo: #{inspect(reason)}")}
     end
   end
 
@@ -2273,10 +2413,22 @@ defmodule RepoBuilderWeb.ConsoleLive do
   end
 
   defp launch_adw_builder(steps, name, harness, socket) do
+    spec = socket.assigns.adw_spec
+    initial_prompt = socket.assigns.adw_prompt
+
+    # Each builder step gets a REAL prompt_template from the canonical per-step map
+    # (shared with Catalog), so launched steps render against the typed prompt/spec
+    # instead of the empty-string default in `Step.from_map/1`.
     step_list =
       steps
       |> Enum.map(fn s ->
-        %{"name" => s.name, "harness" => harness, "on_success" => "done", "on_failure" => "abort"}
+        %{
+          "name" => s.name,
+          "harness" => harness,
+          "prompt_template" => s[:prompt] || Catalog.default_prompt_template(s.name),
+          "on_success" => "done",
+          "on_failure" => "abort"
+        }
       end)
       |> Enum.with_index()
       |> Enum.map(fn {step, i} ->
@@ -2284,23 +2436,44 @@ defmodule RepoBuilderWeb.ConsoleLive do
         if next, do: Map.put(step, "on_success", next.name), else: step
       end)
 
+    # Thread the spec + initial prompt into the run as artifacts so `Runner.render/2`
+    # resolves `{{input}}`/`{{spec}}`. Fall back to name-only when BOTH are blank,
+    # preserving today's behavior for empty launches.
+    inputs =
+      if blank?(initial_prompt) and blank?(spec) do
+        %{"input" => name}
+      else
+        %{"input" => initial_prompt, "spec" => spec}
+      end
+
     with {:ok, wf} <-
            Workflows.create_workflow(%{
              name: "#{name}-#{System.unique_integer([:positive])}",
              type: "custom",
              steps: step_list
            }),
-         {:ok, _run_id, _pid} <- WorkflowEngine.start_workflow(wf, inputs: %{"input" => name}) do
+         {:ok, _run_id, _pid} <- WorkflowEngine.start_workflow(wf, inputs: inputs) do
       # Fire-and-forget Fast-tier title humanization (machine-looking name ⇒ friendly).
       _ = TitleHumanizer.maybe_humanize_async(wf, socket.assigns.orchestrator_id)
 
       socket
-      |> assign(adw_builder?: false, adw_steps: [], adw_name: "")
+      |> assign(
+        adw_builder?: false,
+        adw_steps: [],
+        adw_name: "",
+        adw_spec: "",
+        adw_prompt: "",
+        adw_harness: nil
+      )
       |> put_flash(:info, "ADW launched — check the ADWS tab")
     else
       {:error, reason} -> put_flash(socket, :error, "Could not launch ADW: #{inspect(reason)}")
     end
   end
+
+  @spec blank?(String.t() | nil) :: boolean()
+  defp blank?(nil), do: true
+  defp blank?(value) when is_binary(value), do: String.trim(value) == ""
 
   # Routing is derived from the agent-filter set: exactly one active filter ⇒ route the
   # prompt to that single agent (the manual single-agent run); zero or multiple active
@@ -3882,6 +4055,12 @@ defmodule RepoBuilderWeb.ConsoleLive do
         adw_steps={@adw_steps}
         adw_name={@adw_name}
         adw_local?={@adw_local?}
+        adw_spec={@adw_spec}
+        adw_prompt={@adw_prompt}
+        adw_combos={@adw_combos}
+        adw_selected_combo={@adw_selected_combo}
+        adw_harness={@adw_harness || ""}
+        harness_names={@harness_names}
         agents={@agents}
         statuses={@statuses}
       />
@@ -4144,7 +4323,24 @@ defmodule RepoBuilderWeb.ConsoleLive do
       key = to_string(row.agent_key)
       (key == run_id or String.starts_with?(key, prefix)) and category_pass?(row, active)
     end)
-    |> Enum.group_by(& &1.step)
+    |> Enum.group_by(&step_key(to_string(&1.agent_key), run_id, &1.step))
+  end
+
+  # Derive a row's step from its `"wf-<run_id>-<step>"` agent key when present, so both
+  # the live-broadcast path and the backfilled path (`log_to_row/4` synthesizes
+  # `agent_key = log.agent_id || log.session_id`, which for workflow-step rows is the
+  # `"wf-<run_id>-<step>"` `session_id` since `agent_id` is nil) group under the named
+  # step box — independent of whether the event payload carries `adw_step`. Non-`wf-`
+  # keys (orchestrator/Python-ADW rows) fall back to the row's own `:step`.
+  @spec step_key(String.t(), Ecto.UUID.t(), String.t()) :: String.t()
+  defp step_key(agent_key, run_id, fallback_step) do
+    prefix = "wf-#{run_id}-"
+
+    if String.starts_with?(agent_key, prefix) do
+      String.replace_prefix(agent_key, prefix, "")
+    else
+      fallback_step
+    end
   end
 
   @spec counter(map(), String.t(), atom()) :: non_neg_integer()

@@ -720,3 +720,328 @@ def create_and_implement_patch(
     )
 
     return patch_file_path, implement_response
+
+
+# ---------------------------------------------------------------------------
+# Generalized local-workflow runner (RepoBuilder.Adw.Scaffold `_local_iso` twin)
+# ---------------------------------------------------------------------------
+#
+# Every generated `_local_iso` combo (see RepoBuilder.Adw.Scaffold) is a thin
+# monolith that reads a single `<adw-id>` from argv and delegates the actual
+# step-threading here. This helper generalizes the body of
+# `adws/adw_plan_build_local_iso.py` to an ARBITRARY, ordered step list so those
+# generated scripts run correctly against the single-`<adw-id>` + `run.json`
+# local launch contract (one worktree, prompt from the run record, no chaining
+# of positional issue numbers). Behavior for the plan+build recipe is unchanged.
+
+LOCAL_ISSUE_CLASS = "/feature"  # prompt-driven local runs always plan through /feature
+
+
+def _local_narrate(adw_id: str, message: str, agent_name: str = "ops") -> None:
+    """Workflow narration to the event stream (the issue-comment twin)."""
+    from adw_modules.observability import emit_event
+
+    emit_event(
+        adw_id,
+        "workflow",
+        "progress",
+        payload={"message": message},
+        agent_name=agent_name,
+        summary=message,
+    )
+
+
+def _local_fail(adw_id: str, step: Optional[str], message: str, logger) -> None:
+    """Record failure on the run + events, then exit 1."""
+    from adw_modules import local_ops
+
+    if logger:
+        logger.error(message)
+    _local_narrate(adw_id, f"❌ {message}")
+    local_ops.update_run(
+        adw_id, status=local_ops.FAILED, error_message=message, error_step=step
+    )
+    import sys
+
+    sys.exit(1)
+
+
+def _local_branch_name(issue: GitHubIssue, adw_id: str) -> str:
+    """Deterministic branch name in the canonical structure — no agent call."""
+    slug = "".join(c if c.isalnum() else "-" for c in issue.title.lower()).strip("-")
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return f"feature-issue-{issue.number}-adw-{adw_id}-{slug[:40].rstrip('-')}"
+
+
+def _local_find_spec_fallback(
+    worktree_path: str, issue_number: int, adw_id: str
+) -> Optional[str]:
+    """Newest specs/issue-{n}-adw-{id}*.md by mtime (Output Contract fallback)."""
+    pattern = os.path.join(
+        worktree_path, "specs", f"issue-{issue_number}-adw-{adw_id}*.md"
+    )
+    candidates = glob.glob(pattern)
+    if not candidates:
+        return None
+    return max(candidates, key=os.path.getmtime)
+
+
+def _local_setup_worktree(adw_id, issue, state, logger):
+    """Create (or reuse) the worktree + ports + branch ONCE. Returns
+    (worktree_path, branch_name, backend_port, frontend_port)."""
+    from adw_modules.worktree_ops import (
+        create_worktree,
+        find_next_available_ports,
+        get_ports_for_adw,
+        is_port_available,
+        setup_worktree_environment,
+        validate_worktree,
+    )
+
+    valid, _ = validate_worktree(adw_id, state)
+    if valid:
+        return (
+            state.get("worktree_path"),
+            state.get("branch_name"),
+            state.get("backend_port"),
+            state.get("frontend_port"),
+        )
+
+    backend_port, frontend_port = get_ports_for_adw(adw_id)
+    if not (is_port_available(backend_port) and is_port_available(frontend_port)):
+        backend_port, frontend_port = find_next_available_ports(adw_id)
+    state.update(backend_port=backend_port, frontend_port=frontend_port)
+
+    branch_name = _local_branch_name(issue, adw_id)
+    state.update(branch_name=branch_name)
+    state.save(state.get("adw_id") or adw_id)
+
+    worktree_path, error = create_worktree(adw_id, branch_name, logger)
+    if error:
+        _local_fail(adw_id, "plan", f"Error creating worktree: {error}", logger)
+
+    state.update(worktree_path=worktree_path)
+    state.save(state.get("adw_id") or adw_id)
+    setup_worktree_environment(worktree_path, backend_port, frontend_port, logger)
+    return worktree_path, branch_name, backend_port, frontend_port
+
+
+def run_local_workflow(adw_id: str, steps: list, logger) -> None:
+    """Run an ordered `steps` list against the single-`<adw-id>` + run.json local
+    contract, in ONE isolated worktree, narrating progress via emit_event.
+
+    Generalized from `adw_plan_build_local_iso.py`: it loads + validates the run
+    record, synthesizes a local issue, sets up the worktree/branch/ports once,
+    then iterates the steps running the correct inline op per step:
+
+        plan     -> build_plan (/feature)      test     -> run_tests (/test)
+        build    -> implement_plan (/implement) review   -> run_review (/review)
+        patch    -> create_and_implement_patch  document -> generate_documentation
+        ship     -> commit + best-effort PR
+
+    The worktree is committed once after the implementing steps (mirroring the
+    shipped plan+build composite). Faithful to the existing local composites so
+    already-shipping recipes behave identically.
+    """
+    import time
+    from adw_modules import local_ops
+    from adw_modules.git_ops import commit_changes
+
+    run = local_ops.load_run(adw_id)
+    if run is None:
+        _local_narrate(adw_id, f"❌ No run record at agents/{adw_id}/run.json")
+        logger.error(f"Missing or corrupt run record for {adw_id}")
+        import sys
+
+        sys.exit(1)
+
+    prompt = run.get("input_data", {}).get("prompt")
+    if not prompt or not str(prompt).strip():
+        _local_fail(adw_id, None, "Run record has no input_data.prompt", logger)
+
+    normalized = [str(s).strip().lower() for s in steps if str(s).strip()]
+    first_step = normalized[0] if normalized else None
+
+    local_ops.update_run(
+        adw_id, status=local_ops.IN_PROGRESS, current_step=first_step
+    )
+    _local_narrate(adw_id, f"✅ Starting local workflow ({' + '.join(normalized)})")
+
+    # Synthesize the local issue (numeric id keeps spec/branch conventions intact).
+    issue = local_ops.synthesize_issue(run)
+    logger.info(f"Synthesized local issue #{issue.number}: {issue.title}")
+
+    state = ADWState.load(adw_id, logger) or ADWState(adw_id)
+    state.update(
+        adw_id=adw_id, issue_number=str(issue.number), issue_class=LOCAL_ISSUE_CLASS
+    )
+    model = run.get("input_data", {}).get("model")
+    state.update(model_set="heavy" if model in ("heavy", "opus") else "base")
+    state.append_adw_id(adw_id)
+    state.save(adw_id)
+
+    worktree_path, branch_name, backend_port, frontend_port = _local_setup_worktree(
+        adw_id, issue, state, logger
+    )
+    local_ops.update_run(
+        adw_id, output={"branch": branch_name, "worktree": worktree_path}
+    )
+    _local_narrate(
+        adw_id,
+        f"✅ Worktree ready: {worktree_path} (branch {branch_name}, "
+        f"ports {backend_port}/{frontend_port})",
+    )
+
+    spec_file = None
+    completed = 0
+    did_change = False
+
+    for step in normalized:
+        local_ops.step_start(adw_id, step, summary=f"running {step}")
+        step_t0 = time.monotonic()
+
+        if step == "plan":
+            resp = build_plan(
+                issue, LOCAL_ISSUE_CLASS, adw_id, logger, working_dir=worktree_path
+            )
+            if not resp.success:
+                local_ops.step_end(adw_id, step, "failed")
+                _local_fail(adw_id, step, f"Error building plan: {resp.output}", logger)
+
+            spec_file = resp.output.strip().strip("`")
+            spec_abs = (
+                spec_file
+                if os.path.isabs(spec_file)
+                else os.path.join(worktree_path, spec_file)
+            )
+            if not spec_file or not os.path.exists(spec_abs):
+                fallback = _local_find_spec_fallback(
+                    worktree_path, issue.number, adw_id
+                )
+                if not fallback:
+                    local_ops.step_end(adw_id, step, "failed")
+                    _local_fail(
+                        adw_id,
+                        step,
+                        f"Planner returned no usable spec path ({spec_file!r})",
+                        logger,
+                    )
+                spec_file = os.path.relpath(fallback, worktree_path)
+
+            state.update(plan_file=spec_file)
+            state.save(adw_id)
+            local_ops.update_run(adw_id, output={"spec_file": spec_file})
+            _local_narrate(adw_id, f"✅ Plan created: {spec_file}", AGENT_PLANNER)
+
+        elif step == "build":
+            if not spec_file:
+                spec_file = _local_find_spec_fallback(
+                    worktree_path, issue.number, adw_id
+                )
+            if not spec_file:
+                local_ops.step_end(adw_id, step, "failed")
+                _local_fail(adw_id, step, "No spec file to implement", logger)
+
+            resp = implement_plan(spec_file, adw_id, logger, working_dir=worktree_path)
+            if not resp.success:
+                local_ops.step_end(adw_id, step, "failed")
+                _local_fail(
+                    adw_id, step, f"Error implementing plan: {resp.output}", logger
+                )
+            did_change = True
+            _local_narrate(adw_id, "✅ Implementation complete", AGENT_IMPLEMENTOR)
+
+        elif step == "patch":
+            _patch_file, resp = create_and_implement_patch(
+                adw_id,
+                prompt,
+                logger,
+                AGENT_PLANNER,
+                AGENT_IMPLEMENTOR,
+                spec_path=spec_file,
+                working_dir=worktree_path,
+            )
+            if not resp.success:
+                local_ops.step_end(adw_id, step, "failed")
+                _local_fail(adw_id, step, f"Error patching: {resp.output}", logger)
+            did_change = True
+            _local_narrate(adw_id, "✅ Patch applied", AGENT_IMPLEMENTOR)
+
+        elif step == "test":
+            from adw_test_iso import run_tests
+
+            resp = run_tests(adw_id, logger, working_dir=worktree_path)
+            if not resp.success:
+                local_ops.step_end(adw_id, step, "failed")
+                _local_fail(adw_id, step, f"Tests failed: {resp.output}", logger)
+            _local_narrate(adw_id, "✅ Tests complete")
+
+        elif step == "review":
+            from adw_review_iso import run_review
+
+            resp = run_review(adw_id, logger, working_dir=worktree_path)
+            if not resp.success:
+                local_ops.step_end(adw_id, step, "failed")
+                _local_fail(adw_id, step, f"Review failed: {resp.output}", logger)
+            _local_narrate(adw_id, "✅ Review complete")
+
+        elif step == "document":
+            from adw_document_iso import generate_documentation
+
+            resp = generate_documentation(adw_id, logger, working_dir=worktree_path)
+            if not resp.success:
+                local_ops.step_end(adw_id, step, "failed")
+                _local_fail(adw_id, step, f"Docs failed: {resp.output}", logger)
+            did_change = True
+            _local_narrate(adw_id, "✅ Documentation complete")
+
+        elif step == "ship":
+            # Local ship = commit whatever is pending (push/PR stay optional and
+            # are handled by the GitHub composites, keeping the default offline).
+            _local_narrate(adw_id, "✅ Ship (local commit only)")
+
+        else:
+            local_ops.step_end(adw_id, step, "failed")
+            _local_fail(adw_id, step, f"Unknown step: {step}", logger)
+
+        completed += 1
+        local_ops.step_end(
+            adw_id,
+            step,
+            "completed",
+            duration_ms=int((time.monotonic() - step_t0) * 1000),
+        )
+        local_ops.update_run(adw_id, completed_steps=completed)
+
+    # Commit once in the worktree if any step changed files (no push — offline).
+    commit_sha = None
+    if did_change:
+        commit_msg, error = create_commit(
+            AGENT_IMPLEMENTOR, issue, LOCAL_ISSUE_CLASS, adw_id, logger, worktree_path
+        )
+        if error:
+            _local_fail(adw_id, "ship", f"Error creating commit message: {error}", logger)
+
+        success, error = commit_changes(commit_msg, cwd=worktree_path)
+        if not success:
+            _local_fail(adw_id, "ship", f"Error committing changes: {error}", logger)
+
+        rev = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            cwd=worktree_path,
+        )
+        if rev.returncode == 0:
+            commit_sha = rev.stdout.strip()
+
+    state.save(adw_id)
+    local_ops.update_run(
+        adw_id,
+        status=local_ops.COMPLETED,
+        completed_steps=completed,
+        output={"commit": commit_sha},
+    )
+    _local_narrate(adw_id, "✅ Local workflow completed")
+    logger.info("Local workflow completed successfully")
