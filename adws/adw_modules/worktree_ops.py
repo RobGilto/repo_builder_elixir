@@ -52,11 +52,18 @@ def create_worktree(adw_id: str, branch_name: str, logger: logging.Logger) -> Tu
     if fetch_result.returncode != 0:
         logger.warning(f"Failed to fetch from origin: {fetch_result.stderr}")
 
-    # Create the worktree, branching from origin/main when it exists. Repos
-    # without a remote (fresh greenfield scaffolds) fall back to the local
-    # trunk: main first, then master (adopted brownfield repos).
+    # Create the worktree, branching from the detected trunk (origin/<trunk>
+    # when a remote exists, else the local trunk). The legacy main/master
+    # literals stay last for backward compatibility with repos whose trunk
+    # detection degrades (fresh greenfield scaffolds, adopted brownfield repos).
+    from adw_modules.git_ops import get_trunk_branch
+
+    trunk = get_trunk_branch(cwd=project_root)
+    bases = list(
+        dict.fromkeys([f"origin/{trunk}", trunk, "main", "master"])
+    )
     result = None
-    for base in ("origin/main", "main", "master"):
+    for base in bases:
         cmd = ["git", "worktree", "add", "-b", branch_name, worktree_path, base]
         result = subprocess.run(cmd, capture_output=True, text=True, cwd=project_root)
         if result.returncode == 0:

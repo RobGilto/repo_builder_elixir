@@ -37,7 +37,10 @@ Run record schema (`adw.run/1`) — one JSON object per file:
             "commit": str | null
         },
         "error_message": str | null,
-        "error_step": str | null
+        "error_step": str | null,
+        "merge_status": "unmerged" | "merged" | "failed",
+        "merged_sha": str | null,
+        "merge_error": str | null
     }
 
 Status/timing semantics (tac-14 `update_adw_status` parity): transitioning to
@@ -72,6 +75,12 @@ FAILED = "failed"
 CANCELLED = "cancelled"
 TERMINAL_STATUSES = {COMPLETED, FAILED, CANCELLED}
 VALID_STATUSES = {PENDING, IN_PROGRESS} | TERMINAL_STATUSES
+
+# Merge outcome of the ship step (trunk-aware merge, see merge_ops.py)
+MERGE_UNMERGED = "unmerged"
+MERGE_MERGED = "merged"
+MERGE_FAILED = "failed"
+VALID_MERGE_STATUSES = {MERGE_UNMERGED, MERGE_MERGED, MERGE_FAILED}
 
 # Synthesized local issue numbers live far above any plausible real issue so
 # the two namespaces can never collide in spec filenames or branch globs.
@@ -133,6 +142,9 @@ def create_run(
         },
         "error_message": None,
         "error_step": None,
+        "merge_status": MERGE_UNMERGED,
+        "merged_sha": None,
+        "merge_error": None,
     }
     save_run(run, working_dir=working_dir)
     return run
@@ -237,6 +249,45 @@ def update_run(
     if output:
         run.setdefault("output_data", {}).update(output)
         changed["output_data"] = output
+
+    save_run(run, working_dir=working_dir)
+    emit_event(
+        adw_id,
+        "workflow",
+        "run_updated",
+        payload=changed,
+        working_dir=working_dir,
+    )
+    return run
+
+
+def update_merge_result(
+    adw_id: str,
+    merge_status: str,
+    merged_sha: Optional[str] = None,
+    merge_error: Optional[str] = None,
+    working_dir: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Record the ship step's merge outcome onto the run record, then persist.
+
+    Returns the updated run dict, or None when the record can't be loaded.
+    Emits a `run_updated` event (fail-silent) with the changed fields.
+    """
+    if merge_status not in VALID_MERGE_STATUSES:
+        raise ValueError(f"Invalid merge status: {merge_status!r}")
+
+    run = load_run(adw_id, working_dir=working_dir)
+    if run is None:
+        return None
+
+    changed: Dict[str, Any] = {"merge_status": merge_status}
+    run["merge_status"] = merge_status
+    if merged_sha is not None:
+        run["merged_sha"] = merged_sha
+        changed["merged_sha"] = merged_sha
+    if merge_error is not None:
+        run["merge_error"] = merge_error
+        changed["merge_error"] = merge_error
 
     save_run(run, working_dir=working_dir)
     emit_event(

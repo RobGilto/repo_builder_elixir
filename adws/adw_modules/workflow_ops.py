@@ -599,10 +599,13 @@ def find_spec_file(state: ADWState, logger: logging.Logger) -> Optional[str]:
             logger.info(f"Using spec file from state: {spec_file}")
             return spec_file
 
-    # Otherwise, try to find it from git diff
+    # Otherwise, try to find it from git diff (against the detected trunk)
     logger.info("Looking for spec file in git diff")
+    from adw_modules.git_ops import get_trunk_branch
+
+    trunk = get_trunk_branch(cwd=worktree_path)
     result = subprocess.run(
-        ["git", "diff", "origin/main", "--name-only"],
+        ["git", "diff", f"origin/{trunk}", "--name-only"],
         capture_output=True,
         text=True,
         cwd=worktree_path,
@@ -838,7 +841,7 @@ def run_local_workflow(adw_id: str, steps: list, logger) -> None:
         plan     -> build_plan (/feature)      test     -> run_tests (/test)
         build    -> implement_plan (/implement) review   -> run_review (/review)
         patch    -> create_and_implement_patch  document -> generate_documentation
-        ship     -> commit + best-effort PR
+        ship     -> commit + merge into the detected trunk (merge_ops)
 
     The worktree is committed once after the implementing steps (mirroring the
     shipped plan+build composite). Faithful to the existing local composites so
@@ -896,6 +899,37 @@ def run_local_workflow(adw_id: str, steps: list, logger) -> None:
     spec_file = None
     completed = 0
     did_change = False
+    commit_sha = None
+
+    def _commit_pending() -> None:
+        """Commit worktree changes once. Ship needs this BEFORE merging so the
+        merge captures every implementing step's output; otherwise it runs
+        after the loop (mirroring the shipped plan+build composite)."""
+        nonlocal did_change, commit_sha
+        if not did_change:
+            return
+
+        commit_msg, error = create_commit(
+            AGENT_IMPLEMENTOR, issue, LOCAL_ISSUE_CLASS, adw_id, logger, worktree_path
+        )
+        if error:
+            _local_fail(
+                adw_id, "ship", f"Error creating commit message: {error}", logger
+            )
+
+        success, error = commit_changes(commit_msg, cwd=worktree_path)
+        if not success:
+            _local_fail(adw_id, "ship", f"Error committing changes: {error}", logger)
+
+        rev = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            cwd=worktree_path,
+        )
+        if rev.returncode == 0:
+            commit_sha = rev.stdout.strip()
+        did_change = False
 
     for step in normalized:
         local_ops.step_start(adw_id, step, summary=f"running {step}")
@@ -997,9 +1031,32 @@ def run_local_workflow(adw_id: str, steps: list, logger) -> None:
             _local_narrate(adw_id, "✅ Documentation complete")
 
         elif step == "ship":
-            # Local ship = commit whatever is pending (push/PR stay optional and
-            # are handled by the GitHub composites, keeping the default offline).
-            _local_narrate(adw_id, "✅ Ship (local commit only)")
+            # Real ship: commit whatever is pending, then merge the worktree
+            # branch into the repo's detected trunk (local merge; push only
+            # when an origin remote exists — see adw_modules/merge_ops.py).
+            from adw_modules import merge_ops
+
+            _commit_pending()
+            repo_root = os.path.dirname(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            )
+            ok, merged_sha, merge_error = merge_ops.merge_branch_into_trunk(
+                branch_name, cwd=repo_root, logger=logger
+            )
+            if not ok:
+                local_ops.update_merge_result(
+                    adw_id, local_ops.MERGE_FAILED, merge_error=merge_error
+                )
+                local_ops.step_end(adw_id, step, "failed")
+                _local_fail(
+                    adw_id, step, f"Merge to trunk failed: {merge_error}", logger
+                )
+            local_ops.update_merge_result(
+                adw_id, local_ops.MERGE_MERGED, merged_sha=merged_sha
+            )
+            _local_narrate(
+                adw_id, f"✅ Ship: merged {branch_name} into trunk @ {merged_sha}"
+            )
 
         else:
             local_ops.step_end(adw_id, step, "failed")
@@ -1015,26 +1072,8 @@ def run_local_workflow(adw_id: str, steps: list, logger) -> None:
         local_ops.update_run(adw_id, completed_steps=completed)
 
     # Commit once in the worktree if any step changed files (no push — offline).
-    commit_sha = None
-    if did_change:
-        commit_msg, error = create_commit(
-            AGENT_IMPLEMENTOR, issue, LOCAL_ISSUE_CLASS, adw_id, logger, worktree_path
-        )
-        if error:
-            _local_fail(adw_id, "ship", f"Error creating commit message: {error}", logger)
-
-        success, error = commit_changes(commit_msg, cwd=worktree_path)
-        if not success:
-            _local_fail(adw_id, "ship", f"Error committing changes: {error}", logger)
-
-        rev = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            cwd=worktree_path,
-        )
-        if rev.returncode == 0:
-            commit_sha = rev.stdout.strip()
+    # A ship step already committed via _commit_pending(); this is a no-op then.
+    _commit_pending()
 
     state.save(adw_id)
     local_ops.update_run(

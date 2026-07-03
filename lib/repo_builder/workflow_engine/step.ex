@@ -11,9 +11,16 @@ defmodule RepoBuilder.WorkflowEngine.Step do
 
   @type status :: :pending | :running | :succeeded | :failed | :cancelled
   @type edge :: String.t() | :done | :abort
+  @typedoc """
+  How the step executes. `:harness` (default) delegates to a live agent session;
+  `:merge` is a deterministic Elixir-native step (no session, no LLM) that lands the
+  run's worktree branch on the repo trunk (issue-adw-non-iso-merge).
+  """
+  @type kind :: :harness | :merge
 
   typedstruct enforce: true do
     field :name, String.t()
+    field :kind, kind(), default: :harness
     field :harness, String.t()
     field :provider, String.t(), enforce: false
     field :model, String.t(), enforce: false
@@ -30,6 +37,7 @@ defmodule RepoBuilder.WorkflowEngine.Step do
   def from_map(map) do
     %__MODULE__{
       name: Map.fetch!(map, "name"),
+      kind: parse_kind(Map.get(map, "kind")),
       harness: Map.fetch!(map, "harness"),
       provider: Map.get(map, "provider"),
       model: Map.get(map, "model"),
@@ -40,6 +48,9 @@ defmodule RepoBuilder.WorkflowEngine.Step do
       outputs: Map.get(map, "outputs", [])
     }
   end
+
+  defp parse_kind("merge"), do: :merge
+  defp parse_kind(_other), do: :harness
 
   defp parse_edge(nil, default), do: default
   defp parse_edge("done", _default), do: :done

@@ -90,6 +90,22 @@ defmodule RepoBuilder.Workflows do
   end
 
   @doc """
+  Record the terminal merge step's outcome (issue-adw-non-iso-merge) — `:merged` with
+  the trunk `merged_sha`, or `:failed` with the git `merge_error` output.
+  """
+  @spec record_merge(
+          WorkflowRun.t(),
+          %{
+            required(:merge_status) => WorkflowRun.merge_status(),
+            optional(:merged_sha) => String.t() | nil,
+            optional(:merge_error) => String.t() | nil
+          }
+        ) :: {:ok, WorkflowRun.t()} | {:error, Ecto.Changeset.t()}
+  def record_merge(%WorkflowRun{} = run, attrs) when is_map(attrs) do
+    update_run(run, Map.take(attrs, [:merge_status, :merged_sha, :merge_error]))
+  end
+
+  @doc """
   Record the git worktree a run was isolated in (agentic-layer adaptor, Phase 4) —
   the path and the reviewable branch — for the UI's PR/merge handoff.
   """

@@ -190,35 +190,35 @@
     <p>Status markers: <code>[]</code> idle · <code>[wip]</code> in progress · <code>[x]</code> complete · <code>[f]</code> failed. All start as <code>[]</code>; the Build Plan workflow updates them as it works.</p>
 
     <div class="phase">
-      <h3><code class="status">[wip]</code> Phase 1: Repository Hygiene — land the WIP, evict the artifacts <span class="tag p0">P0 · urgent</span></h3>
+      <h3><code class="status">[x]</code> Phase 1: Repository Hygiene — land the WIP, evict the artifacts <span class="tag p0">P0 · urgent</span></h3>
       <p>Nothing else in this roadmap is safe while ≥4 features sit interleaved and uncommitted in one dirty tree with an unhistoried migration. This phase converts the working tree into reviewable, feature-scoped commits and stops process artifacts from accumulating at the root.</p>
 
       <h4>1.1 Slice and commit the dirty tree by feature</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Commit slice A — ADW builder combos + scaffold: <code>lib/repo_builder/adw/{combo,combos,scaffold}.ex</code>, their tests, the golden fixture, and the related <code>console_live.ex</code>/<code>console_components.ex</code> hunks (per <code>ph2_status.md</code> the gate was already green for this slice).</li>
-        <li><code class="status">[]</code> Commit slice B — custom-ADW per-step picker: <code>workflow_engine/{catalog,runner}.ex</code>, <code>harness/claude.ex</code>, <code>test_adw_builder_custom_adw_test.exs</code>, and its spec.</li>
-        <li><code class="status">[]</code> Commit slice C — custom-ADW observability groundwork: <code>logs*</code>, <code>session/server.ex</code>, <code>orchestrator/context_window.ex</code>, the <code>20260703111051</code> migration, and the observability tests/spec.</li>
-        <li><code class="status">[]</code> Commit slice D — remaining specs, <code>pricing_seeds.exs</code>, <code>adws/adw_modules/workflow_ops.py</code>, config.</li>
-        <li><code class="status">[]</code> After each slice: run the green gate before committing (a slice that cannot pass alone gets merged into the slice it depends on).</li>
+        <li><code class="status">[x]</code> Commit slice A — ADW builder combos + scaffold: <code>lib/repo_builder/adw/{combo,combos,scaffold}.ex</code>, their tests, the golden fixture, and the related <code>console_live.ex</code>/<code>console_components.ex</code> hunks (per <code>ph2_status.md</code> the gate was already green for this slice).</li>
+        <li><code class="status">[x]</code> Commit slice B — custom-ADW per-step picker: <code>workflow_engine/{catalog,runner}.ex</code>, <code>harness/claude.ex</code>, <code>test_adw_builder_custom_adw_test.exs</code>, and its spec.</li>
+        <li><code class="status">[x]</code> Commit slice C — custom-ADW observability groundwork: <code>logs*</code>, <code>session/server.ex</code>, <code>orchestrator/context_window.ex</code>, the <code>20260703111051</code> migration, and the observability tests/spec.</li>
+        <li><code class="status">[x]</code> Commit slice D — remaining specs, <code>pricing_seeds.exs</code>, <code>adws/adw_modules/workflow_ops.py</code>, config.</li>
+        <li><code class="status">[x]</code> After each slice: run the green gate before committing (a slice that cannot pass alone gets merged into the slice it depends on).</li>
       </ul>
 
       <h4>1.2 Evict process artifacts and harden .gitignore</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Delete or relocate to <code>ai_docs/worker-reports/</code>: <code>ph1_review.md</code>, <code>ph2_status.md</code>; delete <code>erl_crash.dump</code>, <code>console-current-state.png</code>, <code>tmp_gate/</code> after confirming nothing references them.</li>
-        <li><code class="status">[]</code> Add to <code>.gitignore</code>: <code>erl_crash.dump</code>, <code>tmp_gate/</code>, <code>trees/</code>, <code>*.png</code> at root (or a named screenshots dir).</li>
-        <li><code class="status">[]</code> Create <code>docs/audit-2026-07.md</code> capturing this audit's findings table (from the Notes section) as the durable record.</li>
+        <li><code class="status">[x]</code> Delete or relocate to <code>ai_docs/worker-reports/</code>: <code>ph1_review.md</code>, <code>ph2_status.md</code>; delete <code>erl_crash.dump</code>, <code>console-current-state.png</code>, <code>tmp_gate/</code> after confirming nothing references them.</li>
+        <li><code class="status">[x]</code> Add to <code>.gitignore</code>: <code>erl_crash.dump</code>, <code>tmp_gate/</code>, <code>trees/</code>, <code>*.png</code> at root (or a named screenshots dir).</li>
+        <li><code class="status">[x]</code> Create <code>docs/audit-2026-07.md</code> capturing this audit's findings table (from the Notes section) as the durable record.</li>
       </ul>
 
       <h4>1.3 Docs stat re-sync</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Refresh README badges/claims: test count, module count, line count (use <code>/update</code> command if available).</li>
+        <li><code class="status">[x]</code> Refresh README badges/claims: test count, module count, line count (use <code>/update</code> command if available).</li>
       </ul>
 
       <h4>1.4 Testing Strategy</h4>
       <p>Pure hygiene phase — the proof is that the full green gate passes on every commit slice and the final tree is clean (<code>git status --porcelain</code> empty except intentional untracked dirs).</p>
       <ul class="checklist">
-        <li><code class="status">[]</code> <code>mix compile --warnings-as-errors &amp;&amp; mix format --check-formatted &amp;&amp; mix credo --strict &amp;&amp; mix test --warnings-as-errors &amp;&amp; mix dialyzer</code> — the five-command gate green on HEAD.</li>
-        <li><code class="status">[]</code> <code>git status --porcelain | wc -l</code> — returns 0.</li>
+        <li><code class="status">[x]</code> <code>mix compile --warnings-as-errors &amp;&amp; mix format --check-formatted &amp;&amp; mix credo --strict &amp;&amp; mix test --warnings-as-errors &amp;&amp; mix dialyzer</code> — the five-command gate green on HEAD.</li>
+        <li><code class="status">[x]</code> <code>git status --porcelain | wc -l</code> — returns 0.</li>
       </ul>
       <div class="loop">
         🔁 <strong>Do not exit this phase until every box above is checked.</strong>
@@ -227,18 +227,18 @@
     </div>
 
     <div class="phase">
-      <h3><code class="status">[]</code> Phase 2: Ship the in-flight feature specs <span class="tag p0">P0 · high</span></h3>
+      <h3><code class="status">[x]</code> Phase 2: Ship the in-flight feature specs <span class="tag p0">P0 · high</span></h3>
       <p>Three specs are written and partially built; finishing them closes the user-visible observability hole and completes the ADW-builder story before any refactor moves the ground under them.</p>
 
       <h4>2.1 Custom-ADW swimlane observability</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Implement <code>specs/issue-custom-adw-observability-…</code>: add the <code>workflow_run_id</code> persistence scope so custom-ADW step events write <code>agent_logs</code> rows (mirroring the agent/orchestrator scopes in <code>logs/writer.ex</code> and <code>session/server.ex</code>).</li>
-        <li><code class="status">[]</code> Verify reconnect-safety: step squares rehydrate from <code>agent_logs</code> after a LiveView remount (covered by <code>test_custom_adw_observability_test.exs</code>).</li>
+        <li><code class="status">[x]</code> Implement <code>specs/issue-custom-adw-observability-…</code>: add the <code>workflow_run_id</code> persistence scope so custom-ADW step events write <code>agent_logs</code> rows (mirroring the agent/orchestrator scopes in <code>logs/writer.ex</code> and <code>session/server.ex</code>).</li>
+        <li><code class="status">[x]</code> Verify reconnect-safety: step squares rehydrate from <code>agent_logs</code> after a LiveView remount (covered by <code>test_custom_adw_observability_test.exs</code>).</li>
       </ul>
 
       <h4>2.2 ADW builder Phase 3 — load/delete combos</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Add the load-combo dropdown + <code>adw_load_combo</code>/<code>adw_delete_combo</code> handlers deferred from <code>ph2_status.md</code>.</li>
+        <li><code class="status">[x]</code> Add the load-combo dropdown + <code>adw_load_combo</code>/<code>adw_delete_combo</code> handlers deferred from <code>ph2_status.md</code>.</li>
       </ul>
 
       <h4>2.3 Non-iso ADW merge-to-trunk</h4>

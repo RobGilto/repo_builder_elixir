@@ -62,13 +62,25 @@ defmodule RepoBuilder.WorkflowEngine.Runner do
     run = Keyword.fetch!(opts, :run)
     inputs = Keyword.get(opts, :inputs, %{})
 
+    isolation_mode = Keyword.get(opts, :isolation_mode)
+
+    # issue-adw-non-iso-merge: a worktree-isolated run gains a deterministic terminal
+    # `merge` step at launch time (steps are persisted isolation-agnostic at creation;
+    # isolation is a launch option). Direct-mode runs are untouched — already on trunk.
+    step_maps =
+      if isolation_mode == :worktree do
+        WorkflowEngine.Catalog.with_merge_step(workflow.steps)
+      else
+        workflow.steps
+      end
+
     state = %State{
       run: run,
-      steps: parse_steps(workflow.steps),
-      current_step: first_step_name(workflow.steps),
+      steps: parse_steps(step_maps),
+      current_step: first_step_name(step_maps),
       artifacts: stringify_keys(inputs),
       cwd: Keyword.get(opts, :cwd),
-      isolation_mode: Keyword.get(opts, :isolation_mode)
+      isolation_mode: isolation_mode
     }
 
     if state.current_step do
@@ -87,6 +99,21 @@ defmodule RepoBuilder.WorkflowEngine.Runner do
     # Per-step observability: mark this step running, then broadcast the lane + progress.
     run = WorkflowEngine.record_step_state(run, name, %{status: :running, started_at: now()})
     broadcast_lane(run, :running)
+
+    # Deterministic Elixir-native step kinds run in-process — no harness session, no
+    # budget check (no LLM spend). Today: `:merge` (issue-adw-non-iso-merge).
+    if step.kind == :merge do
+      run_merge_step(%{state | run: run}, name, step)
+    else
+      run_harness_step(%{state | run: run}, name, step)
+    end
+  end
+
+  @spec run_harness_step(State.t(), String.t(), Step.t()) ::
+          {:noreply, State.t()}
+          | {:noreply, State.t(), {:continue, :run_step}}
+          | {:stop, :normal, State.t()}
+  defp run_harness_step(%State{run: run} = state, name, step) do
     agent_id = WorkflowEngine.step_agent_id(run.id, name)
     :ok = Phoenix.PubSub.subscribe(@pubsub, "agent:#{agent_id}:events")
     state = %{state | run: run, session_agent_id: agent_id, text_buf: ""}
@@ -131,6 +158,49 @@ defmodule RepoBuilder.WorkflowEngine.Runner do
       {:error, reason} ->
         Logger.warning("workflow #{run.id} step #{name} could not start: #{inspect(reason)}")
         state = record_step(state, name, :failed, nil)
+        reply(advance(state, step.on_failure))
+    end
+  end
+
+  # The deterministic `merge` step (issue-adw-non-iso-merge): land the run's worktree
+  # branch on the repo trunk via `Worktree.merge/2`, persist the outcome onto
+  # `workflow_runs` (merge_status/merged_sha/merge_error) BEFORE advancing (§7's
+  # persist-then-advance contract), and follow the step's edges like any other step.
+  # A run without a resolvable worktree branch (direct mode, non-git repo) is a no-op
+  # success — it is already working on the trunk checkout, nothing to land.
+  @spec run_merge_step(State.t(), String.t(), Step.t()) ::
+          {:noreply, State.t(), {:continue, :run_step}} | {:stop, :normal, State.t()}
+  defp run_merge_step(%State{run: run, cwd: cwd} = state, name, step) do
+    branch = run.worktree_branch
+
+    result =
+      if state.isolation_mode == :worktree and is_binary(cwd) and is_binary(branch) and
+           Worktree.git_repo?(cwd) do
+        Worktree.merge(cwd, branch: branch)
+      else
+        :skip
+      end
+
+    case result do
+      {:ok, %{sha: sha, trunk: trunk}} ->
+        {:ok, updated} = Workflows.record_merge(run, %{merge_status: :merged, merged_sha: sha})
+        Logger.info("workflow #{run.id} merged #{branch} into #{trunk} @ #{sha}")
+        state = record_step(%{state | run: updated}, name, :succeeded, nil)
+        reply(advance(state, step.on_success))
+
+      :skip ->
+        state = record_step(state, name, :succeeded, nil)
+        reply(advance(state, step.on_success))
+
+      {:error, reason} ->
+        error =
+          if is_binary(reason), do: String.slice(reason, 0, 2_000), else: inspect(reason)
+
+        {:ok, updated} =
+          Workflows.record_merge(run, %{merge_status: :failed, merge_error: error})
+
+        Logger.warning("workflow #{run.id} merge of #{inspect(branch)} failed: #{error}")
+        state = record_step(%{state | run: updated}, name, :failed, nil)
         reply(advance(state, step.on_failure))
     end
   end

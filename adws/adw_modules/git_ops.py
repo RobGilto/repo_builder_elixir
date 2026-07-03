@@ -12,6 +12,58 @@ from typing import Optional, Tuple
 from adw_modules.github import get_repo_url, extract_repo_path, make_issue_comment
 
 
+def get_trunk_branch(cwd: Optional[str] = None) -> str:
+    """Detect the repository's trunk branch dynamically.
+
+    Fallback precedence:
+    1. `git symbolic-ref refs/remotes/origin/HEAD` (strip refs/remotes/origin/)
+    2. `git remote show origin` — the "HEAD branch:" line
+    3. `git branch --show-current` (no usable origin remote — offline/local repos)
+    4. "main" — deliberate degrade-to-historical-default, never a silent failure
+       (this literal is the only allowed hardcoded branch-name fallback).
+    """
+    # 1. symbolic-ref: cheap, offline, present when origin/HEAD is set locally
+    result = subprocess.run(
+        ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
+        capture_output=True,
+        text=True,
+        cwd=cwd,
+    )
+    if result.returncode == 0:
+        ref = result.stdout.strip()
+        prefix = "refs/remotes/origin/"
+        if ref.startswith(prefix) and ref[len(prefix):]:
+            return ref[len(prefix):]
+
+    # 2. remote show origin: queries the remote for its HEAD branch
+    result = subprocess.run(
+        ["git", "remote", "show", "origin"],
+        capture_output=True,
+        text=True,
+        cwd=cwd,
+    )
+    if result.returncode == 0:
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("HEAD branch:"):
+                branch = line.split(":", 1)[1].strip()
+                if branch and branch != "(unknown)":
+                    return branch
+
+    # 3. no usable origin remote: the currently checked-out branch
+    result = subprocess.run(
+        ["git", "branch", "--show-current"],
+        capture_output=True,
+        text=True,
+        cwd=cwd,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+
+    # 4. last resort: historical default
+    return "main"
+
+
 def get_current_branch(cwd: Optional[str] = None) -> str:
     """Get current git branch name."""
     result = subprocess.run(
@@ -255,16 +307,18 @@ def finalize_git_operations(
     """Standard git finalization: push branch and create/update PR."""
     branch_name = state.get("branch_name")
     if not branch_name:
-        # Fallback: use current git branch if not main
+        # Fallback: use current git branch if it is not the trunk
         current_branch = get_current_branch(cwd=cwd)
-        if current_branch and current_branch != "main":
+        trunk_branch = get_trunk_branch(cwd=cwd)
+        if current_branch and current_branch != trunk_branch:
             logger.warning(
                 f"No branch name in state, using current branch: {current_branch}"
             )
             branch_name = current_branch
         else:
             logger.error(
-                "No branch name in state and current branch is main, skipping git operations"
+                f"No branch name in state and current branch is the trunk "
+                f"({trunk_branch}), skipping git operations"
             )
             return
 

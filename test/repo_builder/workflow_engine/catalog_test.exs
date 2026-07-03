@@ -78,6 +78,24 @@ defmodule RepoBuilder.WorkflowEngine.CatalogTest do
     test "unknown type is {:error, :unknown_type}" do
       assert {:error, :unknown_type} = Catalog.steps("nope", "fake")
     end
+
+    test "with_merge_step/1 rewires done edges to a terminal merge step (worktree runs)" do
+      assert {:ok, steps} = Catalog.steps("plan_build_review_fix", "fake")
+      merged = Catalog.with_merge_step(steps)
+
+      merge = List.last(merged)
+      assert %{"name" => "merge", "kind" => "merge", "on_success" => "done"} = merge
+
+      # Every former success-terminal now routes through merge; failure edges untouched.
+      for step <- merged, step["name"] != "merge" do
+        refute step["on_success"] == "done"
+      end
+
+      assert Enum.find(merged, &(&1["name"] == "review"))["on_failure"] == "fix"
+
+      # Idempotent — applying twice adds nothing.
+      assert Catalog.with_merge_step(merged) == merged
+    end
   end
 
   defp step_names(steps), do: Enum.map(steps, & &1["name"])

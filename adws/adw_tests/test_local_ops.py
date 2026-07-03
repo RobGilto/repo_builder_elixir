@@ -30,7 +30,7 @@ RUN_FIELDS = {
     "schema", "adw_id", "workflow_type", "status", "current_step",
     "total_steps", "completed_steps", "created_at", "started_at",
     "completed_at", "duration_seconds", "input_data", "output_data",
-    "error_message", "error_step",
+    "error_message", "error_step", "merge_status", "merged_sha", "merge_error",
 }
 
 
@@ -61,6 +61,8 @@ def test_create_run_writes_full_schema(wd):
     assert run["input_data"]["prompt"] == "Build a hello endpoint"
     assert run["input_data"]["model"] == "sonnet"
     assert run["input_data"]["issue_number"] is None
+    assert run["merge_status"] == local_ops.MERGE_UNMERGED
+    assert run["merged_sha"] is None and run["merge_error"] is None
 
     path = local_ops.run_path("aaaa1111", working_dir=wd)
     assert path == os.path.join(wd, "agents", "aaaa1111", "run.json")
@@ -162,6 +164,44 @@ def test_update_run_emits_run_updated_event_with_changed_fields(wd):
     assert updated[0]["payload"]["status"] == "in_progress"
     assert updated[0]["payload"]["current_step"] == "plan"
     assert "started_at" in updated[0]["payload"]
+
+
+def test_update_merge_result_records_merged_sha(wd):
+    local_ops.create_run("aaaa9999", "ship_local", "p", working_dir=wd)
+    run = local_ops.update_merge_result(
+        "aaaa9999", local_ops.MERGE_MERGED, merged_sha="abc123", working_dir=wd
+    )
+    assert run["merge_status"] == "merged"
+    assert run["merged_sha"] == "abc123"
+    assert run["merge_error"] is None
+    events = obs_mod.read_events("aaaa9999", working_dir=wd)
+    updated = [e for e in events if e["event_type"] == "run_updated"]
+    assert updated[-1]["payload"] == {"merge_status": "merged", "merged_sha": "abc123"}
+
+
+def test_update_merge_result_records_failure(wd):
+    local_ops.create_run("bbbb9999", "ship_local", "p", working_dir=wd)
+    run = local_ops.update_merge_result(
+        "bbbb9999", local_ops.MERGE_FAILED, merge_error="conflict", working_dir=wd
+    )
+    assert run["merge_status"] == "failed"
+    assert run["merged_sha"] is None
+    assert run["merge_error"] == "conflict"
+
+
+def test_update_merge_result_invalid_status_raises(wd):
+    local_ops.create_run("cccc9999", "ship_local", "p", working_dir=wd)
+    with pytest.raises(ValueError):
+        local_ops.update_merge_result("cccc9999", "exploded", working_dir=wd)
+
+
+def test_update_merge_result_missing_record_returns_none(wd):
+    assert (
+        local_ops.update_merge_result(
+            "nope0000", local_ops.MERGE_MERGED, working_dir=wd
+        )
+        is None
+    )
 
 
 # --------------------------------------------------------------------------- #

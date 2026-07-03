@@ -10,6 +10,8 @@ defmodule RepoBuilder.Workflows.WorkflowRun do
   import Ecto.Changeset
 
   @type status :: :queued | :running | :succeeded | :failed | :cancelled
+  @typedoc "Terminal merge-step outcome (issue-adw-non-iso-merge); nil = no merge step ran."
+  @type merge_status :: :merged | :failed
 
   @type t :: %__MODULE__{
           id: Ecto.UUID.t() | nil,
@@ -18,6 +20,9 @@ defmodule RepoBuilder.Workflows.WorkflowRun do
           project_id: Ecto.UUID.t() | nil,
           worktree_path: String.t() | nil,
           worktree_branch: String.t() | nil,
+          merge_status: merge_status() | nil,
+          merged_sha: String.t() | nil,
+          merge_error: String.t() | nil,
           status: status() | nil,
           current_step: String.t() | nil,
           artifacts: map(),
@@ -41,6 +46,11 @@ defmodule RepoBuilder.Workflows.WorkflowRun do
     # reviewable branch (`adw/<run_id>`). Both nil for :direct-isolation runs.
     field :worktree_path, :string
     field :worktree_branch, :string
+    # Terminal merge-step outcome (issue-adw-non-iso-merge): NULL until a merge step
+    # runs; `merged` (+ merged_sha) or `failed` (+ merge_error) afterwards.
+    field :merge_status, Ecto.Enum, values: [:merged, :failed]
+    field :merged_sha, :string
+    field :merge_error, :string
     field :status, Ecto.Enum, values: @statuses, default: :queued
     field :current_step, :string
     field :artifacts, :map, default: %{}
@@ -64,6 +74,9 @@ defmodule RepoBuilder.Workflows.WorkflowRun do
       :project_id,
       :worktree_path,
       :worktree_branch,
+      :merge_status,
+      :merged_sha,
+      :merge_error,
       :status,
       :current_step,
       :artifacts,

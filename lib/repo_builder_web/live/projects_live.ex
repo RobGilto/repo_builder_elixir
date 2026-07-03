@@ -550,6 +550,17 @@ defmodule RepoBuilderWeb.ProjectsLive do
               <span>{run.status}</span>
               <span :if={run.worktree_branch} class="text-xs text-cyan-400">
                 {run.worktree_branch}
+                <span
+                  :if={run.merge_status == :merged}
+                  class="text-emerald-400"
+                  title={"merged @ #{run.merged_sha}"}
+                >
+                  · merged @ {String.slice(run.merged_sha || "", 0, 7)}
+                </span>
+                <span :if={run.merge_status == :failed} class="text-red-400" title={run.merge_error}>
+                  · merge failed
+                </span>
+                <span :if={is_nil(run.merge_status)} class="text-zinc-500">· unmerged</span>
               </span>
             </li>
             <li :if={@runs == []} class="text-zinc-400">No runs yet for this project.</li>

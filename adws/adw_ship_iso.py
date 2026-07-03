@@ -4,7 +4,7 @@
 # ///
 
 """
-ADW Ship Iso - AI Developer Workflow for shipping (merging) to main
+ADW Ship Iso - AI Developer Workflow for shipping (merging) to the trunk branch
 
 Usage:
   uv run adw_ship_iso.py <issue-number> <adw-id>
@@ -12,11 +12,12 @@ Usage:
 Workflow:
 1. Load state and validate worktree exists
 2. Validate ALL state fields are populated (not None)
-3. Perform manual git merge in main repository:
-   - Fetch latest from origin
-   - Checkout main
-   - Merge feature branch
-   - Push to origin/main
+3. Perform git merge in the main repository via the shared
+   adw_modules.merge_ops helper (trunk detected dynamically — main, dev, ...):
+   - Fetch latest from origin (skipped when no origin remote exists)
+   - Checkout the detected trunk branch
+   - Merge feature branch (--no-ff)
+   - Push to origin/<trunk> (skipped when no origin remote exists)
 4. Post success message to issue
 
 This workflow REQUIRES that all previous workflows have been run and that
@@ -44,6 +45,8 @@ from adw_modules.workflow_ops import format_issue_message
 from adw_modules.utils import setup_logger, check_env_vars
 from adw_modules.worktree_ops import validate_worktree
 from adw_modules.data_types import ADWStateData
+from adw_modules.git_ops import get_trunk_branch
+from adw_modules.merge_ops import merge_branch_into_trunk
 
 # Agent name constant
 AGENT_SHIPPER = "shipper"
@@ -55,96 +58,22 @@ def get_main_repo_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def manual_merge_to_main(branch_name: str, logger: logging.Logger) -> Tuple[bool, Optional[str]]:
-    """Manually merge a branch to main using git commands.
-    
-    This runs in the main repository root, not in a worktree.
-    
+def merge_to_trunk(branch_name: str, logger: logging.Logger) -> Tuple[bool, Optional[str], Optional[str]]:
+    """Merge a branch into the detected trunk via the shared merge helper.
+
+    This runs in the main repository root, not in a worktree. The trunk branch
+    is detected dynamically (main, dev, ...) — never hardcoded.
+
     Args:
         branch_name: The feature branch to merge
         logger: Logger instance
-        
+
     Returns:
-        Tuple of (success, error_message)
+        Tuple of (success, merged_sha, error_message)
     """
     repo_root = get_main_repo_root()
-    logger.info(f"Performing manual merge in main repository: {repo_root}")
-    
-    try:
-        # Save current branch to restore later
-        result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, cwd=repo_root
-        )
-        original_branch = result.stdout.strip()
-        logger.debug(f"Original branch: {original_branch}")
-        
-        # Step 1: Fetch latest from origin
-        logger.info("Fetching latest from origin...")
-        result = subprocess.run(
-            ["git", "fetch", "origin"],
-            capture_output=True, text=True, cwd=repo_root
-        )
-        if result.returncode != 0:
-            return False, f"Failed to fetch from origin: {result.stderr}"
-        
-        # Step 2: Checkout main
-        logger.info("Checking out main branch...")
-        result = subprocess.run(
-            ["git", "checkout", "main"],
-            capture_output=True, text=True, cwd=repo_root
-        )
-        if result.returncode != 0:
-            return False, f"Failed to checkout main: {result.stderr}"
-        
-        # Step 3: Pull latest main
-        logger.info("Pulling latest main...")
-        result = subprocess.run(
-            ["git", "pull", "origin", "main"],
-            capture_output=True, text=True, cwd=repo_root
-        )
-        if result.returncode != 0:
-            # Try to restore original branch
-            subprocess.run(["git", "checkout", original_branch], cwd=repo_root)
-            return False, f"Failed to pull latest main: {result.stderr}"
-        
-        # Step 4: Merge the feature branch (no-ff to preserve all commits)
-        logger.info(f"Merging branch {branch_name} (no-ff to preserve all commits)...")
-        result = subprocess.run(
-            ["git", "merge", branch_name, "--no-ff", "-m", f"Merge branch '{branch_name}' via ADW Ship workflow"],
-            capture_output=True, text=True, cwd=repo_root
-        )
-        if result.returncode != 0:
-            # Try to restore original branch
-            subprocess.run(["git", "checkout", original_branch], cwd=repo_root)
-            return False, f"Failed to merge {branch_name}: {result.stderr}"
-        
-        # Step 5: Push to origin/main
-        logger.info("Pushing to origin/main...")
-        result = subprocess.run(
-            ["git", "push", "origin", "main"],
-            capture_output=True, text=True, cwd=repo_root
-        )
-        if result.returncode != 0:
-            # Try to restore original branch
-            subprocess.run(["git", "checkout", original_branch], cwd=repo_root)
-            return False, f"Failed to push to origin/main: {result.stderr}"
-        
-        # Step 6: Restore original branch
-        logger.info(f"Restoring original branch: {original_branch}")
-        subprocess.run(["git", "checkout", original_branch], cwd=repo_root)
-        
-        logger.info("✅ Successfully merged and pushed to main!")
-        return True, None
-        
-    except Exception as e:
-        logger.error(f"Unexpected error during merge: {e}")
-        # Try to restore original branch
-        try:
-            subprocess.run(["git", "checkout", original_branch], cwd=repo_root)
-        except:
-            pass
-        return False, str(e)
+    logger.info(f"Performing merge in main repository: {repo_root}")
+    return merge_branch_into_trunk(branch_name, cwd=repo_root, logger=logger)
 
 
 def validate_state_completeness(state: ADWState, logger: logging.Logger) -> tuple[bool, list[str]]:
@@ -270,16 +199,17 @@ def main():
                            f"🔍 Preparing to merge branch: {branch_name}")
     )
     
-    # Step 4: Perform manual merge
-    logger.info(f"Starting manual merge of {branch_name} to main...")
+    # Step 4: Perform merge into the detected trunk
+    trunk_branch = get_trunk_branch(cwd=get_main_repo_root())
+    logger.info(f"Starting merge of {branch_name} to {trunk_branch}...")
     make_issue_comment(
         issue_number,
-        format_issue_message(adw_id, AGENT_SHIPPER, f"🔀 Merging {branch_name} to main...\n"
-                           "Using manual git operations in main repository")
+        format_issue_message(adw_id, AGENT_SHIPPER, f"🔀 Merging {branch_name} to {trunk_branch}...\n"
+                           "Using git operations in main repository")
     )
-    
-    success, error = manual_merge_to_main(branch_name, logger)
-    
+
+    success, merged_sha, error = merge_to_trunk(branch_name, logger)
+
     if not success:
         logger.error(f"Failed to merge: {error}")
         make_issue_comment(
@@ -287,17 +217,17 @@ def main():
             format_issue_message(adw_id, AGENT_SHIPPER, f"❌ Failed to merge: {error}")
         )
         sys.exit(1)
-    
-    logger.info(f"✅ Successfully merged {branch_name} to main")
-    
+
+    logger.info(f"✅ Successfully merged {branch_name} to {trunk_branch} @ {merged_sha}")
+
     # Step 5: Post success message
     make_issue_comment(
         issue_number,
-        format_issue_message(adw_id, AGENT_SHIPPER, 
+        format_issue_message(adw_id, AGENT_SHIPPER,
                            f"🎉 **Successfully shipped!**\n\n"
                            f"✅ Validated all state fields\n"
-                           f"✅ Merged branch `{branch_name}` to main\n"
-                           f"✅ Pushed to origin/main\n\n"
+                           f"✅ Merged branch `{branch_name}` to {trunk_branch} @ `{merged_sha}`\n"
+                           f"✅ Pushed to origin/{trunk_branch} (when a remote exists)\n\n"
                            f"🚢 Code has been deployed to production!")
     )
     

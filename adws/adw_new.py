@@ -45,9 +45,32 @@ def make_script(name: str, steps: list[str], local: bool) -> str:
         for i, step in enumerate(steps)
     )
 
+    # Real-merge ship for _local_iso scripts: no adw_ship_local_iso.py exists,
+    # so ship is inlined via the shared trunk-aware merge helper (merge_ops).
+    # _iso scripts keep chaining adw_ship_iso.py, itself merge-helper-based.
+    local_ship_block = """    # Ship: merge the worktree branch into the repo's detected trunk (real merge).
+    print(f"\\n=== SHIP PHASE (MERGE TO TRUNK) ===")
+    import logging
+    from adw_modules.merge_ops import merge_branch_into_trunk
+    from adw_modules.state import ADWState
+    state = ADWState.load(adw_id, logging.getLogger(__name__))
+    branch_name = state.get("branch_name") if state else None
+    if not branch_name:
+        print("Ship phase failed: no branch_name in state")
+        sys.exit(1)
+    repo_root = os.path.dirname(script_dir)
+    success, merged_sha, error = merge_branch_into_trunk(branch_name, cwd=repo_root)
+    if not success:
+        print(f"Ship phase failed: {error}")
+        sys.exit(1)
+    print(f"Merged {branch_name} into trunk @ {merged_sha}")"""
+
     # Build step blocks
     step_blocks = []
     for step in steps:
+        if step == "ship" and local:
+            step_blocks.append(local_ship_block)
+            continue
         var = step.replace("-", "_")
         cmd_var = f"{var}_cmd"
         result_var = var

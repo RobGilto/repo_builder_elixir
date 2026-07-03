@@ -163,6 +163,47 @@ defmodule RepoBuilder.WorkflowEngine.Catalog do
   def steps(_slug, _harness), do: {:error, :unknown_type}
 
   @doc """
+  Append the deterministic terminal `merge` step (issue-adw-non-iso-merge) to a step
+  list: every `on_success: "done"` edge is rewired to the new `merge` step, whose own
+  success terminates the run. Failure edges are untouched — a failed run never merges.
+
+  Pure data-in/data-out; the `Runner` applies this at launch time ONLY for
+  `isolation_mode: :worktree` runs. Direct-mode (`nil` isolation) runs already work on
+  the trunk checkout itself, so they get no merge step — there is nothing to land.
+  Idempotent: a list that already contains a `merge`-kind step is returned unchanged.
+  """
+  @spec with_merge_step([map()]) :: [map()]
+  def with_merge_step(steps) when is_list(steps) do
+    if Enum.any?(steps, &(Map.get(&1, "kind") == "merge")) do
+      steps
+    else
+      harness = steps |> List.first(%{}) |> Map.get("harness", "fake")
+
+      Enum.map(steps, &reroute_done_edge/1) ++
+        [
+          %{
+            "name" => "merge",
+            "kind" => "merge",
+            "harness" => harness,
+            "prompt_template" => "",
+            "on_success" => "done",
+            "on_failure" => "abort"
+          }
+        ]
+    end
+  end
+
+  # A success-terminal step routes through the appended merge step instead; every
+  # other edge (named steps, failure edges) is untouched.
+  @spec reroute_done_edge(map()) :: map()
+  defp reroute_done_edge(step) do
+    case Map.get(step, "on_success", "done") do
+      "done" -> Map.put(step, "on_success", "merge")
+      _other -> step
+    end
+  end
+
+  @doc """
   The canonical default `prompt_template` for a single ADW-Builder step name.
 
   This is the SINGLE source of truth shared by the catalog step builders (`step/4`)
