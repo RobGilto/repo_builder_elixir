@@ -99,6 +99,43 @@ defmodule RepoBuilder.Logs do
   end
 
   @doc """
+  Redact, map, and persist one in-app WORKFLOW STEP canonical event as an
+  `agent_logs` row keyed by `workflow_run_id` (issue-custom-adw-observability).
+  Mirrors `persist_orchestrator_event/2` exactly — same redaction, same
+  float→Decimal usage embed — but scopes the row to a custom ADW's step session
+  (no `agent_id`/`orchestrator_id`), giving reconnect/late-connect observability
+  parity with workers and orchestrators for in-app workflow steps.
+
+  `attrs` must carry `:workflow_run_id` and `:session_id` (the step session's
+  `"wf-<run_id>-<step>"` agent id, so the reconnect `agent_key` matches the live
+  path's `workflow_step_squares/3` prefix), and MAY carry `:harness`/`:project_id`;
+  missing keys degrade to `nil` columns (no crash).
+  """
+  @spec persist_workflow_event(Event.t(), %{
+          required(:workflow_run_id) => Ecto.UUID.t(),
+          required(:session_id) => String.t(),
+          optional(:harness) => String.t(),
+          optional(:project_id) => Ecto.UUID.t() | nil
+        }) :: {:ok, AgentLog.t()} | {:error, Ecto.Changeset.t()}
+  def persist_workflow_event(event, attrs) do
+    scrubbed = Redact.scrub(event)
+
+    params = %{
+      workflow_run_id: attrs[:workflow_run_id],
+      project_id: attrs[:project_id],
+      session_id: attrs[:session_id],
+      event_type: event_type(event),
+      harness: attrs[:harness] || to_string(event.harness),
+      payload: event_payload(event, scrubbed.raw),
+      usage: usage_params(event)
+    }
+
+    %AgentLog{}
+    |> AgentLog.changeset(params)
+    |> Repo.insert()
+  end
+
+  @doc """
   Durably record one OPERATOR chat turn — the human side of the orchestrator
   transcript (specs/issue-operator-persist-operator-chat-messages.md). Mirrors
   `persist_orchestrator_event/2`: an orchestrator-scoped `agent_logs` row with

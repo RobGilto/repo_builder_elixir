@@ -43,8 +43,9 @@ defmodule RepoBuilder.Logs.Writer do
       field :agent_id, String.t()
       field :broadcast_feed?, boolean()
       # nil ⇒ no durable persistence (ephemeral run). Otherwise the durable owner kind
-      # and its persist context (`Logs.persist_event/2` / `persist_orchestrator_event/2`).
-      field :persist, {:agent | :orchestrator, map()} | nil
+      # and its persist context (`Logs.persist_event/2` / `persist_orchestrator_event/2` /
+      # `persist_workflow_event/2`).
+      field :persist, {:agent | :orchestrator | :workflow, map()} | nil
     end
   end
 
@@ -144,6 +145,10 @@ defmodule RepoBuilder.Logs.Writer do
     if persist?(event), do: persist_quietly(:orchestrator, event, ctx)
   end
 
+  defp persist_and_status(%Record{persist: {:workflow, ctx}, event: event}) do
+    if persist?(event), do: persist_quietly(:workflow, event, ctx)
+  end
+
   defp persist_and_status(%Record{persist: nil}), do: nil
 
   # Token-level partial text deltas are broadcast for the live UI but never written
@@ -156,7 +161,8 @@ defmodule RepoBuilder.Logs.Writer do
   # Returns the inserted log so the global feed can broadcast its durable `log_no`;
   # any failure (changeset error, rescue, catch) degrades to `nil` → the drilldown
   # shows "—" for that row, never crashing the writer.
-  @spec persist_quietly(:agent | :orchestrator, Event.t(), map()) :: AgentLog.t() | nil
+  @spec persist_quietly(:agent | :orchestrator | :workflow, Event.t(), map()) ::
+          AgentLog.t() | nil
   defp persist_quietly(:agent, event, ctx) do
     case Logs.persist_event(event, ctx) do
       {:ok, %AgentLog{} = log} -> log
@@ -178,6 +184,19 @@ defmodule RepoBuilder.Logs.Writer do
   rescue
     error ->
       Logger.warning("persist_orchestrator_event failed: #{inspect(error)}")
+      nil
+  catch
+    _kind, _reason -> nil
+  end
+
+  defp persist_quietly(:workflow, event, ctx) do
+    case Logs.persist_workflow_event(event, ctx) do
+      {:ok, %AgentLog{} = log} -> log
+      {:error, _changeset} -> nil
+    end
+  rescue
+    error ->
+      Logger.warning("persist_workflow_event failed: #{inspect(error)}")
       nil
   catch
     _kind, _reason -> nil
@@ -243,5 +262,6 @@ defmodule RepoBuilder.Logs.Writer do
   @spec route_key(Record.t()) :: term()
   defp route_key(%Record{persist: {:agent, %{agent_id: id}}}), do: id
   defp route_key(%Record{persist: {:orchestrator, %{orchestrator_id: id}}}), do: id
+  defp route_key(%Record{persist: {:workflow, %{workflow_run_id: id}}}), do: id
   defp route_key(%Record{persist: nil, agent_id: id}), do: id
 end

@@ -118,6 +118,11 @@ defmodule RepoBuilder.Session.Server do
       # this orchestrator id (parallel to the worker `agent_db_id` gate). nil for
       # every worker session.
       field :orchestrator_db_id, Ecto.UUID.t(), enforce: false
+      # When set (issue custom-adw-observability), canonical events also persist to
+      # `agent_logs` keyed by this workflow run id (parallel to `agent_db_id` and
+      # `orchestrator_db_id`). nil for every worker/orchestrator session. Exactly one
+      # of agent/orchestrator/workflow-run is present (app-enforced).
+      field :workflow_run_db_id, Ecto.UUID.t(), enforce: false
       # Ephemeral contract (issue-explain): when false, `dispatch/2` suppresses the
       # global console feed + swimlane broadcasts so the run stays private to its
       # per-agent topic (the only channel the ephemeral Explain runner observes).
@@ -202,6 +207,7 @@ defmodule RepoBuilder.Session.Server do
       project_id: opts[:project_id],
       orchestrator_ctx: opts[:orchestrator_ctx],
       orchestrator_db_id: opts[:orchestrator_db_id],
+      workflow_run_db_id: opts[:workflow_run_db_id],
       broadcast_feed?: opts[:broadcast_feed?] != false
     }
   end
@@ -871,6 +877,13 @@ defmodule RepoBuilder.Session.Server do
                model: String.t() | nil,
                project_id: Ecto.UUID.t() | nil
              }}
+          | {:workflow,
+             %{
+               workflow_run_id: Ecto.UUID.t(),
+               session_id: String.t(),
+               harness: String.t(),
+               project_id: Ecto.UUID.t() | nil
+             }}
           | nil
   defp persist_target(%State{agent_db_id: id} = state) when is_binary(id) do
     {:agent,
@@ -890,6 +903,16 @@ defmodule RepoBuilder.Session.Server do
        session_id: state.session_id,
        provider: state.provider,
        model: state.model,
+       project_id: state.project_id
+     }}
+  end
+
+  defp persist_target(%State{workflow_run_db_id: id} = state) when is_binary(id) do
+    {:workflow,
+     %{
+       workflow_run_id: id,
+       session_id: state.agent_id,
+       harness: to_string(state.harness),
        project_id: state.project_id
      }}
   end

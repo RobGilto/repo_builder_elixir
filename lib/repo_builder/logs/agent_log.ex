@@ -26,6 +26,7 @@ defmodule RepoBuilder.Logs.AgentLog do
           id: Ecto.UUID.t() | nil,
           agent_id: Ecto.UUID.t() | nil,
           orchestrator_id: Ecto.UUID.t() | nil,
+          workflow_run_id: Ecto.UUID.t() | nil,
           project_id: Ecto.UUID.t() | nil,
           session_id: String.t() | nil,
           event_type: event_type() | nil,
@@ -47,6 +48,10 @@ defmodule RepoBuilder.Logs.AgentLog do
     # Orchestrator-scoped persistence (issue-d): set instead of agent_id for an
     # orchestrator turn's events. Exactly one of the two is present (app-enforced).
     field :orchestrator_id, :binary_id
+    # Workflow-step-scoped persistence (issue-custom-adw-observability): set instead of
+    # agent_id/orchestrator_id for an in-app workflow step session's events (custom ADWs
+    # launched from the Builder). Exactly one of the three is present (app-enforced).
+    field :workflow_run_id, :binary_id
     # Project attribution (issue per-project-cost-tracking): the project this row's spend
     # belongs to, resolved from the bound session/orchestrator at write time. Nullable —
     # NULL = unscoped (the platform / pre-feature rows), excluded from any project total.
@@ -78,6 +83,7 @@ defmodule RepoBuilder.Logs.AgentLog do
     |> cast(params, [
       :agent_id,
       :orchestrator_id,
+      :workflow_run_id,
       :project_id,
       :session_id,
       :event_type,
@@ -91,25 +97,36 @@ defmodule RepoBuilder.Logs.AgentLog do
     |> validate_owner()
     |> foreign_key_constraint(:agent_id)
     |> foreign_key_constraint(:orchestrator_id)
+    |> foreign_key_constraint(:workflow_run_id)
     |> foreign_key_constraint(:project_id)
   end
 
-  # A log row belongs to EXACTLY ONE owner: a worker (agent_id) or an orchestrator
-  # (orchestrator_id), never both/neither. Worker rows keep their existing shape.
+  # A log row belongs to EXACTLY ONE owner: a worker (agent_id), an orchestrator
+  # (orchestrator_id), or an in-app workflow step (workflow_run_id) — never more than
+  # one, never none. Worker/orchestrator rows keep their existing shape.
   @spec validate_owner(Ecto.Changeset.t()) :: Ecto.Changeset.t()
   defp validate_owner(changeset) do
-    agent_id = get_field(changeset, :agent_id)
-    orchestrator_id = get_field(changeset, :orchestrator_id)
+    owners =
+      [:agent_id, :orchestrator_id, :workflow_run_id]
+      |> Enum.reject(&is_nil(get_field(changeset, &1)))
 
-    case {agent_id, orchestrator_id} do
-      {nil, nil} ->
-        add_error(changeset, :agent_id, "agent_id or orchestrator_id is required")
+    case owners do
+      [] ->
+        add_error(
+          changeset,
+          :agent_id,
+          "agent_id, orchestrator_id, or workflow_run_id is required"
+        )
 
-      {a, o} when not is_nil(a) and not is_nil(o) ->
-        add_error(changeset, :orchestrator_id, "cannot set both agent_id and orchestrator_id")
-
-      _ ->
+      [_single] ->
         changeset
+
+      _multiple ->
+        add_error(
+          changeset,
+          :orchestrator_id,
+          "exactly one of agent_id, orchestrator_id, workflow_run_id may be set"
+        )
     end
   end
 end
