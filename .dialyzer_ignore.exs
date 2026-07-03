@@ -18,5 +18,11 @@
   # newer version supports Elixir 1.20).
   {"lib/repo_builder/harness/wire.ex", :no_return},
   {"lib/repo_builder/plugins/manifest.ex", :no_return},
-  {"lib/repo_builder/plugins/quality_gate.ex", :no_return}
+  {"lib/repo_builder/plugins/quality_gate.ex", :no_return},
+  # Contract supertype — `leader_brain_attrs/2` (defp, no external callers) returns
+  # `map()` in its spec to avoid exposing an internal implementation shape. The actual
+  # runtime value is a fixed-key map `%{harness: _, provider: _, model: _, session_id: _}`
+  # that callers (e.g. `apply_harness_defaults/2`) always access via pattern matching,
+  # so the relaxed spec is a deliberate internal design choice, not a safety concern.
+  {"lib/repo_builder/orchestrator.ex", :contract_supertype, 218}
 ]

@@ -30,9 +30,19 @@ defmodule RepoBuilder.Orchestrator.ContextWindow do
   # for the models the platform ships with; an operator `:context_windows` config entry
   # overrides any value here. Claude does not advertise its window in the stream, so this
   # catalog is its source of truth.
+  # Pinned ids AND the family aliases the `claude` CLI accepts (`opus`/`sonnet`/`haiku`/
+  # `fable`). The aliases carry the same window as the latest pinned model of their family
+  # so the header gauge is correct when an operator selects the bare alias — keep each
+  # alias in sync with its `RepoBuilder.Harness.Claude` `@model_aliases` target.
   @known_windows %{
+    {"claude", "opus"} => 1_000_000,
     {"claude", "claude-opus-4-8"} => 1_000_000,
+    {"claude", "sonnet"} => 1_000_000,
     {"claude", "claude-sonnet-4-6"} => 1_000_000,
+    {"claude", "fable"} => 1_000_000,
+    {"claude", "claude-fable-5"} => 1_000_000,
+    {"claude", "haiku"} => 200_000,
+    {"claude", "claude-haiku-4-5"} => 200_000,
     {"claude", "claude-haiku-4-5-20251001"} => 200_000
   }
 

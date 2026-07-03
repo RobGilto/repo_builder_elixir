@@ -14,6 +14,7 @@
   %{harness: "pi", provider: "zai", model: "glm-4.5-air", input_price_per_mtok: "0.2", output_price_per_mtok: "1.1"},
 
   # Claude anchors (Claude reports its own USD, but the catalog documents the rates).
+  %{harness: "claude", provider: "anthropic", model: "claude-fable-5", input_price_per_mtok: "10.0", output_price_per_mtok: "50.0"},
   %{harness: "claude", provider: "anthropic", model: "claude-opus-4-8", input_price_per_mtok: "15.0", output_price_per_mtok: "75.0"},
   %{harness: "claude", provider: "anthropic", model: "claude-sonnet-4-6", input_price_per_mtok: "3.0", output_price_per_mtok: "15.0"},
   %{harness: "claude", provider: "anthropic", model: "claude-haiku-4-5", input_price_per_mtok: "0.8", output_price_per_mtok: "4.0"}

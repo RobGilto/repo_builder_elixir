@@ -108,9 +108,11 @@ harnesses = %{
           "opus",
           "sonnet",
           "haiku",
+          "fable",
           "claude-opus-4-8",
           "claude-sonnet-4-6",
           "claude-haiku-4-5",
+          "claude-fable-5",
           "claude-opus-4-5",
           "claude-sonnet-4-5"
         ]
@@ -288,7 +290,8 @@ config :repo_builder, :default_agent_models, %{}
 config :repo_builder, :context_windows, %{
   :default => 200_000,
   {"claude", "claude-opus-4-8"} => 1_000_000,
-  {"claude", "claude-sonnet-4-6"} => 1_000_000
+  {"claude", "claude-sonnet-4-6"} => 1_000_000,
+  {"claude", "claude-fable-5"} => 1_000_000
 }
 
 # Orchestrator brain defaults (issue-c). `default_harness` is the harness the

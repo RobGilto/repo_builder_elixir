@@ -27,7 +27,8 @@ defmodule RepoBuilder.Harness.Claude do
   @model_aliases %{
     "opus" => "claude-opus-4-8",
     "sonnet" => "claude-sonnet-4-6",
-    "haiku" => "claude-haiku-4-5"
+    "haiku" => "claude-haiku-4-5",
+    "fable" => "claude-fable-5"
   }
 
   # The orchestrator is a delegation-only meta-agent: ALL real work goes to worker
