@@ -81,3 +81,6 @@ __pycache__/
 /.secret_key
 # understand-anything analysis artifacts.
 /.understand-anything/
+
+# ad-hoc quality-gate log scratch dir (workers write here; never committed)
+/tmp_gate/

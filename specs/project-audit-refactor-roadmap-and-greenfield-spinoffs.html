@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan: Project Audit, Refactor Roadmap &amp; Greenfield Spinoffs</title>
+<style>
+  :root {
+    --ink: #1a2332;
+    --ink-soft: #4a5568;
+    --paper: #fafbfc;
+    --panel: #ffffff;
+    --line: #e2e8f0;
+    --accent: #2c5f8a;        /* deep steel blue — the audit identity */
+    --accent-soft: #e8f0f7;
+    --amber: #b7791f;         /* urgency */
+    --amber-soft: #fdf3e0;
+    --green: #2f7d4f;
+    --green-soft: #e6f4ec;
+    --red: #b03a3a;
+    --red-soft: #fbeaea;
+    --mono: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sans: "Inter", -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); line-height: 1.6; font-size: 16px;
+  }
+  main { max-width: 960px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem; }
+  h1 { font-size: 1.9rem; letter-spacing: -0.02em; margin: 0 0 .5rem; }
+  h2 {
+    font-size: 1.35rem; margin: 3rem 0 1rem; padding-bottom: .4rem;
+    border-bottom: 2px solid var(--accent); letter-spacing: -0.01em;
+  }
+  h3 { font-size: 1.1rem; margin: 1.8rem 0 .6rem; }
+  h4 { font-size: 1rem; margin: 1.4rem 0 .4rem; color: var(--accent); }
+  p { margin: .6rem 0; }
+  code {
+    font-family: var(--mono); font-size: .85em; background: var(--accent-soft);
+    padding: .1em .35em; border-radius: 4px;
+  }
+  pre code { display: block; padding: 1em; overflow-x: auto; }
+  figure { margin: 1.8rem 0; text-align: center; }
+  figure img { max-width: 100%; border-radius: 10px; border: 1px solid var(--line); box-shadow: 0 2px 12px rgba(26,35,50,.08); }
+  figcaption { font-size: .85rem; color: var(--ink-soft); margin-top: .5rem; font-style: italic; }
+  header .meta {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: .6rem 1rem; margin: 1rem 0;
+  }
+  header .meta summary { cursor: pointer; font-weight: 600; color: var(--accent); }
+  header dl { display: grid; grid-template-columns: 10rem 1fr; gap: .25rem .8rem; margin: .8rem 0 .2rem; font-size: .88rem; }
+  header dt { font-weight: 600; color: var(--ink-soft); }
+  header dd { margin: 0; font-family: var(--mono); font-size: .82rem; overflow-wrap: anywhere; }
+  .tag {
+    display: inline-block; font-family: var(--mono); font-size: .72rem; font-weight: 700;
+    padding: .1em .5em; border-radius: 999px; vertical-align: middle; margin-right: .3em;
+  }
+  .tag.existing { background: var(--accent-soft); color: var(--accent); }
+  .tag.new { background: var(--green-soft); color: var(--green); }
+  .tag.p0 { background: var(--red-soft); color: var(--red); }
+  .tag.p1 { background: var(--amber-soft); color: var(--amber); }
+  .tag.p2 { background: var(--accent-soft); color: var(--accent); }
+  .tag.p3 { background: var(--line); color: var(--ink-soft); }
+  .phase {
+    background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--accent);
+    border-radius: 8px; padding: 1rem 1.4rem 1.4rem; margin: 1.5rem 0;
+  }
+  .checklist { list-style: none; padding-left: .2rem; }
+  .checklist li { margin: .35rem 0; }
+  .status { background: var(--amber-soft); color: var(--amber); font-weight: 700; }
+  .loop {
+    background: var(--amber-soft); border: 1px solid var(--amber); border-radius: 8px;
+    padding: .7rem 1rem; margin-top: 1rem; font-size: .92rem;
+  }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .92rem; }
+  th, td { border: 1px solid var(--line); padding: .5rem .7rem; text-align: left; vertical-align: top; }
+  th { background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+  tr:nth-child(even) td { background: #f5f8fb; }
+  .callout {
+    background: var(--accent-soft); border-left: 4px solid var(--accent); border-radius: 6px;
+    padding: .8rem 1.1rem; margin: 1rem 0; font-size: .95rem;
+  }
+  details { margin: .6rem 0; }
+  details summary { cursor: pointer; font-weight: 600; }
+  .qa-answer { margin-left: 1rem; color: var(--ink-soft); }
+  .spinoff {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: .9rem 1.2rem; margin: 1rem 0;
+  }
+  .spinoff h4 { margin-top: 0; }
+  .kicker { font-family: var(--mono); font-size: .78rem; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .08em; }
+</style>
+</head>
+<body>
+<main>
+
+  <!-- ===== HEADER + UPDATABLE METADATA ===== -->
+  <header>
+    <span class="kicker">repo_builder · audit &amp; roadmap</span>
+    <h1>Plan: Project Audit, Refactor Roadmap &amp; Greenfield Spinoffs</h1>
+    <details class="meta">
+      <summary>Metadata</summary>
+      <dl>
+        <dt>created</dt>      <dd>2026-07-04T10:00:00+02:00</dd>
+        <dt>modified</dt>     <dd>2026-07-04T10:00:00+02:00</dd>
+        <dt>commits</dt>      <dd>7e712eb (HEAD at authoring time)</dd>
+        <dt>agent name</dt>   <dd>claude-fable-5</dd>
+        <dt>session id</dt>   <dd>b7a51fb4-9455-4099-95b0-269c574492b1</dd>
+        <dt>back refs</dt>    <dd>BUILD_PROMPT.md, README.md, docs/engineering-principles.md, ai_docs/typed-elixir-standard.md, specs/issue-custom-adw-observability-adw-custom-adw-obs-sdlc_planner-custom-adw-swimlane-observability.md, specs/quality-gate-plugins-phase-level-testing.html, specs/issue-adw-non-iso-merge-adw-adw-non-iso-merge-sdlc_planner-non-iso-adws-merge-to-trunk.md, specs/issue-adw-builder-combos-adw-adw-prompt-combos-sdlc_planner-adw-builder-spec-prompt-and-combo-scripts.md</dd>
+        <dt>forward refs</dt> <dd>(none yet — implementation specs for Phases 2–6 will be appended here)</dd>
+      </dl>
+    </details>
+  </header>
+
+  <!-- Hero image — synced to the :root visual identity. -->
+  <figure>
+    <img src="project-audit-refactor-roadmap-and-greenfield-spinoffs/hero.png" alt="A magnifying lens over a clean modular system with a six-step phased roadmap extending forward">
+    <figcaption>One platform, audited: what is solid, what must be refactored, and where it goes next.</figcaption>
+  </figure>
+
+  <!-- ===== PURPOSE / PROBLEM / SOLUTION ===== -->
+  <section id="purpose">
+    <h2>Purpose</h2>
+    <p>Deliver a full engineering audit of <strong>repo_builder</strong> (the Elixir/Phoenix/OTP control plane for AI coding agents), turn the findings into a <strong>prioritized refactor + future-work roadmap</strong> ordered by importance/urgency, and — as a separate strategic section — enumerate <strong>greenfield spinoff projects</strong> that reuse this project's hard-won learnings under different concepts, languages, and frameworks.</p>
+    <p>The audit is evidence-based: every finding below cites a measurable signal from the tree at commit <code>7e712eb</code> (2026-07-04) — file sizes, clause counts, git status, dependency patches, spec inventory.</p>
+  </section>
+
+  <section id="problem">
+    <h2>Problem</h2>
+    <p>The platform is functionally strong — ~207 modules of strictly-typed Elixir, ~1,400+ tests behind a five-command green gate, a proven zero-orphan process ledger, and a plugin/harness seam that has absorbed multiple subsystems with no core edits. But growth has outpaced structure in five places:</p>
+    <ul>
+      <li><strong>God modules at the UI seam.</strong> <code>console_live.ex</code> is <strong>4,786 lines with 113 <code>handle_event</code> clauses</strong>; <code>console_components.ex</code> is 4,629 lines; <code>orchestrator/tools.ex</code> is 2,941 lines. Every new console feature lands in the same three files — merge hazard, comprehension cost, and a contradiction of the project's own "extension without core edits" doctrine.</li>
+      <li><strong>A large uncommitted working tree.</strong> ≥4 features are interleaved dirty (ADW builder combos, custom ADW, custom-ADW observability incl. an unapplied-to-history migration, non-iso merge spec), plus process artifacts polluting the root: <code>ph1_review.md</code>, <code>ph2_status.md</code>, <code>tmp_gate/</code>, <code>erl_crash.dump</code>, <code>console-current-state.png</code>, <code>trees/</code>.</li>
+      <li><strong>An observability hole in the newest feature.</strong> Custom-ADW runs broadcast live events but persist nothing to <code>agent_logs</code> (verified against a live run: zero rows for workflow <code>5e4b1acb</code>), so step history vanishes on reconnect. The fix is already specced.</li>
+      <li><strong>Dependency + duplication debt.</strong> <code>type_check 0.13.7</code> requires a manual source patch (<code>scripts/patch_deps.sh</code>) after every <code>deps.get</code> to compile under Elixir 1.20; and <code>adws/</code> carries <strong>24 near-duplicate Python workflow scripts</strong> that the new <code>Adw.Scaffold</code> generator can already render deterministically.</li>
+      <li><strong>Docs drift.</strong> README claims 1,110 tests / 155 modules; reality is ~1,400+ tests / 207 modules, and the orchestrator, workstreams, cost-center, budget-guard, and forge subsystems are under-documented relative to their size.</li>
+    </ul>
+    <figure>
+      <img src="project-audit-refactor-roadmap-and-greenfield-spinoffs/problem.png" alt="One oversized monolithic block absorbing every incoming feature arrow while surrounding clean modules stay small">
+      <figcaption>The failure mode: a disciplined modular core, but every console feature funnels into the same three oversized files.</figcaption>
+    </figure>
+  </section>
+
+  <section id="solution">
+    <h2>Solution</h2>
+    <p>A six-phase remediation roadmap, strictly ordered by urgency: first make the repository state safe (land the WIP, evict artifacts), then close the observability hole users hit today, then decompose the god modules while the test suite is green, then retire dependency/duplication debt, then build the already-planned quality-gate tier, and finally give the platform a deployment story. Each phase ends with the project's own five-command green gate, so the audit's remediation is held to the same bar as feature work. The <em>Notes</em> section carries the two deliverable lists the prompt asked for — the full <strong>future-plans register</strong> (ordered by importance/urgency) and the <strong>greenfield spinoff portfolio</strong>.</p>
+    <figure>
+      <img src="project-audit-refactor-roadmap-and-greenfield-spinoffs/solution.png" alt="Six ascending gated roadmap steps: hygiene, ship, refactor, debt, gates, deploy">
+      <figcaption>Six gated phases: hygiene → ship WIP → decompose → retire debt → quality gates → deploy.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== RELEVANT FILES ===== -->
+  <section id="files" class="files">
+    <h2>Relevant Files</h2>
+
+    <h3>Existing Files</h3>
+    <ul>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/live/console_live.ex</code> — 4,786 lines, 113 <code>handle_event</code> clauses; the primary decomposition target (Phase 3).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/components/console_components.ex</code> — 4,629 lines of function components; split alongside ConsoleLive.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/tools.ex</code> — 2,941 lines; every orchestrator tool in one module; split per domain behind <code>tool_catalog.ex</code> (Phase 3).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/tool_catalog.ex</code> — the natural registry seam the tool split should hang off.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/session/server.ex</code> + <code>lib/repo_builder/logs/writer.ex</code> — where the custom-ADW <code>persist: nil</code> gap lives (Phase 2).</li>
+      <li><span class="tag existing">existing</span> <code>specs/issue-custom-adw-observability-…-custom-adw-swimlane-observability.md</code> — the already-written fix spec for durable custom-ADW events (Phase 2 executes it).</li>
+      <li><span class="tag existing">existing</span> <code>priv/repo/migrations/20260703111051_add_workflow_run_id_to_agent_logs.exs</code> — uncommitted migration backing that spec.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/adw/{combo,combos,scaffold}.ex</code> — the deterministic ADW script generator (Phase 2 done per <code>ph2_status.md</code>); Phase 4 uses it to retire the 24 hand-copied <code>adws/adw_*.py</code> scripts.</li>
+      <li><span class="tag existing">existing</span> <code>scripts/patch_deps.sh</code> + <code>mix.exs</code> — the <code>type_check</code> patch debt (Phase 4).</li>
+      <li><span class="tag existing">existing</span> <code>.dialyzer_ignore.exs</code> — 28 lines of justified skips; re-audit during Phase 4.</li>
+      <li><span class="tag existing">existing</span> <code>README.md</code>, <code>BUILD_PROMPT.md</code>, <code>docs/engineering-principles.md</code> — docs to re-sync in Phase 1 (stats) and Phase 5 (subsystems).</li>
+      <li><span class="tag existing">existing</span> <code>specs/quality-gate-plugins-phase-level-testing.html</code> — planned-not-built quality-gate tier; Phase 5 implements it.</li>
+      <li><span class="tag existing">existing</span> <code>.gitignore</code> — must learn <code>tmp_gate/</code>, <code>erl_crash.dump</code>, <code>trees/</code>, ad-hoc screenshots (Phase 1).</li>
+    </ul>
+
+    <h3>New Files</h3>
+    <ul>
+      <li><span class="tag new">new</span> <code>lib/repo_builder_web/live/console_live/</code> (directory) — extracted per-panel modules: <code>adw_panel.ex</code>, <code>agents_panel.ex</code>, <code>cost_panel.ex</code>, <code>workstreams_panel.ex</code>, <code>settings_panel.ex</code>, each a <code>Phoenix.LiveComponent</code> or <code>attach_hook</code>-based event module.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder_web/components/console/</code> (directory) — <code>console_components.ex</code> split by panel to mirror the LiveView split.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/orchestrator/tools/</code> (directory) — per-domain tool modules (<code>agents.ex</code>, <code>workstreams.ex</code>, <code>memory.ex</code>, <code>adw.ex</code>, <code>quality.ex</code>…) registered through the catalog.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder_web/live/console_live/</code> — tests relocated alongside the extracted panels.</li>
+      <li><span class="tag new">new</span> <code>docs/audit-2026-07.md</code> — the durable audit record distilled from this plan (findings table + decisions), committed with Phase 1.</li>
+      <li><span class="tag new">new</span> <code>ai_docs/architecture-map.md</code> — subsystem map covering orchestrator/workstreams/cost/budget/forge, closing the docs-drift finding (Phase 5).</li>
+    </ul>
+  </section>
+
+  <!-- ===== IMPLEMENTATION PHASES ===== -->
+  <section id="phases">
+    <h2>Implementation Phases</h2>
+    <p><strong>IMPORTANT:</strong> Execute every phase and task step by step, in order, top to bottom.</p>
+    <p>Status markers: <code>[]</code> idle · <code>[wip]</code> in progress · <code>[x]</code> complete · <code>[f]</code> failed. All start as <code>[]</code>; the Build Plan workflow updates them as it works.</p>
+
+    <div class="phase">
+      <h3><code class="status">[wip]</code> Phase 1: Repository Hygiene — land the WIP, evict the artifacts <span class="tag p0">P0 · urgent</span></h3>
+      <p>Nothing else in this roadmap is safe while ≥4 features sit interleaved and uncommitted in one dirty tree with an unhistoried migration. This phase converts the working tree into reviewable, feature-scoped commits and stops process artifacts from accumulating at the root.</p>
+
+      <h4>1.1 Slice and commit the dirty tree by feature</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Commit slice A — ADW builder combos + scaffold: <code>lib/repo_builder/adw/{combo,combos,scaffold}.ex</code>, their tests, the golden fixture, and the related <code>console_live.ex</code>/<code>console_components.ex</code> hunks (per <code>ph2_status.md</code> the gate was already green for this slice).</li>
+        <li><code class="status">[]</code> Commit slice B — custom-ADW per-step picker: <code>workflow_engine/{catalog,runner}.ex</code>, <code>harness/claude.ex</code>, <code>test_adw_builder_custom_adw_test.exs</code>, and its spec.</li>
+        <li><code class="status">[]</code> Commit slice C — custom-ADW observability groundwork: <code>logs*</code>, <code>session/server.ex</code>, <code>orchestrator/context_window.ex</code>, the <code>20260703111051</code> migration, and the observability tests/spec.</li>
+        <li><code class="status">[]</code> Commit slice D — remaining specs, <code>pricing_seeds.exs</code>, <code>adws/adw_modules/workflow_ops.py</code>, config.</li>
+        <li><code class="status">[]</code> After each slice: run the green gate before committing (a slice that cannot pass alone gets merged into the slice it depends on).</li>
+      </ul>
+
+      <h4>1.2 Evict process artifacts and harden .gitignore</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Delete or relocate to <code>ai_docs/worker-reports/</code>: <code>ph1_review.md</code>, <code>ph2_status.md</code>; delete <code>erl_crash.dump</code>, <code>console-current-state.png</code>, <code>tmp_gate/</code> after confirming nothing references them.</li>
+        <li><code class="status">[]</code> Add to <code>.gitignore</code>: <code>erl_crash.dump</code>, <code>tmp_gate/</code>, <code>trees/</code>, <code>*.png</code> at root (or a named screenshots dir).</li>
+        <li><code class="status">[]</code> Create <code>docs/audit-2026-07.md</code> capturing this audit's findings table (from the Notes section) as the durable record.</li>
+      </ul>
+
+      <h4>1.3 Docs stat re-sync</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Refresh README badges/claims: test count, module count, line count (use <code>/update</code> command if available).</li>
+      </ul>
+
+      <h4>1.4 Testing Strategy</h4>
+      <p>Pure hygiene phase — the proof is that the full green gate passes on every commit slice and the final tree is clean (<code>git status --porcelain</code> empty except intentional untracked dirs).</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix compile --warnings-as-errors &amp;&amp; mix format --check-formatted &amp;&amp; mix credo --strict &amp;&amp; mix test --warnings-as-errors &amp;&amp; mix dialyzer</code> — the five-command gate green on HEAD.</li>
+        <li><code class="status">[]</code> <code>git status --porcelain | wc -l</code> — returns 0.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 2: Ship the in-flight feature specs <span class="tag p0">P0 · high</span></h3>
+      <p>Three specs are written and partially built; finishing them closes the user-visible observability hole and completes the ADW-builder story before any refactor moves the ground under them.</p>
+
+      <h4>2.1 Custom-ADW swimlane observability</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Implement <code>specs/issue-custom-adw-observability-…</code>: add the <code>workflow_run_id</code> persistence scope so custom-ADW step events write <code>agent_logs</code> rows (mirroring the agent/orchestrator scopes in <code>logs/writer.ex</code> and <code>session/server.ex</code>).</li>
+        <li><code class="status">[]</code> Verify reconnect-safety: step squares rehydrate from <code>agent_logs</code> after a LiveView remount (covered by <code>test_custom_adw_observability_test.exs</code>).</li>
+      </ul>
+
+      <h4>2.2 ADW builder Phase 3 — load/delete combos</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add the load-combo dropdown + <code>adw_load_combo</code>/<code>adw_delete_combo</code> handlers deferred from <code>ph2_status.md</code>.</li>
+      </ul>
+
+      <h4>2.3 Non-iso ADW merge-to-trunk</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Implement <code>specs/issue-adw-non-iso-merge-…</code> so non-isolated ADW runs land their work on trunk safely.</li>
+      </ul>
+
+      <h4>2.4 Testing Strategy</h4>
+      <p>Each feature ships with its LiveViewTest integration test (already scaffolded for 2.1); observability is additionally verified against a live run by querying <code>agent_logs</code> for a fresh custom-ADW workflow id.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder_web/live/test_custom_adw_observability_test.exs test/repo_builder_web/live/test_adw_builder_combos_test.exs</code> — feature suites green.</li>
+        <li><code class="status">[]</code> Full five-command green gate — zero regressions.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 3: Decompose the god modules <span class="tag p1">P1 · high</span></h3>
+      <p>The structural refactor. Split the three oversized modules along their natural panel/domain seams without changing observable behaviour — the 297-file test suite is the safety net, so this phase is mechanical extraction, not redesign.</p>
+      <figure>
+        <img src="project-audit-refactor-roadmap-and-greenfield-spinoffs/phase3.png" alt="One large block decomposing into five clean panels connected to a thin coordinator">
+        <figcaption>ConsoleLive becomes a thin coordinator over per-panel modules; Tools becomes per-domain modules behind the catalog.</figcaption>
+      </figure>
+
+      <h4>3.1 ConsoleLive extraction</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Inventory the 113 <code>handle_event</code> clauses and cluster them by panel (ADW builder, agent roster/CRUD, cost/budget, workstreams/swimlanes, orchestrator chat, settings/modals).</li>
+        <li><code class="status">[]</code> Extract one panel at a time into <code>lib/repo_builder_web/live/console_live/&lt;panel&gt;.ex</code> — prefer <code>Phoenix.LiveComponent</code> for panels with local state, <code>attach_hook/4</code> event modules for cross-panel events; keep the <code>console:events</code> global feed seam intact.</li>
+        <li><code class="status">[]</code> Preserve the known LiveView constraints from prior debugging: keep both stream containers mounted (toggle via hidden, not <code>:if</code>) and the always-render + <code>JS.show|focus</code> modal pattern.</li>
+        <li><code class="status">[]</code> Run the ConsoleLive-touching test files after each panel extraction — never batch two panels between test runs.</li>
+      </ul>
+
+      <h4>3.2 Console components split</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Split <code>console_components.ex</code> into <code>components/console/&lt;panel&gt;_components.ex</code> mirroring 3.1's panel boundaries; re-export via a thin <code>console_components.ex</code> facade so call sites migrate incrementally.</li>
+      </ul>
+
+      <h4>3.3 Orchestrator tools split</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Split <code>orchestrator/tools.ex</code> (2,941 lines) into per-domain modules under <code>orchestrator/tools/</code>, with <code>tool_catalog.ex</code> as the single registry — moving the codebase toward the same open-identity/closed-contract seam the plugin system already proves.</li>
+        <li><code class="status">[]</code> Keep every tool's name, schema, and behaviour byte-identical (the orchestrator's LLM prompt depends on them); assert via a snapshot test of the rendered tool manifest.</li>
+      </ul>
+
+      <h4>3.4 Testing Strategy</h4>
+      <p>Behaviour-preserving refactor: the entire existing suite is the spec. Add one new snapshot test (tool manifest) and one module-size regression check so the god modules cannot silently regrow.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — full suite green after every extraction step.</li>
+        <li><code class="status">[]</code> New tool-manifest snapshot test proves the catalog renders identically pre/post split.</li>
+        <li><code class="status">[]</code> Full five-command green gate.</li>
+        <li><code class="status">[]</code> <code>wc -l lib/repo_builder_web/live/console_live.ex</code> — coordinator under ~800 lines.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 4: Retire dependency &amp; duplication debt <span class="tag p2">P2 · medium</span></h3>
+      <p>Two long-running irritants with known fixes: the <code>type_check</code> source patch that every <code>deps.get</code> re-breaks, and the 24 hand-copied Python ADW scripts that <code>Adw.Scaffold</code> can now generate deterministically.</p>
+
+      <h4>4.1 type_check strategy decision</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Check upstream: does any <code>type_check</code> release &gt; 0.13.7 compile on Elixir 1.20? If yes, upgrade and delete <code>scripts/patch_deps.sh</code>.</li>
+        <li><code class="status">[]</code> If no: vendor a fork (git dep pinned to a patched ref) so <code>deps.get</code> is self-healing — the patch script stops being a manual install step.</li>
+        <li><code class="status">[]</code> Fallback (only if fork is untenable): scope TypeCheck to the wire boundary alone and document the long-term migration path to plain validation + Dialyzer.</li>
+        <li><code class="status">[]</code> Re-audit <code>.dialyzer_ignore.exs</code> (28 lines): confirm each skip is still justified, delete the stale ones.</li>
+      </ul>
+
+      <h4>4.2 adws/ deduplication via Scaffold</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Regenerate all 24 <code>adws/adw_*_iso.py</code> / <code>*_local_iso.py</code> scripts from combo definitions through <code>Adw.Scaffold.generate/1</code>; the golden byte-parity test already proves fidelity for the reference script.</li>
+        <li><code class="status">[]</code> Mark generated scripts with a header comment and add a <code>mix</code> task (or test) asserting generated output matches the checked-in scripts — drift becomes a gate failure.</li>
+      </ul>
+
+      <h4>4.3 Testing Strategy</h4>
+      <p>Golden-file parity for generated scripts, plus one clean-checkout simulation for the dependency fix.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix deps.clean type_check &amp;&amp; mix deps.get &amp;&amp; mix compile --warnings-as-errors</code> — compiles with no manual patch step (or the fork handles it).</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/adw/</code> — scaffold parity + combos suites green.</li>
+        <li><code class="status">[]</code> Full five-command green gate.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 5: Quality-gate plugins &amp; test-suite health <span class="tag p2">P2 · medium</span></h3>
+      <p>Implement the already-planned pluggable five-stage quality gate (format · lint · type · test · mutation) as a <code>:quality_gate</code> contribution kind run at the workstream <code>:test</code> stage, and normalize the test suite's conventions while touching it.</p>
+
+      <h4>5.1 Quality-gate plugin tier</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Implement <code>specs/quality-gate-plugins-phase-level-testing.html</code>: new contribution kind, <code>run_quality_gate</code> orchestrator tool, per-stack gate definitions in <code>plugin_library/</code>.</li>
+      </ul>
+
+      <h4>5.2 Test-suite conventions</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Normalize LiveView test naming (the tree mixes <code>test_*_test.exs</code> and <code>*_test.exs</code>) — pick one convention, rename, update any references.</li>
+        <li><code class="status">[]</code> Introduce a tagged <code>@tag :live_acceptance</code> tier (excluded by default) that drives the real <code>claude</code>/<code>pi</code> CLIs, converting the "manual live acceptance" limitation into an opt-in automated suite.</li>
+      </ul>
+
+      <h4>5.3 Subsystem documentation</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Write <code>ai_docs/architecture-map.md</code> covering orchestrator, workstreams, cost centers, budget guard, and forge; link it from README's architecture section.</li>
+      </ul>
+
+      <h4>5.4 Testing Strategy</h4>
+      <p>The quality-gate tier is validated by running it against this repo itself (Elixir stack definition) and one sample stack from <code>plugin_library/</code>; naming normalization is validated by the full suite still passing.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test</code> — full suite green post-rename, count unchanged or higher.</li>
+        <li><code class="status">[]</code> Quality-gate integration test: an Elixir workstream <code>:test</code> stage executes the five-stage gate and records per-stage results.</li>
+        <li><code class="status">[]</code> Full five-command green gate.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 6: Deployment &amp; release story <span class="tag p3">P3 · valuable, not urgent</span></h3>
+      <p>The platform runs only via <code>mix phx.server</code> on a dev machine. A minimal but real release story raises the project's ceiling: a <code>mix release</code>, a single-node deploy target, and the auth needed to expose it beyond localhost.</p>
+
+      <h4>6.1 Release &amp; deploy</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Produce a working <code>mix release</code> (runtime.exs already carries the prod env contract: <code>DATABASE_URL</code>, <code>SECRET_KEY_BASE</code>, <code>PHX_HOST</code>…).</li>
+        <li><code class="status">[]</code> Pick one deploy target (systemd on a VPS, or Fly.io) and script it; document the erlexec/child-CLI constraint (the host must have the agent CLIs installed — the release does not bundle them).</li>
+        <li><code class="status">[]</code> Verify the zero-orphan reaper and Oban reconciler behave across a release restart (<code>systemctl restart</code> mid-run resumes from <code>current_step</code>).</li>
+      </ul>
+
+      <h4>6.2 Minimal auth</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add a single-operator auth gate (e.g. <code>phx.gen.auth</code> or a signed-token plug) in front of the LiveView routes; webhooks already have HMAC.</li>
+      </ul>
+
+      <h4>6.3 Testing Strategy</h4>
+      <p>Release smoke: boot the release against a prod-shaped Postgres, run one Fake-harness workflow end-to-end, kill the node mid-run, confirm resume on reboot.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>MIX_ENV=prod mix release &amp;&amp; _build/prod/rel/repo_builder/bin/repo_builder eval "RepoBuilder.Release.migrate()"</code> — release builds and migrates.</li>
+        <li><code class="status">[]</code> Crash-resume smoke test passes (workflow resumes from <code>current_step</code> after restart).</li>
+        <li><code class="status">[]</code> Full five-command green gate.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== GLOBAL VALIDATION ===== -->
+  <section id="validation">
+    <h2>Validation Commands</h2>
+    <p>Execute these commands to validate the entire plan is complete:</p>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>mix compile --warnings-as-errors</code> — compiles clean, warnings-as-errors.</li>
+      <li><code class="status">[]</code> <code>mix format --check-formatted</code> — one canonical style.</li>
+      <li><code class="status">[]</code> <code>mix credo --strict</code> — lint incl. the @spec-on-every-public-function convention.</li>
+      <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — full suite, zero failures.</li>
+      <li><code class="status">[]</code> <code>mix dialyzer</code> — no new warnings beyond the (re-audited) ignore file.</li>
+      <li><code class="status">[]</code> <code>git status --porcelain | wc -l</code> — 0: no stray artifacts, all work committed in feature-scoped slices.</li>
+      <li><code class="status">[]</code> <code>wc -l lib/repo_builder_web/live/console_live.ex</code> — under ~800 lines (decomposition held).</li>
+    </ul>
+    <div class="loop">
+      🔁 <strong>The plan is not complete until every box is checked and every command passes. If for some reason a step is not possible to complete, mark it with [f] and move on if possible.</strong>
+    </div>
+  </section>
+
+  <!-- ===== NOTES ===== -->
+  <section id="notes">
+    <h2>Notes</h2>
+
+    <h3>A. Audit findings register — ordered by importance/urgency</h3>
+    <p>The evidence base for the phases above, kept as the durable record (also to be copied into <code>docs/audit-2026-07.md</code> in Phase 1).</p>
+    <table>
+      <tr><th>#</th><th>Priority</th><th>Finding</th><th>Evidence</th><th>Remedied by</th></tr>
+      <tr><td>F1</td><td><span class="tag p0">P0</span></td><td>Uncommitted multi-feature working tree incl. a migration not in history; process artifacts at repo root</td><td><code>git status</code>: ~25 modified/added files across ≥4 features; <code>erl_crash.dump</code>, <code>tmp_gate/</code>, <code>ph1_review.md</code>, <code>ph2_status.md</code> at root</td><td>Phase 1</td></tr>
+      <tr><td>F2</td><td><span class="tag p0">P0</span></td><td>Custom-ADW runs invisible after reconnect — live events never persist to <code>agent_logs</code></td><td>Live run <code>5e4b1acb</code>: 0 <code>agent_logs</code> rows; <code>persist_target/1</code> nil path in <code>session/server.ex</code></td><td>Phase 2</td></tr>
+      <tr><td>F3</td><td><span class="tag p1">P1</span></td><td>God modules at the console/orchestrator seam violate the project's own extensibility doctrine</td><td><code>console_live.ex</code> 4,786 ln / 113 handle_event; <code>console_components.ex</code> 4,629 ln; <code>tools.ex</code> 2,941 ln</td><td>Phase 3</td></tr>
+      <tr><td>F4</td><td><span class="tag p2">P2</span></td><td><code>type_check</code> requires manual source patching after every <code>deps.get</code>; blocks dependency upgrades</td><td><code>scripts/patch_deps.sh</code>; README install steps 3–4</td><td>Phase 4</td></tr>
+      <tr><td>F5</td><td><span class="tag p2">P2</span></td><td>24 near-duplicate Python ADW scripts — copy-paste maintenance across every workflow variant</td><td><code>ls adws/adw_*.py | wc -l</code> = 24; <code>Adw.Scaffold</code> golden-parity test proves generability</td><td>Phase 4</td></tr>
+      <tr><td>F6</td><td><span class="tag p2">P2</span></td><td>Quality-gate tier planned but unbuilt; live CLI acceptance remains fully manual</td><td><code>specs/quality-gate-plugins-…html</code> (planned 2026-07-02); README "honest limitations"</td><td>Phase 5</td></tr>
+      <tr><td>F7</td><td><span class="tag p2">P2</span></td><td>Docs drift: README stats stale; five sizeable subsystems (orchestrator, workstreams, cost, budget, forge) under-documented</td><td>README: 1,110 tests / 155 modules vs actual ~1,400+ / 207 files, 297 test files</td><td>Phases 1 &amp; 5</td></tr>
+      <tr><td>F8</td><td><span class="tag p3">P3</span></td><td>Test naming convention split (<code>test_*_test.exs</code> vs <code>*_test.exs</code>)</td><td><code>test/repo_builder_web/live/</code> listing shows both styles</td><td>Phase 5</td></tr>
+      <tr><td>F9</td><td><span class="tag p3">P3</span></td><td>No deployment/release story; single-user, no auth on the LiveView surface</td><td>README status section; no <code>rel/</code>, no release config exercised</td><td>Phase 6</td></tr>
+    </table>
+
+    <div class="callout"><strong>What the audit did <em>not</em> flag:</strong> code-level hygiene is excellent — only 3 TODO/FIXME markers across 207 modules, a strictly enforced typed standard, a 28-line justified Dialyzer ignore file, and secrets/webhook/vault security done properly (redaction before persistence, HMAC + constant-time compare, AES-256-GCM vault, fail-closed). The debt is structural and procedural, not sloppy code.</div>
+
+    <h3>B. Future-plans register — ordered by importance/urgency</h3>
+    <p>Everything on the horizon, including work beyond this plan's six phases. Items 1–6 map to the phases; 7–12 are the forward roadmap.</p>
+    <table>
+      <tr><th>#</th><th>Plan</th><th>Description</th><th>Urgency</th></tr>
+      <tr><td>1</td><td>Land the WIP + repo hygiene</td><td>Feature-scoped commit slices, artifact eviction, gitignore hardening, docs stat re-sync. Everything else waits on a safe tree.</td><td><span class="tag p0">now</span></td></tr>
+      <tr><td>2</td><td>Custom-ADW durable observability</td><td>Persist custom-ADW step events via a <code>workflow_run_id</code> scope so swimlanes survive reconnect; spec + migration + tests already drafted.</td><td><span class="tag p0">now</span></td></tr>
+      <tr><td>3</td><td>Finish the ADW builder</td><td>Combo load/delete (Phase 3 of its spec), prompt-step picker completion, non-iso merge-to-trunk. Makes the builder a complete authoring loop: compose → save → regenerate → run → merge.</td><td><span class="tag p1">next</span></td></tr>
+      <tr><td>4</td><td>God-module decomposition</td><td>ConsoleLive/components per-panel split + orchestrator tools per-domain split behind the catalog. Restores the "extension without core edits" doctrine at the UI seam.</td><td><span class="tag p1">next</span></td></tr>
+      <tr><td>5</td><td>Dependency + adws debt retirement</td><td><code>type_check</code> fork-or-upgrade, Dialyzer-ignore re-audit, regenerate all 24 Python ADWs from combos with a drift gate.</td><td><span class="tag p2">soon</span></td></tr>
+      <tr><td>6</td><td>Quality-gate plugin tier</td><td>Per-stack five-stage gate (format·lint·type·test·mutation) as a plugin contribution kind at the workstream <code>:test</code> stage.</td><td><span class="tag p2">soon</span></td></tr>
+      <tr><td>7</td><td>Deployment + minimal auth</td><td>mix release, one deploy target, crash-resume verification, single-operator auth. Turns "runs on my machine" into "runs on a box".</td><td><span class="tag p2">soon</span></td></tr>
+      <tr><td>8</td><td>Live-acceptance test tier</td><td>Tagged, opt-in suite driving the real <code>claude</code>/<code>pi</code> CLIs; converts the last manual verification step into automation.</td><td><span class="tag p3">later</span></td></tr>
+      <tr><td>9</td><td>Multi-project fleet view</td><td>Elevate the agentic-layer adaptor: a cross-project dashboard aggregating cost, budget burn, workstream state, and quality-gate results per registered repo.</td><td><span class="tag p3">later</span></td></tr>
+      <tr><td>10</td><td>Plugin store hardening</td><td>Real remote-store deployment, signature verification (the <code>require_signature</code> trust knob exists but nothing signs), plugin version upgrade paths.</td><td><span class="tag p3">later</span></td></tr>
+      <tr><td>11</td><td>Multi-node orchestration</td><td>Distribute session runtimes across BEAM nodes (libcluster + Horde or plain distributed Erlang); the durable/live split and os-pid ledger were designed node-local, so this is a real architecture step, not a toggle.</td><td><span class="tag p3">horizon</span></td></tr>
+      <tr><td>12</td><td>Harness breadth</td><td>Promote the Cursor stub to a real adapter; evaluate adding Codex/Gemini CLIs — each is one module + one config entry by design, so this is cheap validation of the doctrine.</td><td><span class="tag p3">horizon</span></td></tr>
+    </table>
+
+    <h3>C. Greenfield spinoff portfolio — new concepts, languages, frameworks</h3>
+    <p>The project's transferable learnings are: (1) the <strong>zero-orphan OS-process ledger</strong>, (2) the <strong>canonical event contract</strong> over untrusted streaming CLIs (open identity / closed contract), (3) the <strong>durable-vs-live execution split</strong>, (4) <strong>spec-driven ADW workflows</strong> with green-gate enforcement, and (5) <strong>deterministic orchestration of non-deterministic agents</strong>. Each spinoff below stresses a different learning in a different stack. Ordered by leverage (learning reuse × market interest × buildability).</p>
+    <figure>
+      <img src="project-audit-refactor-roadmap-and-greenfield-spinoffs/spinoffs.png" alt="One keystone platform seeding five satellite spinoff projects in different technology orbits">
+      <figcaption>One platform's invariants, re-expressed across five stacks — each spinoff isolates one hard-won learning.</figcaption>
+    </figure>
+
+    <div class="spinoff">
+      <span class="kicker">spinoff 1 · rust</span>
+      <h4>harnessd — a zero-orphan agent supervisor daemon (Rust + Tokio)</h4>
+      <p><strong>Concept:</strong> Extract learning #1 and #2 into a single-binary daemon that supervises AI-CLI child processes: NDJSON stream normalization, idle watchdogs, stdout backpressure, a durable pid ledger (SQLite) with a <code>/proc</code>-marker-verified boot reaper, and a Unix-socket/gRPC control API. The thing every agent-orchestration product needs and hand-rolls badly.</p>
+      <p><strong>Why this stack:</strong> Rust's ownership model + Tokio's process API make the "never leak a process" guarantee provable in a way the BEAM outsources to erlexec; a single static binary makes it embeddable in anyone's platform — including back into repo_builder as an alternative session runtime.</p>
+      <p><strong>First milestone:</strong> spawn/stream/kill one <code>claude -p</code> run with ledger-verified cleanup after a <code>kill -9</code> of the daemon itself.</p>
+    </div>
+
+    <div class="spinoff">
+      <span class="kicker">spinoff 2 · typescript</span>
+      <h4>Durable agent workflows on Temporal (TypeScript + Temporal.io)</h4>
+      <p><strong>Concept:</strong> Re-express learning #3 — the workflow_runs/Oban durable path — on a purpose-built durable-execution engine. Workflows become Temporal workflow functions; each agent step is an activity with heartbeats (the idle-watchdog analogue); crash-resume, retries, and history come free. The experiment: measure exactly how much of repo_builder's hand-rolled durability a dedicated engine absorbs, and what it costs in operational complexity.</p>
+      <p><strong>Why this stack:</strong> Temporal is the industry's answer to the problem this project solved manually; TypeScript is where most agent-SDK users live (Claude Agent SDK, Vercel AI SDK), so the result doubles as a credible OSS artifact.</p>
+      <p><strong>First milestone:</strong> plan→build→review workflow surviving a worker kill mid-build with zero custom persistence code.</p>
+    </div>
+
+    <div class="spinoff">
+      <span class="kicker">spinoff 3 · gleam</span>
+      <h4>Typed event contract on the BEAM, for real (Gleam + OTP)</h4>
+      <p><strong>Concept:</strong> The typed-Elixir standard (learning #2 + the whole @spec/TypeCheck/Dialyzer apparatus) taken to its logical conclusion: rebuild the harness contract + event sum type + wire boundary in Gleam, where the 8-variant Event is a genuine exhaustively-checked ADT and the wire boundary is a total decoder — no Credo gate, no Dialyzer ignores, no type_check patches. Scope: harness contract + one adapter + session runtime only.</p>
+      <p><strong>Why this stack:</strong> Same BEAM/OTP substrate, so the supervision learnings transfer 1:1, while the type system eliminates the entire class of tooling this project spends three gate commands enforcing. Directly answers "what would this look like if the types were native?"</p>
+      <p><strong>First milestone:</strong> Gleam decoder ingesting real <code>claude --output-format stream-json</code> output with compile-time exhaustiveness on all 8 variants.</p>
+    </div>
+
+    <div class="spinoff">
+      <span class="kicker">spinoff 4 · go</span>
+      <h4>Fleet control plane over NATS (Go + NATS JetStream)</h4>
+      <p><strong>Concept:</strong> Learning #5 at multi-machine scale — the future-plan #11 problem solved greenfield instead of retrofitted. Agents run on many hosts, each publishing the canonical event contract (protobuf) onto JetStream subjects; a stateless control plane consumes streams for orchestration, cost aggregation, and replay. Durable state is the log itself, not a SQL table — the inverse of repo_builder's design, which is the point of the experiment.</p>
+      <p><strong>Why this stack:</strong> Go + NATS is the native idiom for distributed control planes; contrasts event-sourced durability against repo_builder's state-machine durability with the same domain, making the trade-offs legible.</p>
+      <p><strong>First milestone:</strong> two hosts running agents, one control plane, full event replay reconstructing a run's swimlane after control-plane restart.</p>
+    </div>
+
+    <div class="spinoff">
+      <span class="kicker">spinoff 5 · desktop</span>
+      <h4>Local-first agent cockpit (Tauri + Rust core + SolidJS)</h4>
+      <p><strong>Concept:</strong> The ConsoleLive experience (learning #4's human-directs-AI loop) as a zero-server desktop app: spawn local agent CLIs directly (embedding spinoff #1's harnessd core), SQLite for the run ledger, native notifications for stall/budget alerts, everything offline. Where repo_builder is a control <em>plane</em>, this is a control <em>panel</em> — one operator, one machine, no Phoenix, no Postgres.</p>
+      <p><strong>Why this stack:</strong> Tauri gives the Rust process-supervision core a first-class home; SolidJS's fine-grained reactivity is the natural non-LiveView answer to streaming thousands of events into a flat-memory UI (the streams-container lessons transfer directly).</p>
+      <p><strong>First milestone:</strong> launch an ADW combo from the tray, watch live step swimlanes, survive an app restart with history intact.</p>
+    </div>
+
+    <div class="spinoff">
+      <span class="kicker">spinoff 6 · python</span>
+      <h4>adws as a product — spec-driven CI for agents (Python + FastAPI + HTMX)</h4>
+      <p><strong>Concept:</strong> The <code>adws/</code> harness (learning #4) generalized into a standalone tool any repo can adopt: a <code>pyproject</code>-installable CLI + minimal web UI that runs plan→build→test→review ADWs against any codebase with worktree isolation, green-gate enforcement per stack, and golden-file workflow generation (the Scaffold idea, but Python-native). Effectively "GitHub Actions for agent workflows", self-hosted.</p>
+      <p><strong>Why this stack:</strong> The harness is already Python; FastAPI + HTMX keeps the surface small and the audience (Python-first AI engineers) is the largest; lowest-risk spinoff since 70% of the code exists in <code>adws/</code> today.</p>
+      <p><strong>First milestone:</strong> <code>pip install adws && adws run plan_build --spec my-spec.md</code> working on a non-Elixir repo.</p>
+    </div>
+
+    <h3>D. Context, risks, and rejected alternatives</h3>
+    <ul>
+      <li><strong>Order rationale:</strong> hygiene before features (a dirty tree makes every diff unreviewable), features before refactor (Phase 3 rewrites the exact files Phase 2 touches — landing features first avoids double-migration of their tests), refactor before debt/gates (the tool split changes where quality-gate tools live).</li>
+      <li><strong>Risk — Phase 3 test churn:</strong> ~40 LiveView test files target ConsoleLive; extraction must keep <code>element/3</code> selectors stable. Mitigation: panels keep their DOM ids; extraction is per-panel with a full test run between panels.</li>
+      <li><strong>Risk — tool split vs orchestrator prompts:</strong> the LLM-facing tool manifest must stay byte-stable through Phase 3.3; the snapshot test is mandatory, not optional.</li>
+      <li><strong>Rejected — rewriting ConsoleLive as separate routes:</strong> the console's value is the single-pane multi-layer view; splitting into routes would fix file size by destroying the product. Per-panel LiveComponents keep both.</li>
+      <li><strong>Rejected — dropping TypeCheck entirely (as Phase 4's first move):</strong> the wire boundary catches real defects from untrusted CLI output; removal is a last resort behind upgrade/fork options.</li>
+      <li><strong>Spinoff sequencing suggestion:</strong> #6 (adws productization) is the cheapest and validates demand; #1 (harnessd) is the highest-leverage engineering artifact and feeds #5. #3 (Gleam) is the best learning-per-hour ratio. Doing #2 and #4 later, informed by #1/#6, avoids building two distributed systems before the single-node ideas are proven portable.</li>
+      <li><strong>No new dependencies</strong> are required for Phases 1–5; Phase 6 may add a deploy target's tooling only.</li>
+    </ul>
+  </section>
+
+  <!-- ===== AMENDMENTS ===== -->
+  <section id="amendments">
+    <h2>Amendments</h2>
+    <p><em>None yet — append-only history begins after first execution.</em></p>
+  </section>
+
+</main>
+</body>
+</html>

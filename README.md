@@ -6,7 +6,7 @@
 ![Phoenix](https://img.shields.io/badge/Phoenix-1.8-FD4F00)
 ![OTP](https://img.shields.io/badge/OTP-28-A90533)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791)
-![tests](https://img.shields.io/badge/tests-1%2C110%20passing-2ea44f)
+![tests](https://img.shields.io/badge/tests-1%2C671%20passing-2ea44f)
 ![green gate](https://img.shields.io/badge/green%20gate-enforced-2ea44f)
 
 ![A human architect directing a swarm of AI agent nodes assembling a clean modular system into a single solid keystone](assets/readme/hero.png)
@@ -60,11 +60,11 @@ Every change has to pass a five-command gate before it lands. This is the bar th
 mix compile --warnings-as-errors   # warnings are errors
 mix format --check-formatted       # one canonical style
 mix credo --strict                 # incl. @spec on every public function
-mix test --warnings-as-errors      # 1,110 tests, all green
+mix test --warnings-as-errors      # 1,671 tests, all green
 mix dialyzer                       # success-typing + contract checking
 ```
 
-At this commit, the numbers behind that bar: **~31,000 lines of strictly-typed Elixir** across **155 modules** and **28 `@spec`'d contexts**. **1,110 tests**, driven entirely through a `Fake`/Mock adapter, so CI needs no external CLI. Dialyzer runs with a small set of justified, documented skips. The full gate also runs in CI (`.github/workflows/ci.yml`).
+At this commit, the numbers behind that bar: **~46,700 lines of strictly-typed Elixir** across **230 modules** and **28 `@spec`'d contexts**. **1,671 tests**, driven entirely through a `Fake`/Mock adapter, so CI needs no external CLI. Dialyzer runs with a small set of justified, documented skips. The full gate also runs in CI (`.github/workflows/ci.yml`).
 
 The typing is not cosmetic. There is a `@spec` on every public function, `typedstruct`/`@enforce_keys` for domain data, precise types over `any()`/`map()`, and `{:ok, t()} | {:error, reason()}` instead of raising. The standard is written down in [`ai_docs/typed-elixir-standard.md`](ai_docs/typed-elixir-standard.md) and enforced by `.credo.exs` and Dialyzer.
 
@@ -440,7 +440,7 @@ mix test --warnings-as-errors
 mix dialyzer
 ```
 
-The suite has **1,110 tests** and is driven against the runtime through the `Fake`/Mock adapter via the registry seam, so it needs no external CLIs. Dialyzer runs with a small set of **justified TypeCheck skips** (`.dialyzer_ignore.exs`). The full gate also runs in CI (`.github/workflows/ci.yml`).
+The suite has **1,671 tests** and is driven against the runtime through the `Fake`/Mock adapter via the registry seam, so it needs no external CLIs. Dialyzer runs with a small set of **justified TypeCheck skips** (`.dialyzer_ignore.exs`). The full gate also runs in CI (`.github/workflows/ci.yml`).
 
 ## Adding a harness
 
