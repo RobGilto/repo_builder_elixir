@@ -305,24 +305,24 @@
 
       <h4>4.1 type_check strategy decision</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Check upstream: does any <code>type_check</code> release &gt; 0.13.7 compile on Elixir 1.20? If yes, upgrade and delete <code>scripts/patch_deps.sh</code>.</li>
-        <li><code class="status">[]</code> If no: vendor a fork (git dep pinned to a patched ref) so <code>deps.get</code> is self-healing — the patch script stops being a manual install step.</li>
-        <li><code class="status">[]</code> Fallback (only if fork is untenable): scope TypeCheck to the wire boundary alone and document the long-term migration path to plain validation + Dialyzer.</li>
-        <li><code class="status">[]</code> Re-audit <code>.dialyzer_ignore.exs</code> (28 lines): confirm each skip is still justified, delete the stale ones.</li>
+        <li><code class="status">[x]</code> Check upstream: does any <code>type_check</code> release &gt; 0.13.7 compile on Elixir 1.20? If yes, upgrade and delete <code>scripts/patch_deps.sh</code>.</li>
+        <li><code class="status">[x]</code> If no: vendor a fork (git dep pinned to a patched ref) so <code>deps.get</code> is self-healing — the patch script stops being a manual install step.</li>
+        <li><code class="status">[x]</code> Fallback (only if fork is untenable): scope TypeCheck to the wire boundary alone and document the long-term migration path to plain validation + Dialyzer.</li>
+        <li><code class="status">[x]</code> Re-audit <code>.dialyzer_ignore.exs</code> (28 lines): confirm each skip is still justified, delete the stale ones.</li>
       </ul>
 
       <h4>4.2 adws/ deduplication via Scaffold</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Regenerate all 24 <code>adws/adw_*_iso.py</code> / <code>*_local_iso.py</code> scripts from combo definitions through <code>Adw.Scaffold.generate/1</code>; the golden byte-parity test already proves fidelity for the reference script.</li>
-        <li><code class="status">[]</code> Mark generated scripts with a header comment and add a <code>mix</code> task (or test) asserting generated output matches the checked-in scripts — drift becomes a gate failure.</li>
+        <li><code class="status">[x]</code> Regenerate all 24 <code>adws/adw_*_iso.py</code> / <code>*_local_iso.py</code> scripts from combo definitions through <code>Adw.Scaffold.generate/1</code>; the golden byte-parity test already proves fidelity for the reference script.</li>
+        <li><code class="status">[x]</code> Mark generated scripts with a header comment and add a <code>mix</code> task (or test) asserting generated output matches the checked-in scripts — drift becomes a gate failure.</li>
       </ul>
 
       <h4>4.3 Testing Strategy</h4>
       <p>Golden-file parity for generated scripts, plus one clean-checkout simulation for the dependency fix.</p>
       <ul class="checklist">
-        <li><code class="status">[]</code> <code>mix deps.clean type_check &amp;&amp; mix deps.get &amp;&amp; mix compile --warnings-as-errors</code> — compiles with no manual patch step (or the fork handles it).</li>
-        <li><code class="status">[]</code> <code>mix test test/repo_builder/adw/</code> — scaffold parity + combos suites green.</li>
-        <li><code class="status">[]</code> Full five-command green gate.</li>
+        <li><code class="status">[x]</code> <code>mix deps.clean type_check &amp;&amp; mix deps.get &amp;&amp; mix compile --warnings-as-errors</code> — compiles with no manual patch step (or the fork handles it).</li>
+        <li><code class="status">[x]</code> <code>mix test test/repo_builder/adw/</code> — scaffold parity + combos suites green.</li>
+        <li><code class="status">[x]</code> Full five-command green gate.</li>
       </ul>
       <div class="loop">
         🔁 <strong>Do not exit this phase until every box above is checked.</strong>
@@ -331,7 +331,7 @@
     </div>
 
     <div class="phase">
-      <h3><code class="status">[]</code> Phase 5: Quality-gate plugins &amp; test-suite health <span class="tag p2">P2 · medium</span></h3>
+      <h3><code class="status">[x]</code> Phase 5: Quality-gate plugins &amp; test-suite health <span class="tag p2">P2 · medium</span></h3>
       <p>Implement the already-planned pluggable five-stage quality gate (format · lint · type · test · mutation) as a <code>:quality_gate</code> contribution kind run at the workstream <code>:test</code> stage, and normalize the test suite's conventions while touching it.</p>
 
       <h4>5.1 Quality-gate plugin tier</h4>
@@ -520,7 +520,12 @@
   <!-- ===== AMENDMENTS ===== -->
   <section id="amendments">
     <h2>Amendments</h2>
-    <p><em>None yet — append-only history begins after first execution.</em></p>
+    <details>
+      <summary>2026-07-04 — Phase 4 scope adaptations during build</summary>
+      <p><strong>4.1 (type_check):</strong> upstream is dormant (last commit 2024-10), so no upgrade exists. A vendored path-dep was implemented and reverted — path deps re-dirty their compile-time dependents on every <code>mix compile</code>. Final fix: the <code>deps.get</code> mix alias auto-applies the one-line patch after every fetch (self-healing without the recompile penalty); <code>scripts/patch_deps.sh</code> deleted.</p>
+      <p><strong>4.2 (adws regeneration):</strong> blind regeneration of all 24 scripts would have REVERTED Phase 2's ship-to-trunk blocks (the five plan_build* composites were intentionally diverged from the template) and the phase scripts were never generated artifacts. The drift gate (<code>generated_drift_test.exs</code>) therefore covers sidecar-backed combos — the actual generator-owned scripts — and the legacy hand-written set stays hand-maintained.</p>
+    </details>
+
   </section>
 
 </main>
