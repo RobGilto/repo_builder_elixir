@@ -805,15 +805,15 @@ The following commands switch to Opus when using the heavy model set:
 - `/resolve_failed_e2e_test` - Debugging E2E test failures
 - `/document` - Documentation generation
 - `/chore`, `/bug`, `/feature` - Issue-specific implementations
-- `/planf3` - HTML-first planning (repo-vendored planf3 format)
+- `/plan_f3` - HTML-first planning (repo-vendored planf3 format)
 - `/patch` - Creating patches for changes
 
 #### HTML plans (planf3)
 
 The plan step can author **HTML-first planf3 plans** instead of the markdown
 `/feature`-family templates. Set the environment variable
-`ADW_PLAN_COMMAND=/planf3` (validated against the plan-capable set
-`/planf3|/feature|/bug|/chore`; unknown values warn and fall back to the
+`ADW_PLAN_COMMAND=/plan_f3` (validated against the plan-capable set
+`/plan_f3|/feature|/bug|/chore`; unknown values warn and fall back to the
 classified issue class). The override reroutes only the plan step — issue
 classification and branch naming still use the class commands.
 

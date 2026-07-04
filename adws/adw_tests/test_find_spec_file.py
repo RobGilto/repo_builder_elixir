@@ -50,8 +50,8 @@ def test_resolve_plan_command_default_is_issue_class():
 
 def test_resolve_plan_command_override_planf3():
     assert _with_env(
-        "ADW_PLAN_COMMAND", "/planf3", lambda: resolve_plan_command("/feature")
-    ) == "/planf3"
+        "ADW_PLAN_COMMAND", "/plan_f3", lambda: resolve_plan_command("/feature")
+    ) == "/plan_f3"
 
 
 def test_resolve_plan_command_unknown_falls_back():
@@ -62,7 +62,7 @@ def test_resolve_plan_command_unknown_falls_back():
 
 
 def test_plan_capable_commands_include_planf3_and_classes():
-    assert "/planf3" in PLAN_CAPABLE_COMMANDS
+    assert "/plan_f3" in PLAN_CAPABLE_COMMANDS
     for cls in ("/feature", "/bug", "/chore"):
         assert cls in PLAN_CAPABLE_COMMANDS
 

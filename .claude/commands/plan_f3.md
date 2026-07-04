@@ -1,10 +1,10 @@
 ---
-command: planf3
+command: plan_f3
 version: 1.0.0
-description: HTML-first implementation plan into specs/, planf3 format (self-contained, no ~/.claude dependency)
+description: HTML-first implementation plan into specs/, planf3 format (self-contained, no ~/.claude dependency; named /plan_f3 so the user-scope planf3 skill can never shadow it)
 ---
 
-# Plan F3 (project-vendored)
+# Plan F3 (project-vendored, command /plan_f3)
 
 Create a detailed, **HTML-first** implementation plan for the `REQUEST` and save it to the
 `specs/` directory. The plan is a single self-contained `.html` page: browsable, image-slotted,

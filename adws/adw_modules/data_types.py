@@ -70,7 +70,7 @@ SlashCommand = Literal[
     "/bug",
     "/feature",
     # ADW workflow commands
-    "/planf3",  # HTML-first planner (repo-vendored planf3; plan-step alternative to the class commands)
+    "/plan_f3",  # HTML-first planner (repo-vendored planf3; plan-step alternative to the class commands)
     "/classify_issue",
     "/classify_adw",
     "/generate_branch_name",

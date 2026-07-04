@@ -165,9 +165,9 @@ def classify_issue(
 
 # Commands allowed as the plan step. The classified issue class (/chore|/bug|/feature)
 # stays the default; ADW_PLAN_COMMAND may reroute planning to an alternative planner
-# (e.g. the repo-vendored HTML-first /planf3) without touching classification or
+# (e.g. the repo-vendored HTML-first /plan_f3) without touching classification or
 # branch naming.
-PLAN_CAPABLE_COMMANDS = ("/planf3", "/feature", "/bug", "/chore")
+PLAN_CAPABLE_COMMANDS = ("/plan_f3", "/feature", "/bug", "/chore")
 
 
 def resolve_plan_command(issue_class: str) -> str:

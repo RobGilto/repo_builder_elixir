@@ -50,7 +50,7 @@ SLASH_COMMAND_MODEL_MAP: Final[Dict[SlashCommand, Dict[ModelSet, ModelTier]]] = 
     "/chore": {"base": "main", "heavy": "heavy"},
     "/bug": {"base": "main", "heavy": "heavy"},
     "/feature": {"base": "main", "heavy": "heavy"},
-    "/planf3": {"base": "main", "heavy": "heavy"},
+    "/plan_f3": {"base": "main", "heavy": "heavy"},
     "/patch": {"base": "main", "heavy": "heavy"},
     "/install_worktree": {"base": "main", "heavy": "main"},
     "/track_agentic_kpis": {"base": "main", "heavy": "main"},
