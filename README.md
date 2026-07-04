@@ -38,7 +38,7 @@ The interesting engineering here is not CRUD. It is making non-deterministic, cr
 
 ![An architecture diagram: a deterministic core fanning out to swappable harness adapters, a live dashboard, trigger inputs, and a database ledger](assets/readme/architecture.png)
 
-A deterministic core drives non-deterministic agents over a normalized event stream. Two execution paths share the same canonical contract: the **live path** (a `WorkflowEngine.Runner` state machine feeding the dashboard) and the **durable path** (Oban workers that persist each transition and reconcile in-flight runs after a restart). The full specification lives in [`BUILD_PROMPT.md`](BUILD_PROMPT.md); the engineering rationale in [`docs/engineering-principles.md`](docs/engineering-principles.md).
+A deterministic core drives non-deterministic agents over a normalized event stream. Two execution paths share the same canonical contract: the **live path** (a `WorkflowEngine.Runner` state machine feeding the dashboard) and the **durable path** (Oban workers that persist each transition and reconcile in-flight runs after a restart). The full specification lives in [`BUILD_PROMPT.md`](BUILD_PROMPT.md); the engineering rationale in [`docs/engineering-principles.md`](docs/engineering-principles.md). The orchestrator, workstreams, cost-center, budget-guard, and forge subsystems are mapped in [`ai_docs/architecture-map.md`](ai_docs/architecture-map.md).
 
 Module map:
 
