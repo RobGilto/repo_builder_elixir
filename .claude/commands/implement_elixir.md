@@ -32,8 +32,8 @@ REQUEST: $ARGUMENTS
 
 - If `REQUEST` is empty/blank, STOP immediately and report the error (nothing to implement).
 - Otherwise classify `REQUEST` yourself — do not assume it is a bare path:
-  - **A spec/plan path** — it names a readable file (e.g. `specs/issue-….md`). Read that
-    file and implement it as the plan.
+  - **A spec/plan path** — it names a readable file (e.g. `specs/issue-….md` or
+    `specs/issue-….html`). Read that file and implement it as the plan.
   - **A JSON blob** — it parses as JSON (has `title`/`body` or `number`). Treat
     `title`+`body` as the request and, if no matching `specs/…` plan exists yet, implement
     directly from that description.
@@ -49,6 +49,14 @@ REQUEST: $ARGUMENTS
 
 - Think hard, then implement every step of the plan's `Step by Step Tasks` (for a spec) or
   the full inline request, following any `Acceptance Criteria`.
+- **HTML plans (planf3 format):** when the spec path ends in `.html`, the plan is a planf3
+  document (execution semantics in `ai_docs/planf3/build-plan.md`): `<section id="phases">`
+  holds ordered `.phase` blocks with `<h4>` tasks and `<ul class="checklist">` items;
+  `<section id="validation">` holds the global gate. Execute phases strictly top to bottom,
+  honouring each phase's Testing Strategy 🔁 loop before moving on. Keep the plan file as
+  the live progress ledger: Edit each `<code class="status">[]</code>` to `[wip]` when
+  starting, `[x]` on completion, or `[f]` + a one-line reason in the plan's Amendments
+  section if a step is impossible.
 - Honor the typed style guide in `BUILD_PROMPT.md` §3: an `@spec` on every public function
   (`@impl true` callbacks are exempt), `@type`/`typedstruct`/`@enforce_keys` for domain
   data, precise types over `any()`/`map()`, `{:ok, t()} | {:error, reason()}` over raising.

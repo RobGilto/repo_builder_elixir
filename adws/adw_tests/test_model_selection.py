@@ -66,6 +66,8 @@ def test_tier_lookups():
     test_cases = [
         ("/implement", "base", "main"),
         ("/implement", "heavy", "heavy"),
+        ("/planf3", "base", "main"),
+        ("/planf3", "heavy", "heavy"),
         ("/classify_issue", "base", "main"),
         ("/classify_issue", "heavy", "main"),
         ("/review", "base", "main"),

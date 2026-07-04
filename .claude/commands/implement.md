@@ -21,6 +21,21 @@ PATH_TO_PLAN: $ARGUMENTS
 - If no `PATH_TO_PLAN` is provided, STOP immediately and report the error.
 - Read the plan at `PATH_TO_PLAN`. Think hard, then implement every step of its
   `Step by Step Tasks` into the codebase, following the plan's `Acceptance Criteria`.
+
+### HTML plans (planf3 format)
+
+- When `PATH_TO_PLAN` ends in `.html`, the plan is a planf3 document (authored by
+  `/planf3`; execution semantics in `ai_docs/planf3/build-plan.md`). Its structure:
+  `<section id="phases">` holds ordered `.phase` blocks, each with `<h4>` tasks and
+  `<ul class="checklist">` items; `<section id="validation">` holds the global gate.
+- Execute phases strictly top to bottom. Honour each phase's Testing Strategy 🔁 loop —
+  do not start the next phase until the current phase's checks pass.
+- Status-marker protocol — the plan file is the live progress ledger. Before starting a
+  phase/task, Edit its `<code class="status">[]</code>` to `[wip]`; on completion `[x]`;
+  if a step is impossible, `[f]` plus a one-line reason appended to the plan's
+  `<section id="amendments">`.
+- The plan's global Validation Commands section replaces the markdown plan's
+  `Validation Commands` — run it in full, checking boxes as commands pass.
 - This is an **Elixir/Phoenix/OTP** app. Honor the typed style guide in `BUILD_PROMPT.md`
   §3: an `@spec` on every public function (`@impl true` callbacks are exempt),
   `@type`/`typedstruct`/`@enforce_keys` for domain data, precise types over

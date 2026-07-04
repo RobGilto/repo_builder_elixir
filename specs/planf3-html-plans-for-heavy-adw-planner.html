@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan: Incorporate planf3 — HTML Plans in specs/ Authored by the Heavy ADW Planner</title>
+<style>
+  :root {
+    --ink: #1c2733;
+    --ink-soft: #44525f;
+    --muted: #6f7b86;
+    --paper: #f7f5f1;
+    --card: #ffffff;
+    --accent: #b45309;       /* heavy-tier amber */
+    --accent-soft: #fdf1e3;
+    --ok: #1a7f4f;
+    --new: #1d4ed8;
+    --line: #e3ded6;
+    --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    --sans: "Inter", -apple-system, "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--sans); line-height: 1.6; }
+  main { max-width: 920px; margin: 0 auto; padding: 48px 32px 96px; }
+  h1 { font-size: 1.9rem; line-height: 1.25; letter-spacing: -0.02em; margin: 0 0 12px; }
+  h2 { font-size: 1.35rem; letter-spacing: -0.01em; margin: 56px 0 12px; padding-bottom: 8px; border-bottom: 2px solid var(--line); }
+  h3 { font-size: 1.08rem; margin: 28px 0 8px; }
+  h4 { font-size: 0.98rem; margin: 22px 0 6px; color: var(--ink-soft); }
+  p { margin: 8px 0; }
+  code { font-family: var(--mono); font-size: 0.86em; background: #eeeae2; padding: 1px 5px; border-radius: 4px; }
+  pre { background: #212833; color: #e8e4da; padding: 16px 18px; border-radius: 8px; overflow-x: auto; font-size: 0.82rem; line-height: 1.55; }
+  pre code { background: none; padding: 0; color: inherit; }
+  figure { margin: 28px 0; text-align: center; }
+  figure img { max-width: 100%; border-radius: 10px; border: 1px solid var(--line); box-shadow: 0 2px 12px rgba(28,39,51,0.08); }
+  figcaption { font-size: 0.85rem; color: var(--muted); margin-top: 10px; }
+  details.meta { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 16px; margin: 18px 0; font-size: 0.88rem; }
+  details.meta summary { cursor: pointer; font-weight: 600; color: var(--ink-soft); }
+  details.meta dl { display: grid; grid-template-columns: 130px 1fr; gap: 4px 16px; margin: 12px 0 4px; }
+  details.meta dt { font-weight: 600; color: var(--muted); }
+  details.meta dd { margin: 0; font-family: var(--mono); font-size: 0.82rem; overflow-wrap: anywhere; }
+  .tag { display: inline-block; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; padding: 2px 8px; border-radius: 999px; margin-right: 6px; }
+  .tag.existing { background: var(--accent-soft); color: var(--accent); }
+  .tag.new { background: #e5edff; color: var(--new); }
+  .files ul { list-style: none; padding-left: 0; }
+  .files li { padding: 7px 0; border-bottom: 1px dashed var(--line); font-size: 0.93rem; }
+  .phase { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 10px; padding: 22px 26px; margin: 26px 0; }
+  .phase h3 { margin-top: 0; }
+  .status { color: var(--accent); font-weight: 700; }
+  ul.checklist { list-style: none; padding-left: 4px; }
+  ul.checklist li { padding: 4px 0; font-size: 0.93rem; }
+  .loop { background: var(--accent-soft); border: 1px solid #ecd3b4; border-radius: 8px; padding: 12px 16px; margin: 18px 0 4px; font-size: 0.9rem; }
+  #questionables details, #amendments details { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 16px; margin: 12px 0; }
+  #questionables summary, #amendments summary { cursor: pointer; font-weight: 600; }
+  .qa-answer { color: var(--ink-soft); font-size: 0.93rem; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 0.9rem; background: var(--card); }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: #efece5; font-weight: 600; }
+  .callout { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 14px 18px; margin: 16px 0; font-size: 0.92rem; }
+</style>
+</head>
+<body>
+<main>
+
+  <!-- ===== HEADER + UPDATABLE METADATA ===== -->
+  <header>
+    <h1>Plan: Incorporate planf3 — HTML Plans in <code>specs/</code> Authored by the Heavy ADW Planner</h1>
+    <details class="meta">
+      <summary>Metadata</summary>
+      <dl>
+        <dt>created</dt>      <dd>2026-07-04T09:10:00+01:00</dd>
+        <dt>modified</dt>     <dd>2026-07-04T09:10:00+01:00, 2026-07-04T09:40:00+01:00, 2026-07-04T10:05:00+01:00, 2026-07-04T10:30:00+01:00</dd>
+        <dt>commits</dt>      <dd>—</dd>
+        <dt>agent name</dt>   <dd>claude-fable-5 (Claude Code)</dd>
+        <dt>session id</dt>   <dd>8c7fb6ed-f477-4c3b-8e0f-ea6d0e324a82</dd>
+        <dt>back refs</dt>    <dd>~/.claude/skills/planf3/SKILL.md, .claude/commands/feature.md, .claude/commands/implement.md, adws/README.md, specs/project-audit-refactor-roadmap-and-greenfield-spinoffs.html</dd>
+        <dt>forward refs</dt> <dd>—</dd>
+      </dl>
+    </details>
+  </header>
+
+  <!-- Hero image — synced to the :root visual identity. -->
+  <figure>
+    <img src="planf3-html-plans-for-heavy-adw-planner/hero.png" alt="An amber heavy planner agent authoring a rich HTML plan that flows into a specs/ folder and onward into a build pipeline">
+    <figcaption>The heavy-tier ADW planner authors HTML-first plans directly into <code>specs/</code>, feeding the build pipeline.</figcaption>
+  </figure>
+
+  <!-- ===== PURPOSE / PROBLEM / SOLUTION ===== -->
+  <section id="purpose">
+    <h2>Purpose</h2>
+    <p>Bring the user-scope <code>planf3</code> skill (<code>~/.claude/skills/planf3/</code>) into the <code>repo_builder_elixir</code> project as a first-class planning surface: a project-local <code>/planf3</code> slash command that authors self-contained <strong>HTML plan documents into the project's <code>specs/</code> directory</strong>, wired into the ADW harness so the planning step runs on the <strong>heavy model tier</strong> (<code>heavy → opus</code> under the claude+anthropic mapping) and so the resulting <code>.html</code> plan is discovered and consumed by the downstream <code>/implement</code> step.</p>
+  </section>
+
+  <section id="problem">
+    <h2>Problem</h2>
+    <p>Today the ADW planning step (<code>build_plan</code> in <code>adws/adw_modules/workflow_ops.py</code>) plans exclusively through the markdown-template commands <code>/feature</code>, <code>/bug</code>, and <code>/chore</code>. The richer planf3 format — self-contained HTML with metadata lifecycle, phase status markers, per-phase validation loops, embedded imagery, and an append-only amendment history — exists only as a user-scope skill, invoked manually and disconnected from the ADW pipeline. Three concrete gaps block adoption:</p>
+    <p>1) There is no project-local <code>/planf3</code> command for the ADW harness to invoke (ADW steps are slash commands, not skills). 2) The harness is typed and gated: <code>SlashCommand</code> in <code>adws/adw_modules/data_types.py:67</code> and <code>SLASH_COMMAND_MODEL_MAP</code> in <code>adws/adw_modules/agent.py:37</code> don't know the command, so it can't be routed to the heavy tier. 3) Downstream discovery is markdown-only — <code>find_spec_file</code> (<code>workflow_ops.py:583</code>) filters <code>specs/*.md</code> in both its git-diff scan and its glob fallback, so an HTML plan would be invisible to the build/test/review steps.</p>
+    <figure>
+      <img src="planf3-html-plans-for-heavy-adw-planner/problem.png" alt="A rich HTML plan document blocked at a pipeline gate whose filter admits only .md files">
+      <figcaption>The ADW pipeline's spec discovery and model routing only admit markdown plans from <code>/feature</code>-family commands.</figcaption>
+    </figure>
+  </section>
+
+  <section id="solution">
+    <h2>Solution</h2>
+    <p>Four thin, opt-in integrations, each touching the existing seam rather than inventing a new one: <strong>(1)</strong> author <code>.claude/commands/planf3.md</code> — a self-contained project command adapted from the skill (HTML template inline, <code>specs/</code> output, ADW filename convention, Elixir/typed-standard planning guardrails inherited from <code>/feature</code>, lossless <code>$ARGUMENTS</code> contract, "return only the plan path" report). <strong>(2)</strong> register the command in the harness type system and model map with <code>{"base": "main", "heavy": "heavy"}</code> — identical to <code>/feature</code> — so <code>model_set heavy</code> runs plan on the heavy tier, and select it via a new <code>ADW_PLAN_COMMAND</code> environment override (default stays <code>/feature</code>; fully backwards compatible). <strong>(3)</strong> teach <code>find_spec_file</code> and <code>/implement</code>/<code>/implement_elixir</code> to discover and execute <code>.html</code> plans, including flipping the plan's <code>[]</code>/<code>[wip]</code>/<code>[x]</code> status markers in place per the skill's Build Plan workflow. <strong>(4)</strong> lock it in with pytest coverage, README/model-map docs, and a conditional-docs entry.</p>
+    <figure>
+      <img src="planf3-html-plans-for-heavy-adw-planner/solution.png" alt="Four labeled connectors bridging the planf3 skill to the ADW pipeline: command, model map, discovery, implement">
+      <figcaption>Four seam-level integrations: project command → heavy model map → dual-format spec discovery → HTML-aware implement.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== RELEVANT FILES ===== -->
+  <section id="files" class="files">
+    <h2>Relevant Files</h2>
+
+    <h3>Existing Files</h3>
+    <ul>
+      <li><span class="tag existing">existing</span> <code>~/.claude/skills/planf3/SKILL.md</code> — source skill: plan template, variables, workflow table; adapted (not referenced at runtime) into the project command.</li>
+      <li><span class="tag existing">existing</span> <code>~/.claude/skills/planf3/workflows/{create-plan,build-plan,update-plan,update-references,image-generation}.md</code> — workflow semantics to fold into the project command and the implement-side consumption rules.</li>
+      <li><span class="tag existing">existing</span> <code>~/.claude/skills/planf3/scripts/{generate_gpt_image.py,edit_gpt_image.py}</code> — image generation scripts; copied into project <code>scripts/</code> for the optional interactive image pass.</li>
+      <li><span class="tag existing">existing</span> <code>.claude/commands/feature.md</code> — the current planner command; source of the <code>$ARGUMENTS</code> contract, filename convention, Elixir guardrails, Tidewave guidance, and validation-command block.</li>
+      <li><span class="tag existing">existing</span> <code>.claude/commands/implement.md</code> and <code>.claude/commands/implement_elixir.md</code> — plan consumers; must gain HTML-plan reading + status-marker updating rules.</li>
+      <li><span class="tag existing">existing</span> <code>adws/adw_modules/data_types.py</code> — <code>SlashCommand</code> literal (line 67) gains <code>"/planf3"</code>.</li>
+      <li><span class="tag existing">existing</span> <code>adws/adw_modules/agent.py</code> — <code>SLASH_COMMAND_MODEL_MAP</code> (line 37) gains the heavy-tier mapping for <code>/planf3</code>.</li>
+      <li><span class="tag existing">existing</span> <code>adws/adw_modules/workflow_ops.py</code> — plan-command selection near <code>LOCAL_ISSUE_CLASS</code> (line 740) and <code>find_spec_file</code> (line 583) dual-format discovery.</li>
+      <li><span class="tag existing">existing</span> <code>adws/adw_tests/test_model_selection.py</code> — existing model-selection tests; extend for <code>/planf3</code>.</li>
+      <li><span class="tag existing">existing</span> <code>adws/README.md</code> — model-selection docs (lines ~773–826); document the new command and <code>ADW_PLAN_COMMAND</code>.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/settings.ex</code> — sole <code>app_settings</code> Repo caller; gains the <code>planf3_image_placeholders?</code> getter/setter (Phase 5).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/components/console/settings_components.ex</code> + <code>lib/repo_builder_web/live/console_live.ex</code> — tabbed settings modal and its event handlers; gain the placeholder toggle on the General tab (Phase 5).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/secrets.ex</code> + <code>lib/repo_builder/session/server.ex</code> — encrypted vault (<code>resolve_env/1</code>, <code>resolve_platform_env/0</code>) and the OS-child env merge seam (<code>server.ex:293</code>) where <code>PLANF3_IMAGES</code> is injected (Phase 5; no vault code changes expected).</li>
+      <li><span class="tag existing">existing</span> <code>.claude/commands/conditional_docs.md</code> — triage router; add an entry pointing planf3-related tasks at the command + this spec.</li>
+    </ul>
+
+    <h3>New Files</h3>
+    <ul>
+      <li><span class="tag new">new</span> <code>.claude/commands/planf3.md</code> — the self-contained project planning command (HTML template inline).</li>
+      <li><span class="tag new">new</span> <code>scripts/generate_gpt_image.py</code> and <code>scripts/edit_gpt_image.py</code> — copied from the skill so the interactive image pass runs from the repo root (headless ADW runs skip images entirely).</li>
+      <li><span class="tag new">new</span> <code>ai_docs/planf3/{build-plan,update-plan,update-references,image-generation}.md</code> — vendored lifecycle workflows, rewritten against project paths; the repo's single source of truth for planf3 semantics.</li>
+      <li><span class="tag new">new</span> <code>specs/.planf3-assets/placeholders/{hero,problem,solution,phase,notes}.png</code> — stock placeholder images embedded by default in ADW-authored plans, avoiding per-plan OpenAI image spend; seeded from this plan's already-generated image set.</li>
+      <li><span class="tag new">new</span> <code>adws/adw_tests/test_find_spec_file.py</code> — pytest coverage for dual-format (<code>.md</code>/<code>.html</code>) spec discovery (or extend an existing harness test module if one already covers <code>find_spec_file</code>).</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder_web/live/test_planf3_placeholder_setting_test.exs</code> — LiveViewTest for the settings-modal toggle, default-on state, and the missing-key warning (Phase 5).</li>
+    </ul>
+  </section>
+
+  <!-- ===== IMPLEMENTATION PHASES ===== -->
+  <section id="phases">
+    <h2>Implementation Phases</h2>
+    <p><strong>IMPORTANT:</strong> Execute every phase and task step by step, in order, top to bottom.</p>
+    <p>Status markers: <code>[]</code> idle · <code>[wip]</code> in progress · <code>[x]</code> complete · <code>[f]</code> failed. All start as <code>[]</code>; the Build Plan workflow updates them as it works.</p>
+
+    <!-- ============ PHASE 1 ============ -->
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 1: Project-local <code>/planf3</code> planning command</h3>
+      <p>Adapt the user-scope skill into <code>.claude/commands/planf3.md</code> — a single self-contained command file the ADW harness can invoke as a slash command. It merges the planf3 HTML plan template with the battle-tested contracts of <code>/feature</code>.</p>
+      <p><strong>Hard requirement (zero <code>~/.claude</code> dependency):</strong> the user-scope skill at <code>~/.claude/skills/planf3/</code> is <em>source material only</em>, consulted once while authoring this phase. Everything the command needs at runtime — the HTML template, the Create/Build/Update/Update-References workflow rules, the image-generation instructions, and the image scripts — is vendored into this repository. After this phase, deleting <code>~/.claude/skills/planf3/</code> (or running on a machine that never had it) must not change ADW behaviour in any way.</p>
+
+      <h4>1.1 Author <code>.claude/commands/planf3.md</code></h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Frontmatter: <code>command: planf3</code>, <code>version: 1.0.0</code>, description "HTML-first implementation plan into specs/, planf3 format".</li>
+        <li><code class="status">[x]</code> Bind the whole input to <code>REQUEST: $ARGUMENTS</code> and copy <code>/feature</code>'s lossless argument contract verbatim (JSON issue payload → <code>number</code>/<code>title</code>/<code>body</code>/<code>adw_id</code>; freeform string otherwise; never positional <code>$1/$2/$3</code>; STOP on empty/garbled input).</li>
+        <li><code class="status">[x]</code> Output contract: write the plan to <code>specs/issue-{issue_number}-adw-{adw_id}-sdlc_planner-{descriptive-name}.html</code> — same stem convention as <code>/feature</code> so <code>find_spec_file</code>'s branch-name glob fallback (<code>specs/issue-{n}-adw-{id}*</code>) keeps working; images directory (if ever filled) is the same stem without <code>.html</code>.</li>
+        <li><code class="status">[x]</code> Inline the full planf3 HTML <code>## Plan Template</code> (metadata header, hero/problem/solution figures, Relevant Files with existing/new tags, phases with <code>[]</code> status markers and per-phase Testing Strategy + 🔁 loop, global Validation Commands, Notes, Amendments) including the single self-contained <code>&lt;style&gt;</code> block; instruct "replace every <code>{{...}}</code>, repeat <code>&lt;!-- repeat --&gt;</code> blocks, leave no template token behind".</li>
+        <li><code class="status">[x]</code> Fold in <code>/feature</code>'s project guardrails as planning Instructions: read <code>BUILD_PROMPT.md</code>/<code>README.md</code> first, typed-Elixir standard (§3), context-module DB access (§8), LiveViewTest task for UI work (§9), Tidewave-first research/validation, <code>conditional_docs.md</code> check, and the standard five-command mix validation gate as the default global Validation Commands block.</li>
+        <li><code class="status">[x]</code> Image policy (three tiers, cheapest first): <strong>default</strong> — fill every <code>{{...IMAGE}}</code> slot with a stock placeholder from the repo's <code>specs/.planf3-assets/placeholders/</code> library (zero API cost, keeps plans visually complete), with the <code>alt</code> text and <code>figcaption</code> still describing the <em>intended</em> bespoke subject; <strong>opt-out</strong> — leave slots as HTML comment placeholders when even stock images are unwanted; <strong>generate</strong> — bespoke OpenAI generation via <code>scripts/generate_gpt_image.py</code>, requiring <code>OPENAI_API_KEY</code> in the environment.</li>
+        <li><code class="status">[x]</code> Env contract: the command reads <code>PLANF3_IMAGES</code> — <code>placeholders</code> (default when unset), <code>none</code>, or <code>generate</code>. <code>generate</code> without an <code>OPENAI_API_KEY</code> in the env degrades to <code>placeholders</code> with a note in the plan's Amendments — never a failed run. The platform sets this variable from the console setting (Phase 5); manual/interactive runs can set it directly.</li>
+        <li><code class="status">[x]</code> Metadata population rule: <code>created</code> = now (ISO), <code>agent name</code> = <code>sdlc_planner</code>, <code>session id</code> = <code>adw_id</code>, <code>back refs</code> = issue/prior specs consulted; all list fields append-only.</li>
+        <li><code class="status">[x]</code> Report contract (load-bearing for the harness): "Return exclusively the path to the plan file created and nothing else" — <code>workflow_ops</code> parses this output into <code>state.plan_file</code>.</li>
+      </ul>
+
+      <h4>1.2 Vendor the full skill into the repo (no <code>~/.claude</code> references)</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Copy <code>generate_gpt_image.py</code> and <code>edit_gpt_image.py</code> from the skill's <code>scripts/</code> into project <code>scripts/</code> unchanged (one-time copy; they run via <code>uv run</code>, need <code>OPENAI_API_KEY</code>).</li>
+        <li><code class="status">[x]</code> Vendor the skill's four lifecycle workflows (Create / Build / Update Plan / Update References + Image Generation) as project docs under <code>ai_docs/planf3/</code>, rewritten to reference project paths (<code>scripts/…</code>, <code>specs/…</code>) only. <code>.claude/commands/planf3.md</code> inlines the Create workflow itself and points at <code>ai_docs/planf3/</code> for the rest.</li>
+        <li><code class="status">[x]</code> Sweep every authored file for <code>~/.claude</code>, <code>$HOME/.claude</code>, or <code>/home/*/.claude</code> references — none may remain outside of provenance comments ("adapted from the user-scope planf3 skill").</li>
+        <li><code class="status">[x]</code> Isolation check: <code>*_iso</code> ADWs run in fresh worktrees — confirm the command and its vendored docs resolve entirely from the repo checkout (relative paths from the worktree root).</li>
+      </ul>
+
+      <h4>1.3 Stock placeholder image library (save OpenAI image costs)</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Create <code>specs/.planf3-assets/placeholders/</code> with five generic, identity-matched images — <code>hero.png</code>, <code>problem.png</code>, <code>solution.png</code>, <code>phase.png</code>, <code>notes.png</code> — one per template slot kind. Seed it at zero cost by copying the five images already generated for <code>specs/planf3-html-plans-for-heavy-adw-planner/</code> (they follow the paper/ink/amber identity); replace with purpose-drawn generic versions later if desired.</li>
+        <li><code class="status">[x]</code> Placeholders live under <code>specs/</code> deliberately: plans are written to <code>specs/*.html</code>, so the relative embed is stable — <code>&lt;img src=".planf3-assets/placeholders/hero.png" …&gt;</code> — and survives worktree moves and repo clones.</li>
+        <li><code class="status">[x]</code> In <code>.claude/commands/planf3.md</code>, map each slot kind to its stock file (hero→hero, problem→problem, solution→solution, any phase→phase, notes/questionables→notes) and require a <code>class="placeholder"</code> on stock <code>&lt;img&gt;</code> tags plus a one-line figcaption suffix "(stock placeholder)" so bespoke and stock images are distinguishable at a glance and greppable for later upgrade.</li>
+        <li><code class="status">[x]</code> Document in <code>ai_docs/planf3/image-generation.md</code> (vendored copy) that the Update workflow may upgrade any <code>class="placeholder"</code> image to a bespoke OpenAI render on request — swap the <code>src</code>, drop the class, keep the figure.</li>
+      </ul>
+
+      <h4>1.4 Testing Strategy</h4>
+      <p>Static validation of the command file — the command is prose+template, so validation is structural: the template must be complete, self-contained, and free of leftover tokens.</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>grep -c '{{' .claude/commands/planf3.md</code> — template tokens exist only inside the fenced <code>## Plan Format</code> block (they are the template, not leftovers).</li>
+        <li><code class="status">[x]</code> <code>grep -n 'sdlc_planner' .claude/commands/planf3.md</code> — filename convention present and matches <code>/feature</code>'s stem shape.</li>
+        <li><code class="status">[x]</code> <code>uv run scripts/generate_gpt_image.py --help</code> (or a 1-image smoke run) — copied script executes from the repo root.</li>
+        <li><code class="status">[x]</code> <code>grep -rn '\.claude/skills/planf3\|~/.claude\|\$HOME/.claude' .claude/commands/planf3.md ai_docs/planf3/ scripts/generate_gpt_image.py scripts/edit_gpt_image.py</code> — zero runtime references to the machine's <code>~/.claude</code> (provenance comments excepted).</li>
+        <li><code class="status">[x]</code> <code>ls specs/.planf3-assets/placeholders/{hero,problem,solution,phase,notes}.png</code> — all five stock placeholders present.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <!-- ============ PHASE 2 ============ -->
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 2: ADW harness wiring — heavy-tier routing + opt-in plan command</h3>
+      <p>Register <code>/planf3</code> in the typed harness so it is a legal, heavy-capable ADW step, and add an opt-in switch that routes the planning step through it without disturbing issue classification or branch naming.</p>
+
+      <figure>
+        <img src="planf3-html-plans-for-heavy-adw-planner/phase2.png" alt="A routing switch sending the plan step to an amber heavy engine while the default track continues straight">
+        <figcaption><code>ADW_PLAN_COMMAND=/planf3</code> reroutes only the plan step; classification and branch naming keep using the <code>/chore|/bug|/feature</code> class.</figcaption>
+      </figure>
+
+      <h4>2.1 Type + model-map registration</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>adws/adw_modules/data_types.py</code>: add <code>"/planf3"</code> to the <code>SlashCommand</code> literal (line ~67). Do NOT touch <code>IssueClassSlashCommand</code> — classification stays <code>/chore|/bug|/feature</code>.</li>
+        <li><code class="status">[x]</code> <code>adws/adw_modules/agent.py</code>: add <code>"/planf3": {"base": "main", "heavy": "heavy"}</code> to <code>SLASH_COMMAND_MODEL_MAP</code> — identical tiering to <code>/feature</code>, so <code>model_set heavy</code> resolves the planner to the heavy tier (opus on claude+anthropic).</li>
+      </ul>
+
+      <h4>2.2 Opt-in plan-command selection</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>adws/adw_modules/workflow_ops.py</code>: introduce <code>resolve_plan_command(issue_class) -> SlashCommand</code> next to <code>LOCAL_ISSUE_CLASS</code> (line ~740): returns <code>os.environ.get("ADW_PLAN_COMMAND")</code> when set to a registered plan-capable command (<code>/planf3</code> or the class commands), else the classified <code>issue_class</code>. Validate the env value against <code>SLASH_COMMAND_MODEL_MAP</code>; on an unknown value, log a warning and fall back — never crash a run over a typo.</li>
+        <li><code class="status">[x]</code> Route every <code>build_plan(issue, command=…)</code> call site (GitHub-backed and <code>*_local_iso</code> paths) through <code>resolve_plan_command</code>; <code>generate_branch_name</code> keeps receiving the raw <code>issue_class</code> so branch names stay <code>feature/…</code>-shaped.</li>
+        <li><code class="status">[x]</code> Confirm the plan-step output parsing already stores the reported path into <code>state.plan_file</code> regardless of extension (it should — the report contract is "path only"); fix if any <code>.md</code> assumption exists on that path.</li>
+      </ul>
+
+      <h4>2.3 Dual-format spec discovery</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>find_spec_file</code> (<code>workflow_ops.py:583</code>): change the git-diff filter to <code>f.startswith("specs/") and f.endswith((".md", ".html"))</code>.</li>
+        <li><code class="status">[x]</code> Same function, glob fallback: search both <code>specs/issue-{n}-adw-{id}*.md</code> and <code>…*.html</code>; if both match, prefer the one matching <code>state.plan_file</code>, else prefer <code>.html</code> (the planf3 plan is the primary artifact when present).</li>
+        <li><code class="status">[x]</code> Exclude the plan's sibling image directory from discovery (only files, extensions checked, so this is already safe — assert it in the test).</li>
+      </ul>
+
+      <h4>2.4 Testing Strategy</h4>
+      <p>Pytest over the harness modules — pure-function coverage for tier resolution, env-override resolution, and dual-format discovery (tmp git repo fixture for the diff/glob paths, monkeypatched env).</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>cd adws && uv run pytest adw_tests/test_model_selection.py -q</code> — extended cases: <code>/planf3</code> resolves <code>main</code> under <code>base</code> and <code>heavy</code> under <code>heavy</code>.</li>
+        <li><code class="status">[x]</code> <code>cd adws && uv run pytest adw_tests/test_find_spec_file.py -q</code> — <code>.html</code> found via state, via git diff, via glob; <code>.md</code> behaviour unchanged; unknown <code>ADW_PLAN_COMMAND</code> falls back with a warning.</li>
+        <li><code class="status">[x]</code> <code>cd adws && uv run pytest adw_tests/ -q</code> — zero regressions across the full harness suite (includes the generated-ADW drift gate).</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <!-- ============ PHASE 3 ============ -->
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 3: HTML plan consumption — <code>/implement</code> and <code>/implement_elixir</code></h3>
+      <p>Teach the two implementor commands to execute planf3 HTML plans with the skill's Build Plan semantics, while keeping markdown plans working exactly as today.</p>
+
+      <h4>3.1 Extend the implementor commands</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> In <code>.claude/commands/implement.md</code> and <code>.claude/commands/implement_elixir.md</code>, add an "HTML plans (planf3 format)" subsection: when <code>PATH_TO_PLAN</code> ends in <code>.html</code>, the plan's structure is <code>&lt;section id="phases"&gt;</code> (ordered <code>.phase</code> blocks with checklists) and <code>&lt;section id="validation"&gt;</code> (global gate) — execute phases top-to-bottom, honouring each phase's Testing Strategy 🔁 loop before moving on.</li>
+        <li><code class="status">[x]</code> Status-marker protocol (from the skill's Build Plan workflow): before starting a phase/task, Edit its <code>&lt;code class="status"&gt;[]&lt;/code&gt;</code> to <code>[wip]</code>; on completion <code>[x]</code>; on an impossible step <code>[f]</code> plus a one-line reason appended to the plan's Amendments section. The plan file is the live progress ledger.</li>
+        <li><code class="status">[x]</code> Keep the existing markdown path untouched and first in the prose (it remains the default for <code>/feature</code>-authored plans).</li>
+      </ul>
+
+      <h4>3.2 Testing Strategy</h4>
+      <p>Command files are prose contracts — validate by a dry-run exercise: hand <code>/implement</code> a tiny fixture HTML plan (one phase, one no-op task, validation command <code>true</code>) in a scratch worktree and confirm marker flipping + gate execution. This is a manual/agentic check, not CI.</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>grep -n 'html' .claude/commands/implement.md .claude/commands/implement_elixir.md</code> — both commands document the HTML path and marker protocol.</li>
+        <li><code class="status">[x]</code> Fixture dry-run: markers in the fixture plan progress <code>[]</code> → <code>[wip]</code> → <code>[x]</code> and the global validation checklist gets checked.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <!-- ============ PHASE 4 ============ -->
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 4: Documentation, discovery surfaces, and end-to-end proof</h3>
+      <p>Make the new planner discoverable (docs, conditional-docs router, console ADW builder) and prove the whole path with one real heavy-tier local run.</p>
+
+      <h4>4.1 Documentation</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>adws/README.md</code>: add <code>/planf3</code> to the model-map table (base→main, heavy→heavy/opus), document <code>ADW_PLAN_COMMAND</code> under the env-var section, and add a short "HTML plans (planf3)" subsection covering output location (<code>specs/*.html</code>) and consumption.</li>
+        <li><code class="status">[]</code> <code>.claude/commands/conditional_docs.md</code>: add a routing entry — tasks touching planf3/HTML plans load <code>.claude/commands/planf3.md</code> and this spec.</li>
+      </ul>
+
+      <h4>4.2 Console ADW-builder surface</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Verify the ADW builder step picker (prompt-steps discovery over <code>.claude/commands/</code> in <code>lib/repo_builder_web/live/console_live/adw_builder_panel.ex</code> / <code>shared.ex</code>) lists <code>/planf3</code> automatically; if the picker filters by an allowlist, add the command to it.</li>
+        <li><code class="status">[]</code> If any Elixir file changes: run the full mix green gate (compile, format, credo, test, dialyzer per project standard).</li>
+      </ul>
+
+      <h4>4.3 End-to-end heavy run</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Run a plan-only local ADW: <code>ADW_PLAN_COMMAND=/planf3</code> + <code>model_set heavy</code> through <code>adws/adw_plan_local_iso.py</code> with a small real prompt.</li>
+        <li><code class="status">[]</code> Assert: run log shows the plan step resolved to the heavy tier; a <code>specs/issue-…-sdlc_planner-….html</code> file exists in the worktree; <code>state.plan_file</code> points at it; the HTML contains no leftover <code>{{…}}</code> tokens; image slots are filled with stock placeholders (<code>class="placeholder"</code>, <code>src=".planf3-assets/placeholders/…"</code>) and no OpenAI call was made.</li>
+        <li><code class="status">[]</code> Chain check: <code>find_spec_file</code> (via the build step of <code>adw_plan_build_local_iso.py</code>, or a direct unit call against the worktree) locates the <code>.html</code> plan.</li>
+      </ul>
+
+      <h4>4.4 Testing Strategy</h4>
+      <p>The end-to-end run above <em>is</em> the acceptance test; back it with the repeatable command-line gate.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>cd adws && uv run pytest adw_tests/ -q</code> — full harness suite green after doc/code changes.</li>
+        <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — only required if 4.2 touched Elixir; zero regressions.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <!-- ============ PHASE 5 ============ -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 5: Console setting — "Plan images: use placeholders" toggle (default ON)</h3>
+      <p>Surface the image policy as an operator setting in the console Settings modal. Ticked (default): planf3 embeds stock placeholders and never spends OpenAI tokens. Unticked: planf3 generates bespoke images, with <code>OPENAI_API_KEY</code> resolved just-in-time from the secrets vault — project-scoped secret first, platform-scoped secret as fallback.</p>
+
+      <h4>5.1 Settings context (<code>lib/repo_builder/settings.ex</code>)</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add <code>planf3_image_placeholders?/0</code> and <code>put_planf3_image_placeholders/1</code> to <code>RepoBuilder.Settings</code> (the sole <code>app_settings</code> Repo caller), following the existing get/put pattern; missing row ⇒ <code>true</code> — placeholders are the default without any migration or seed.</li>
+        <li><code class="status">[]</code> Full typed treatment per the project standard: <code>@spec</code> on both functions, boolean-only changeset validation, <code>{:ok, _} | {:error, changeset}</code> on the write path.</li>
+      </ul>
+
+      <h4>5.2 Settings modal UI (<code>settings_components.ex</code> + <code>ConsoleLive</code>)</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Add a "Plan images: use placeholders (no OpenAI cost)" toggle to the <strong>General</strong> tab of the settings modal (<code>lib/repo_builder_web/components/console/settings_components.ex</code>), reusing the existing labeled-field + toggle-event pattern; checked state reads the Phase 5.1 getter, flips via a new <code>toggle_planf3_placeholders</code> event handled in <code>ConsoleLive</code>.</li>
+        <li><code class="status">[]</code> Helper text under the toggle: "Unticked: planf3 generates bespoke plan images with OpenAI — requires an OPENAI_API_KEY secret (project or platform scope) in the Secrets section." When unticked and <code>Secrets.list_names/1</code> shows no <code>OPENAI_API_KEY</code> in either scope, render an inline amber warning (masked names only — never values).</li>
+      </ul>
+
+      <h4>5.3 Env injection at the ADW launch seam</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Where the platform builds the OS-child environment for ADW/worker processes (the vault merge at <code>lib/repo_builder/session/server.ex:293</code> — <code>Secrets.resolve_platform_env/0</code> merged under <code>Secrets.resolve_env(project_id)</code>), additionally set <code>PLANF3_IMAGES=placeholders</code> when the setting is ticked, else <code>PLANF3_IMAGES=generate</code>. The key itself needs no new code: an <code>OPENAI_API_KEY</code> secret deposited in either vault already reaches the child env via the existing merge (project overrides platform).</li>
+        <li><code class="status">[]</code> Honour the erlexec env-replace gotcha (children get a <em>replaced</em> env, not an inherited one): add <code>PLANF3_IMAGES</code> inside the same env-construction path, not via <code>System.put_env</code>.</li>
+        <li><code class="status">[]</code> Fail-safe stays in the command (Phase 1's env contract): <code>generate</code> without a resolvable key degrades to placeholders and records an Amendment note in the produced plan — a missing secret must never fail a plan run.</li>
+      </ul>
+
+      <h4>5.4 Testing Strategy</h4>
+      <p>ExUnit for the context, <code>Phoenix.LiveViewTest</code> for the modal toggle, and a seam test asserting the child-env contract — all Postgres-backed via the standard test cases.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>mix test test/repo_builder/settings_test.exs</code> — getter defaults to <code>true</code> with no row; put/get round-trips; non-boolean rejected.</li>
+        <li><code class="status">[]</code> <code>mix test test/repo_builder_web/live/test_planf3_placeholder_setting_test.exs</code> — new LiveViewTest: open settings modal, General tab shows the toggle ticked by default; untick flips the persisted setting; missing-key warning renders when no <code>OPENAI_API_KEY</code> secret exists in either scope.</li>
+        <li><code class="status">[]</code> Seam test — with setting ticked the built child env carries <code>PLANF3_IMAGES=placeholders</code>; unticked plus a vault <code>OPENAI_API_KEY</code> carries <code>PLANF3_IMAGES=generate</code> and the decrypted key; project secret wins over platform secret.</li>
+        <li><code class="status">[]</code> Full green gate: <code>mix compile --warnings-as-errors && mix format --check-formatted && mix credo --strict && mix test --warnings-as-errors</code> (+ <code>mix dialyzer</code>).</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== GLOBAL VALIDATION ===== -->
+  <section id="validation">
+    <h2>Validation Commands</h2>
+    <p>Execute these commands to validate the entire plan is complete:</p>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>test -f .claude/commands/planf3.md && test -f scripts/generate_gpt_image.py && test -d ai_docs/planf3 && test -d specs/.planf3-assets/placeholders</code> — command, image scripts, vendored workflows, and stock placeholder library are all in the repo.</li>
+      <li><code class="status">[]</code> <code>grep -rn '~/.claude\|\$HOME/.claude\|skills/planf3' .claude/commands/planf3.md ai_docs/planf3/ scripts/generate_gpt_image.py scripts/edit_gpt_image.py adws/adw_modules/</code> — no runtime dependency on the machine's <code>~/.claude</code> anywhere in the integration.</li>
+      <li><code class="status">[]</code> <code>grep -n '"/planf3"' adws/adw_modules/data_types.py adws/adw_modules/agent.py</code> — type literal and heavy model map registered.</li>
+      <li><code class="status">[]</code> <code>grep -n 'ADW_PLAN_COMMAND' adws/adw_modules/workflow_ops.py adws/README.md</code> — opt-in switch implemented and documented.</li>
+      <li><code class="status">[]</code> <code>grep -n '\.html' adws/adw_modules/workflow_ops.py</code> — <code>find_spec_file</code> discovers HTML specs.</li>
+      <li><code class="status">[]</code> <code>cd adws && uv run pytest adw_tests/ -q</code> — full ADW harness suite passes.</li>
+      <li><code class="status">[]</code> <code>ADW_PLAN_COMMAND=/planf3</code> heavy plan-only local run produces a valid <code>specs/*.html</code> plan discovered by <code>find_spec_file</code> — end-to-end proof.</li>
+      <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — green gate holds (mandatory: Phase 5 changes Settings, ConsoleLive, and the session env seam).</li>
+      <li><code class="status">[]</code> Settings round-trip: toggle unticked in the console + an <code>OPENAI_API_KEY</code> secret in either vault scope ⇒ a planf3 run generates bespoke images; toggle re-ticked ⇒ the next run embeds stock placeholders with zero OpenAI calls.</li>
+    </ul>
+    <div class="loop">
+      🔁 <strong>The plan is not complete until every box is checked and every command passes. If for some reason a step is not possible to complete, mark it with [f] and move on if possible.</strong>
+    </div>
+  </section>
+
+  <!-- ===== QUESTIONABLES ===== -->
+  <section id="questionables">
+    <h2>Questionables</h2>
+    <details>
+      <summary>"Heavy agent" is interpreted as the ADW heavy model tier — correct?</summary>
+      <p class="qa-answer">The request says the plan document should be "used by the heavy agent". The only "heavy" concept in this codebase is the ADW model tiering (<code>ModelTier = fast|main|heavy</code>, <code>ModelSet = base|heavy</code>; claude+anthropic resolves <code>heavy → opus</code>). This plan therefore wires <code>/planf3</code> so that under <code>model_set heavy</code> the <em>planner</em> runs on the heavy tier, and the produced plan is consumed by <code>/implement</code> — which is also heavy-mapped (<code>"/implement": {"heavy": "heavy"}</code>). If "heavy agent" instead meant a specific orchestrator worker category (Settings roster <code>fast/main/heavy/leader</code> in <code>lib/repo_builder/settings.ex</code>), an amendment should add a Forge/orchestrator consumption path — the specs/ output location makes that a small follow-up.</p>
+    </details>
+    <details>
+      <summary>Opt-in env switch vs. replacing <code>/feature</code> outright</summary>
+      <p class="qa-answer">Chosen: <code>ADW_PLAN_COMMAND</code> env override, default unchanged (<code>/feature</code>). Rationale: every existing ADW combo, test fixture, and the console builder assume the markdown planners; an opt-in switch lets planf3 be exercised on real runs and promoted to default later by flipping one constant, with zero risk to in-flight workflows. Revisit after a few successful heavy runs.</p>
+    </details>
+    <details>
+      <summary>Images in ADW-authored plans default to stock placeholders, never OpenAI</summary>
+      <p class="qa-answer">Headless ADW planning fills <code>{{...IMAGE}}</code> slots from the repo's stock library at <code>specs/.planf3-assets/placeholders/</code> — zero API cost, zero network dependency, and the plan still renders as a complete document. Bespoke OpenAI generation (needs <code>OPENAI_API_KEY</code>, ~1–2 min and paid tokens per image) is opt-in only, via an interactive image pass that upgrades <code>class="placeholder"</code> images in place. The <code>alt</code>/<code>figcaption</code> always describe the intended bespoke subject, so an upgrade never loses the design intent.</p>
+    </details>
+    <details>
+      <summary>OPENAI_API_KEY resolution order: project secret over platform secret</summary>
+      <p class="qa-answer">The session server already merges <code>Secrets.resolve_platform_env()</code> under <code>Secrets.resolve_env(project_id)</code>, so a project-scoped <code>OPENAI_API_KEY</code> wins over a platform-scoped one — matching the user's "project repo or the platform repo" framing with the more specific scope taking precedence. Phase 5 rides that existing merge rather than adding a second resolution path; decryption stays just-in-time at the OS-child boundary and the UI only ever sees masked names via <code>list_names/1</code>.</p>
+    </details>
+    <details>
+      <summary>Dual-format specs directory — does anything else assume <code>specs/*.md</code>?</summary>
+      <p class="qa-answer">Known consumers audited: <code>find_spec_file</code> (fixed in Phase 2.3), <code>/implement</code>/<code>/implement_elixir</code> (fixed in Phase 3), and the review/test steps which receive the plan path from state rather than scanning. <code>specs/</code> already contains hand-authored <code>.html</code> plans (e.g. the audit roadmap), so tooling encountering HTML there is not new. Phase 4's end-to-end run is the safety net; any missed <code>.md</code> assumption found there gets fixed inside that phase's loop.</p>
+    </details>
+  </section>
+
+  <!-- ===== NOTES ===== -->
+  <section id="notes">
+    <h2>Notes</h2>
+
+    <h3>Why a command, not a project skill</h3>
+    <p>The ADW harness invokes steps as <em>slash commands</em> (<code>AgentTemplateRequest.slash_command</code> → typed <code>SlashCommand</code> literal → model map). Skills are an interactive-session concept the harness never touches. So the integration surface is <code>.claude/commands/planf3.md</code>, self-contained, with the remaining lifecycle workflows vendored under <code>ai_docs/planf3/</code> — an ADW worktree (or a fresh clone on another machine) must not depend on <code>~/.claude</code> being present at all. The user-scope skill was the one-time source of the template; after vendoring, the repo copies are authoritative and evolve independently. If the user-scope skill improves later, changes are ported in deliberately, never referenced live.</p>
+
+    <h3>Model-routing map</h3>
+    <table>
+      <tr><th>Command</th><th>base</th><th>heavy</th><th>Role</th></tr>
+      <tr><td><code>/planf3</code> (new)</td><td>main</td><td><strong>heavy (opus)</strong></td><td>Authors the HTML plan into <code>specs/</code></td></tr>
+      <tr><td><code>/feature</code> · <code>/bug</code> · <code>/chore</code></td><td>main</td><td>heavy</td><td>Default markdown planners (unchanged)</td></tr>
+      <tr><td><code>/implement</code></td><td>main</td><td>heavy</td><td>Consumes the plan (md or html)</td></tr>
+    </table>
+
+    <h3>Dependencies &amp; environment</h3>
+    <p>No new libraries. <code>uv</code> already drives the ADW harness; the copied image scripts declare their own inline deps and need <code>OPENAI_API_KEY</code> only on the interactive path. No Ecto/OTP/runtime code changes are required (the console builder check in 4.2 is expected to be verification-only, since the step picker discovers <code>.claude/commands/</code> dynamically).</p>
+
+    <h3>Rejected approaches</h3>
+    <p><em>Replace the markdown Plan Format inside <code>/feature</code> with HTML</em> — rejected: destroys backwards compatibility with every existing spec, test fixture, and the review step's expectations in one move. <em>Symlink <code>~/.claude/skills/planf3</code> into the project</em> — rejected: worktree isolation (<code>*_iso</code> ADWs run in fresh worktrees) and machine portability both break on out-of-repo references. <em>Add <code>/planf3</code> as a fourth issue class</em> — rejected: classification answers "what kind of change is this", not "which template writes the plan"; conflating them would force branch-naming and review heuristics to learn a non-class.</p>
+
+    <h3>Future work</h3>
+    <p>Once heavy runs prove out: (1) flip the default plan command to <code>/planf3</code>; (2) wire the skill's Update References workflow into the ADW commit step so <code>commits</code>/<code>modified</code> metadata self-append; (3) surface HTML plans in the console (LiveView iframe or link from run detail — <code>specs/</code> is already served nowhere, so a static plug or dev-only route would be needed); (4) let the Forge/orchestrator heavy worker consume planf3 plans as workstream specs.</p>
+
+    <figure>
+      <img src="planf3-html-plans-for-heavy-adw-planner/notes.png" alt="Circular lifecycle of an HTML plan: authored, built, amended, referenced">
+      <figcaption>Plan lifecycle: authored (heavy planner) → built (markers flip) → amended → back-referenced by future specs.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== AMENDMENTS ===== -->
+  <section id="amendments">
+    <h2>Amendments</h2>
+    <details>
+      <summary>2026-07-04T09:40:00+01:00 — Zero-dependency requirement: nothing may reference the machine's <code>~/.claude</code></summary>
+      <p>User directive: the incorporated planf3 must not depend on the planf3 command/skill living in the computer's <code>.claude</code> directories. Phase 1 was retitled "Vendor the full skill into the repo" and extended: the four lifecycle workflows are vendored to <code>ai_docs/planf3/</code> (new files added), a <code>~/.claude</code>-reference sweep was added to Phase 1's testing strategy and to the global Validation Commands, and the Notes section now states the repo copies are authoritative after the one-time port. The user-scope skill remains provenance only.</p>
+    </details>
+    <details>
+      <summary>2026-07-04T10:05:00+01:00 — Stock placeholder image library replaces default OpenAI generation</summary>
+      <p>User directive (applies to the repo-vendored planf3, not the user-scope skill): ship placeholder images in the platform repo to save OpenAI image costs. Added task 1.3 creating <code>specs/.planf3-assets/placeholders/</code> (five slot-kind images — hero/problem/solution/phase/notes — seeded free of charge from this plan's already-generated set). The command's image policy became three-tiered: stock placeholders by default (marked <code>class="placeholder"</code>, "(stock placeholder)" figcaption suffix), comment-only opt-out, bespoke OpenAI opt-in that upgrades placeholders in place. Phase 4's end-to-end assertions, the New Files list, the images Questionable, and the global Validation Commands were updated to match; former task 1.3 (Testing Strategy) renumbered to 1.4.</p>
+    </details>
+    <details>
+      <summary>2026-07-04T10:30:00+01:00 — Console setting: "Plan images: use placeholders" toggle (default ON) backed by the secrets vault</summary>
+      <p>User directive: the placeholder behaviour should be a settings-modal toggle, ticked by default; when unticked, planf3 may generate images using an <code>OPENAI_API_KEY</code> stored in the Secrets section at project or platform scope. Added Phase 5: <code>Settings.planf3_image_placeholders?/0</code> (missing row ⇒ <code>true</code>), a General-tab toggle with a missing-key warning driven by <code>Secrets.list_names/1</code>, and <code>PLANF3_IMAGES=placeholders|generate</code> injected at the existing vault-merge env seam (<code>session/server.ex:293</code>, project secret over platform secret, erlexec env-replace respected). Phase 1's image policy gained the <code>PLANF3_IMAGES</code> env contract with a degrade-to-placeholders fail-safe. Relevant/New Files, a key-precedence Questionable, and the global Validation Commands (mix green gate now mandatory, plus a settings round-trip check) were updated to match.</p>
+    </details>
+  </section>
+
+</main>
+</body>
+</html>

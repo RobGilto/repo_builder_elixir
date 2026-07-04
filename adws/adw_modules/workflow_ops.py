@@ -163,6 +163,29 @@ def classify_issue(
     return issue_command, None  # type: ignore
 
 
+# Commands allowed as the plan step. The classified issue class (/chore|/bug|/feature)
+# stays the default; ADW_PLAN_COMMAND may reroute planning to an alternative planner
+# (e.g. the repo-vendored HTML-first /planf3) without touching classification or
+# branch naming.
+PLAN_CAPABLE_COMMANDS = ("/planf3", "/feature", "/bug", "/chore")
+
+
+def resolve_plan_command(issue_class: str) -> str:
+    """The slash command the plan step should use: the ADW_PLAN_COMMAND env override
+    when set to a known plan-capable command, else the classified `issue_class`.
+    An unknown override logs a warning and falls back — a typo must never fail a run."""
+    override = os.environ.get("ADW_PLAN_COMMAND", "").strip()
+    if not override:
+        return issue_class
+    if override in PLAN_CAPABLE_COMMANDS:
+        return override
+    logging.getLogger(__name__).warning(
+        f"ADW_PLAN_COMMAND={override!r} is not plan-capable "
+        f"(expected one of {PLAN_CAPABLE_COMMANDS}); falling back to {issue_class!r}"
+    )
+    return issue_class
+
+
 def build_plan(
     issue: GitHubIssue,
     command: str,
@@ -170,7 +193,12 @@ def build_plan(
     logger: logging.Logger,
     working_dir: Optional[str] = None,
 ) -> AgentPromptResponse:
-    """Build implementation plan for the issue using the specified command."""
+    """Build implementation plan for the issue using the specified command.
+
+    The command is threaded through resolve_plan_command here — the single choke
+    point every composite (legacy scripts, run_local_workflow, generated combos)
+    already calls — so ADW_PLAN_COMMAND reroutes planning everywhere at once."""
+    command = resolve_plan_command(command)
     # Use minimal payload like classify_issue does
     minimal_issue_json = issue.model_dump_json(
         by_alias=True, include={"number", "title", "body"}
@@ -371,7 +399,9 @@ def ensure_plan_exists(state: ADWState, issue_number: str) -> str:
     # Look for plan in branch name
     if f"-{issue_number}-" in branch:
         # Look for plan file
-        plans = glob.glob(f"specs/*{issue_number}*.md")
+        plans = sorted(glob.glob(f"specs/*{issue_number}*.html")) + sorted(
+            glob.glob(f"specs/*{issue_number}*.md")
+        )
         if plans:
             return plans[0]
 
@@ -613,7 +643,11 @@ def find_spec_file(state: ADWState, logger: logging.Logger) -> Optional[str]:
 
     if result.returncode == 0:
         files = result.stdout.strip().split("\n")
-        spec_files = [f for f in files if f.startswith("specs/") and f.endswith(".md")]
+        spec_files = [
+            f
+            for f in files
+            if f.startswith("specs/") and f.endswith((".md", ".html"))
+        ]
 
         if spec_files:
             # Use the first spec file found
@@ -639,10 +673,11 @@ def find_spec_file(state: ADWState, logger: logging.Logger) -> Optional[str]:
 
             # Use worktree_path if provided, otherwise current directory
             search_dir = worktree_path if worktree_path else os.getcwd()
-            pattern = os.path.join(
-                search_dir, f"specs/issue-{issue_num}-adw-{adw_id}*.md"
+            # Both plan formats; a planf3 .html plan is the primary artifact when present.
+            base = os.path.join(search_dir, f"specs/issue-{issue_num}-adw-{adw_id}*")
+            spec_files = sorted(glob.glob(base + ".html")) + sorted(
+                glob.glob(base + ".md")
             )
-            spec_files = glob.glob(pattern)
 
             if spec_files:
                 spec_file = spec_files[0]
@@ -780,11 +815,9 @@ def _local_branch_name(issue: GitHubIssue, adw_id: str) -> str:
 def _local_find_spec_fallback(
     worktree_path: str, issue_number: int, adw_id: str
 ) -> Optional[str]:
-    """Newest specs/issue-{n}-adw-{id}*.md by mtime (Output Contract fallback)."""
-    pattern = os.path.join(
-        worktree_path, "specs", f"issue-{issue_number}-adw-{adw_id}*.md"
-    )
-    candidates = glob.glob(pattern)
+    """Newest specs/issue-{n}-adw-{id}*.{md,html} by mtime (Output Contract fallback)."""
+    base = os.path.join(worktree_path, "specs", f"issue-{issue_number}-adw-{adw_id}*")
+    candidates = glob.glob(base + ".md") + glob.glob(base + ".html")
     if not candidates:
         return None
     return max(candidates, key=os.path.getmtime)

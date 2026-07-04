@@ -805,7 +805,28 @@ The following commands switch to Opus when using the heavy model set:
 - `/resolve_failed_e2e_test` - Debugging E2E test failures
 - `/document` - Documentation generation
 - `/chore`, `/bug`, `/feature` - Issue-specific implementations
+- `/planf3` - HTML-first planning (repo-vendored planf3 format)
 - `/patch` - Creating patches for changes
+
+#### HTML plans (planf3)
+
+The plan step can author **HTML-first planf3 plans** instead of the markdown
+`/feature`-family templates. Set the environment variable
+`ADW_PLAN_COMMAND=/planf3` (validated against the plan-capable set
+`/planf3|/feature|/bug|/chore`; unknown values warn and fall back to the
+classified issue class). The override reroutes only the plan step — issue
+classification and branch naming still use the class commands.
+
+- Output: `specs/issue-{n}-adw-{id}-sdlc_planner-{name}.html` (same stem as the
+  markdown specs; `find_spec_file` and the local fallbacks discover both
+  `.md` and `.html`).
+- Consumption: `/implement` and `/implement_elixir` execute planf3 phases
+  top-to-bottom and flip the plan's `[]`/`[wip]`/`[x]` status markers in place
+  (semantics: `ai_docs/planf3/build-plan.md`).
+- Images: controlled by `PLANF3_IMAGES` (`placeholders` default — stock library
+  at `specs/.planf3-assets/placeholders/`, zero OpenAI cost; `none`; `generate`
+  — requires `OPENAI_API_KEY`, injected from the platform secrets vault). The
+  console setting "Plan images: use placeholders" drives this variable.
 
 #### Model Selection Flow
 

@@ -117,10 +117,10 @@ def synthesize_branch_name(issue: GitHubIssue, adw_id: str) -> str:
 
 def find_spec_fallback(worktree_path: str, issue_number: int, adw_id: str) -> Optional[str]:
     """Newest specs/issue-{n}-adw-{id}*.md by mtime (Output Contract fallback)."""
-    pattern = os.path.join(
-        worktree_path, "specs", f"issue-{issue_number}-adw-{adw_id}*.md"
+    base = os.path.join(
+        worktree_path, "specs", f"issue-{issue_number}-adw-{adw_id}*"
     )
-    candidates = glob.glob(pattern)
+    candidates = glob.glob(base + ".md") + glob.glob(base + ".html")
     if not candidates:
         return None
     return max(candidates, key=os.path.getmtime)
@@ -312,7 +312,7 @@ def main():
                 adw_id,
                 "plan",
                 f"Planner returned no usable spec path ({spec_file!r}) and no "
-                f"specs/issue-{issue.number}-adw-{adw_id}*.md exists",
+                f"specs/issue-{issue.number}-adw-{adw_id}*.{{md,html}} exists",
                 logger,
             )
         spec_abs = fallback

@@ -31,6 +31,7 @@
 | Secrets, credential sourcing, or `raw` redaction | `BUILD_PROMPT.md` §4.1 (redaction) + §6 (secrets); `ai_docs/secrets-vault.md` (the per-project encrypted vault + name-only orchestrator exposure + threat model) |
 | Tests, Mox, the FakeHarness, normalizer property tests, or crash-isolation tests | `BUILD_PROMPT.md` §13; `ai_docs/typed-elixir-standard.md` (Enforcement) |
 | Anything touching the existing Python ADW scripts | `adws/README.md` (scripts are Astral `uv` single-file Python) |
+| planf3 HTML plans — authoring (`/planf3`), executing/updating a `specs/*.html` plan, the placeholder-image library, or `PLANF3_IMAGES`/`ADW_PLAN_COMMAND` | `.claude/commands/planf3.md` (the planner command) + `ai_docs/planf3/` (lifecycle workflows) + `specs/planf3-html-plans-for-heavy-adw-planner.html` (the incorporation spec) |
 
 ## Human-facing docs (`docs/`)
 
