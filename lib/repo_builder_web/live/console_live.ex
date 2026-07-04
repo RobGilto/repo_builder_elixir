@@ -36,46 +36,46 @@ defmodule RepoBuilderWeb.ConsoleLive do
   alias RepoBuilder.{
     Agents,
     Budget,
-    CostCenter,
     Dashboard,
     Definitions,
-    Explain,
     Logs,
     Orchestrators,
     Projects,
     Session,
-    Settings,
-    WorkflowEngine,
-    Workflows
+    Settings
   }
 
-  alias RepoBuilder.Adw.Combos
   alias RepoBuilder.Agents.Agent
   alias RepoBuilder.Budget.Cap
   alias RepoBuilder.Console.EventPresenter
   alias RepoBuilder.CostCenter.ModelPrice
   alias RepoBuilder.ExternalApis.ImportResult
-  alias RepoBuilder.FileBrowser
   alias RepoBuilder.Harness.Event
   alias RepoBuilder.Harness.Pi.Models, as: PiModels
   alias RepoBuilder.Harness.Registry, as: HarnessRegistry
-  alias RepoBuilder.Orchestrator.Ledgers
   alias RepoBuilder.Orchestrator.Queue, as: OrchestratorQueue
-  alias RepoBuilder.Orchestrator.Templates
   alias RepoBuilder.Orchestrator.Workstreams
-  alias RepoBuilder.StackLayers
   alias RepoBuilder.StackLayers.StackLayer
-  alias RepoBuilder.WorkflowEngine.Catalog
-  alias RepoBuilder.Workflows.TitleHumanizer
   alias RepoBuilderWeb.AgentColors
+  alias RepoBuilderWeb.ConsoleLive.AdwBuilderPanel
+  alias RepoBuilderWeb.ConsoleLive.BrainPanel
+  alias RepoBuilderWeb.ConsoleLive.CostPanel
   alias RepoBuilderWeb.ConsoleLive.ExternalApisPanel
+  alias RepoBuilderWeb.ConsoleLive.LogsPanel
+  alias RepoBuilderWeb.ConsoleLive.SettingsPanel
   alias RepoBuilderWeb.ConsoleLive.Shared
+  alias RepoBuilderWeb.ConsoleLive.TemplatesPanel
 
   @external_api_events RepoBuilderWeb.ConsoleLive.ExternalApisPanel.events()
+  @cost_events RepoBuilderWeb.ConsoleLive.CostPanel.events()
+  @settings_events RepoBuilderWeb.ConsoleLive.SettingsPanel.events()
+  @template_events RepoBuilderWeb.ConsoleLive.TemplatesPanel.events()
+  @adw_builder_events RepoBuilderWeb.ConsoleLive.AdwBuilderPanel.events()
+  @logs_events RepoBuilderWeb.ConsoleLive.LogsPanel.events()
+  @brain_events RepoBuilderWeb.ConsoleLive.BrainPanel.events()
 
   @categories [:response, :tool, :thinking, :hook]
   @buffer_limit 500
-  @messages_limit 100
   # Terminal workflow run statuses (WorkflowRun.status): clearable from the ADWS view.
   @finished_workflow_statuses [:succeeded, :failed, :cancelled]
   # Throttle the live streaming assign to ≤ one render per tick (~20 fps) so a fast
@@ -305,22 +305,22 @@ defmodule RepoBuilderWeb.ConsoleLive do
         |> assign_default_project()
         |> load_agents()
         |> seed_agent_costs()
-        |> seed_context_tokens()
-        |> seed_counters()
+        |> Shared.seed_context_tokens()
+        |> Shared.seed_counters()
         |> seed_lanes()
-        |> seed_workflow_progress()
-        |> seed_budget()
+        |> Shared.seed_workflow_progress()
+        |> Shared.seed_budget()
         # assign_orchestrator must precede backfill_events: it reads the persisted
         # display timezone into assigns, which backfill_events uses to format row times.
         # It must also precede seed_cost/seed_orchestrator_cost, which read orchestrator_id.
         |> assign_orchestrator()
         |> seed_cost()
         |> seed_orchestrator_cost()
-        |> backfill_events()
-        |> seed_log_manager()
-        |> assign_template_rows()
+        |> Shared.backfill_events()
+        |> Shared.seed_log_manager()
+        |> Shared.assign_template_rows()
         |> ExternalApisPanel.load_external_apis()
-        |> seed_definitions()
+        |> Shared.seed_definitions()
         |> subscribe_feeds()
         |> tap(fn _ -> PiModels.refresh_async() end)
       else
@@ -352,7 +352,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
   @spec assign_orchestrator(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp assign_orchestrator(socket) do
     case Orchestrators.get_or_create_for_project(socket.assigns[:active_project_id]) do
-      {:ok, orchestrator} -> assign_orchestrator_selection(socket, orchestrator)
+      {:ok, orchestrator} -> Shared.assign_orchestrator_selection(socket, orchestrator)
       {:error, _reason} -> socket
     end
   end
@@ -367,12 +367,12 @@ defmodule RepoBuilderWeb.ConsoleLive do
     case Orchestrators.get_or_create_for_project(socket.assigns.active_project_id) do
       {:ok, orchestrator} ->
         socket
-        |> assign_orchestrator_selection(orchestrator)
+        |> Shared.assign_orchestrator_selection(orchestrator)
         |> refresh_definitions_for()
         |> resubscribe_orchestrator_queue(previous_id, orchestrator.id)
         |> seed_cost()
         |> seed_orchestrator_cost()
-        |> backfill_events()
+        |> Shared.backfill_events()
 
       {:error, _reason} ->
         socket
@@ -387,8 +387,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
   @spec refresh_definitions_for(Phoenix.LiveView.Socket.t()) ::
           Phoenix.LiveView.Socket.t()
   defp refresh_definitions_for(socket) do
-    :ok = Definitions.refresh(nilify_blank(socket.assigns.orchestrator_working_dir))
-    seed_definitions(socket)
+    :ok = Definitions.refresh(Shared.nilify_blank(socket.assigns.orchestrator_working_dir))
+    Shared.seed_definitions(socket)
   end
 
   # Move the per-orchestrator queue subscription from the previous brain to the new one when
@@ -412,158 +412,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
     socket
   end
 
-  # Reflect an orchestrator's full selection (harness + provider + model) and the
-  # per-harness option lists (from the registry) in the header assigns.
-  @spec assign_orchestrator_selection(
-          Phoenix.LiveView.Socket.t(),
-          RepoBuilder.Orchestrator.Orchestrator.t()
-        ) :: Phoenix.LiveView.Socket.t()
-  defp assign_orchestrator_selection(socket, orchestrator) do
-    rows = agent_model_rows(orchestrator)
-
-    assign(socket,
-      orchestrator_id: orchestrator.id,
-      orchestrator_name: orchestrator.name,
-      orchestrator_queue: OrchestratorQueue.snapshot(orchestrator.id),
-      orchestrator_harness: orchestrator.harness,
-      orchestrator_provider: orchestrator.provider,
-      orchestrator_model: orchestrator.model,
-      orchestrator_context: orchestrator_context_for(orchestrator),
-      provider_options: provider_options_for(orchestrator.harness),
-      model_options: model_options_for(orchestrator.harness, orchestrator.provider),
-      recent_models: Orchestrators.recent_models(orchestrator, orchestrator.provider),
-      agent_model_rows: rows,
-      configured_tier_count: configured_tier_count(rows),
-      agent_models_updated_at: agent_models_updated_at(orchestrator),
-      orchestrator_system_prompt: orchestrator.system_prompt || "",
-      orchestrator_system_prompt_mode: orchestrator.system_prompt_mode,
-      orchestrator_default_prompt: Orchestrators.default_system_prompt(orchestrator),
-      orchestrator_reasoning_effort: orchestrator.reasoning_effort,
-      orchestrator_working_dir: orchestrator.working_dir || "",
-      timezone: Orchestrators.timezone(orchestrator),
-      ledger: Ledgers.view(orchestrator.id),
-      workstreams: Workstreams.list_records(orchestrator.id),
-      orchestrator_holding_reason: Orchestrators.holding_reason(orchestrator)
-    )
-  end
-
-  @spec agent_models_updated_at(RepoBuilder.Orchestrator.Orchestrator.t()) :: String.t() | nil
-  defp agent_models_updated_at(%RepoBuilder.Orchestrator.Orchestrator{metadata: metadata}) do
-    metadata
-    |> Map.get("agent_models", %{})
-    |> Enum.find_value(fn {_cat, entry} -> entry["_updated_at"] end)
-  end
-
-  # Build the per-category roster rows for the agent-models modal: each category's
-  # current {harness, provider, model} plus the option lists derived from them.
-  @spec agent_model_rows(RepoBuilder.Orchestrator.Orchestrator.t()) :: [map()]
-  def agent_model_rows(orchestrator) do
-    harnesses = orchestrator_harness_options()
-
-    project_models = Orchestrators.agent_models(orchestrator)
-
-    Enum.map(Orchestrators.agent_categories(), fn category ->
-      # Show the EFFECTIVE tier: the per-project assignment when set, else the inherited
-      # global default. `inherited?` drives the "inherited" badge + "reset" affordance.
-      {effective_entry, source} = Orchestrators.effective_agent_model(orchestrator, category)
-      effective_entry = effective_entry || %{}
-
-      # When the project has explicitly chosen a harness (even without a model yet),
-      # use the project entry for display and option computation. The effective_entry
-      # would otherwise fall back to the global default (a different harness), which
-      # would show the wrong provider/model options for the chosen harness.
-      project_entry = Map.get(project_models, category, %{})
-      project_harness = project_entry["harness"]
-
-      {harness, provider, model} =
-        if project_harness do
-          {project_harness, project_entry["provider"], project_entry["model"]}
-        else
-          {effective_entry["harness"], effective_entry["provider"], effective_entry["model"]}
-        end
-
-      # The orchestrator assigns concrete model ids (e.g. `claude-sonnet-4-5`) that the
-      # registry's curated tier-alias list (`opus`/`sonnet`/`haiku`) omits. Prepend the
-      # assigned id so the `<select>` can mark it selected — mirroring the header
-      # dropdown's `model_extra` "Current" handling — instead of falling back to blank.
-      base = if(harness, do: model_options_for(harness, provider), else: [])
-      model_options = if(model in [nil, "" | base], do: base, else: [model | base])
-
-      %{
-        category: category,
-        harness: harness,
-        provider: provider,
-        model: model,
-        inherited?: is_nil(project_harness) and not is_nil(model) and source == :default,
-        harness_options: harnesses,
-        provider_options: if(harness, do: provider_options_for(harness), else: []),
-        model_options: model_options
-      }
-    end)
-  end
-
-  @doc "Count of categories that have a non-blank model assigned."
+  @doc "Count of categories that have a non-blank model assigned (see `Shared`)."
   @spec configured_tier_count([map()]) :: non_neg_integer()
-  def configured_tier_count(rows) do
-    Enum.count(rows, fn row -> not is_nil(row.model) and row.model != "" end)
-  end
-
-  @doc """
-  Rows for the Settings → Default Models tab: one per worker category, reading the
-  operator's GLOBAL default roster (`RepoBuilder.Settings.default_agent_models/0`) — not
-  any orchestrator. Same `{harness, provider, model}` + option-list shape as
-  `agent_model_rows/1` so the same row component renders it.
-  """
-  @spec default_model_rows() :: [map()]
-  def default_model_rows do
-    roster = Settings.default_agent_models()
-    harnesses = orchestrator_harness_options()
-
-    Enum.map(Orchestrators.agent_categories(), fn category ->
-      entry = Map.get(roster, category, %{})
-      harness = entry["harness"]
-      provider = entry["provider"]
-      model = entry["model"]
-
-      base = if(harness, do: model_options_for(harness, provider), else: [])
-      model_options = if(model in [nil, "" | base], do: base, else: [model | base])
-
-      %{
-        category: category,
-        harness: harness,
-        provider: provider,
-        model: model,
-        harness_options: harnesses,
-        provider_options: if(harness, do: provider_options_for(harness), else: []),
-        model_options: model_options
-      }
-    end)
-  end
-
-  @spec provider_options_for(String.t()) :: [String.t()]
-  defp provider_options_for(harness) do
-    defaults = HarnessRegistry.orchestrator_defaults(harness)
-
-    case defaults[:providers] do
-      [_ | _] = providers -> providers
-      _ -> [defaults[:default_provider]] |> Enum.reject(&is_nil/1)
-    end
-  end
-
-  # Prefer pi's LIVE model catalog (`pi --list-models`, cached) so the dropdown
-  # tracks new releases (e.g. MiniMax-M3); fall back to the static registry list
-  # when pi is unavailable or hasn't a live entry for this provider.
-  @spec model_options_for(String.t(), String.t() | nil) :: [String.t()]
-  defp model_options_for("pi", provider) do
-    case PiModels.list(provider) do
-      [] -> HarnessRegistry.orchestrator_models("pi", provider)
-      live -> live
-    end
-  end
-
-  defp model_options_for(harness, provider) do
-    HarnessRegistry.orchestrator_models(harness, provider)
-  end
+  defdelegate configured_tier_count(rows), to: Shared
 
   @spec subscribe_feeds(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp subscribe_feeds(socket) do
@@ -582,106 +433,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
     :ok = Phoenix.PubSub.subscribe(RepoBuilder.PubSub, Budget.Guard.topic())
 
     socket
-  end
-
-  # Seed the budget breaker snapshot + caps on the connected mount (and on reconnect,
-  # §9). The snapshot reads the live Guard; caps read the durable context.
-  @spec seed_budget(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  defp seed_budget(socket) do
-    snapshot = Budget.Guard.snapshot()
-
-    assign(socket,
-      budget_state: snapshot,
-      budget_caps: budget_rows(snapshot, Budget.list_caps()),
-      budget_scope_targets: budget_scope_targets(socket)
-    )
-  end
-
-  # Merge the durable DB caps (authoritative + editable) with the live Guard snapshot
-  # (spend/state), keyed by cap id. DB caps anchor the editable rows; snapshot-only caps
-  # (a not-yet-reconciled memory cap) still surface so no cap is unreachable. A DB cap with
-  # no live row yet renders at zero spend / :ok.
-  @spec budget_rows(%{caps: [map()], kill_switch?: boolean()}, [Cap.t()]) :: [map()]
-  defp budget_rows(%{caps: live_rows}, db_caps) do
-    by_id = Map.new(live_rows, &{&1.cap.id, &1})
-
-    from_db =
-      Enum.map(db_caps, fn cap ->
-        Map.get(by_id, cap.id, %{cap: cap, spent: Decimal.new(0), ratio: 0.0, state: :ok})
-      end)
-
-    db_ids = MapSet.new(db_caps, & &1.id)
-    ghosts = Enum.reject(live_rows, &MapSet.member?(db_ids, &1.cap.id))
-
-    from_db ++ ghosts
-  end
-
-  # Live id pickers for scoped caps: the console's own orchestrator and the recent
-  # workflow runs, labelled for humans so the operator never hand-types a raw UUID.
-  @spec budget_scope_targets(Phoenix.LiveView.Socket.t()) :: %{
-          String.t() => [{String.t(), String.t()}]
-        }
-  defp budget_scope_targets(socket) do
-    orchestrators =
-      case socket.assigns[:orchestrator_id] do
-        id when is_binary(id) -> [{"This console", id}]
-        _ -> []
-      end
-
-    workflows =
-      for run <- Workflows.list_recent_runs(20) do
-        {"#{run.current_step || "run"} · #{String.slice(run.id, 0, 8)} (#{run.status})", run.id}
-      end
-
-    projects = for project <- Projects.list_projects(), do: {project.name, project.id}
-
-    %{"orchestrator" => orchestrators, "workflow" => workflows, "project" => projects}
-  end
-
-  # Re-read the live snapshot + durable caps after a breaker event or operator action.
-  @spec refresh_budget(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  defp refresh_budget(socket), do: seed_budget(socket)
-
-  # Re-query the Log Database manager page (rows + total) for the current filter/offset,
-  # clamping the offset down if the active filter shrank below it (e.g. after a purge or a
-  # visibility change moved rows out of the filtered set). Single source of truth for the
-  # manager's table state, shared by the connected mount and every mutating action.
-  @spec seed_log_manager(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  defp seed_log_manager(socket) do
-    %{log_mgr_filter: filter, log_mgr_limit: limit, log_mgr_offset: offset} = socket.assigns
-    total = Logs.count_agent_logs(filter)
-    offset = clamp_page_offset(offset, limit, total)
-    rows = Logs.query_agent_logs(filter, limit, offset)
-
-    assign(socket, log_mgr_rows: rows, log_mgr_total: total, log_mgr_offset: offset)
-  end
-
-  @spec refresh_log_manager(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  defp refresh_log_manager(socket), do: seed_log_manager(socket)
-
-  # Largest valid offset is the start of the last page; clamp into `[0, last_page_start]`.
-  @spec clamp_page_offset(integer(), pos_integer(), non_neg_integer()) :: non_neg_integer()
-  defp clamp_page_offset(offset, limit, total) do
-    max_offset = if total == 0, do: 0, else: div(max(total - 1, 0), limit) * limit
-    offset |> max(0) |> min(max_offset)
-  end
-
-  # Seed the three file-derived palette assigns from the merged (app + working-dir)
-  # root for the orchestrator's current working dir. Re-run when the working dir
-  # changes so the overlay updates immediately.
-  @spec seed_definitions(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  defp seed_definitions(socket) do
-    working_dir = nilify_blank(socket.assigns.orchestrator_working_dir)
-
-    %{slash_command: slash, agent: agents, adw: adws} =
-      Definitions.all(working_dir)
-
-    assign(socket,
-      slash_commands: slash,
-      agent_defs: agents,
-      adws: adws,
-      adw_combos: Combos.list(working_dir)
-    )
   end
 
   @spec load_agents(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
@@ -732,39 +483,12 @@ defmodule RepoBuilderWeb.ConsoleLive do
   @spec nilify_zero(Decimal.t()) :: Decimal.t() | nil
   defp nilify_zero(%Decimal{} = d), do: if(Decimal.equal?(d, 0), do: nil, else: d)
 
-  # Seed each agent card's CONTEXT WINDOW bar from the latest persisted `usage` row,
-  # mirroring `seed_agent_costs/1`. Without this an agent whose work predates the
-  # mount (or any reconnect) shows an empty bar even though its logs are backfilled.
-  @spec seed_context_tokens(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  defp seed_context_tokens(socket) do
-    assign(socket, :context_tokens, Logs.context_tokens_by_agent())
-  end
-
-  # Seed the per-card category counters (responses/tools/hooks/thinking) from
-  # persisted logs so a reconnect restores them; the seeded shape matches what
-  # `bump_counter/3` expects, so later live increments merge cleanly.
-  @spec seed_counters(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  defp seed_counters(socket) do
-    assign(socket, :counters, Logs.event_counts_by_agent())
-  end
-
   # Only AGENT lanes go into the flat lane stream now; workflow runs render as rich
   # per-step swimlanes from `@workflow_progress` (seeded by `seed_workflow_progress/1`).
   @spec seed_lanes(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp seed_lanes(socket) do
     lanes = agent_lanes(socket.assigns.agents)
     Enum.reduce(lanes, socket, &stream_insert(&2, :lanes, &1))
-  end
-
-  # Seed the per-step workflow views from the most-recent runs so the ADWS view shows
-  # per-step squares on connect (a reconnect backfills rather than starting empty).
-  @spec seed_workflow_progress(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  defp seed_workflow_progress(socket) do
-    progress =
-      Workflows.list_recent_runs(50, socket.assigns.show_hidden?)
-      |> Map.new(fn run -> {run.id, workflow_view(run)} end)
-
-    assign(socket, :workflow_progress, progress)
   end
 
   # Merge a workflow lane's status/current step into the run's per-step view (creating
@@ -807,7 +531,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
     %{
       run_id: run_id,
       workflow_id: nil,
-      title: "ADW " <> short_id(run_id),
+      title: "ADW " <> Shared.short_id(run_id),
       type: nil,
       duration: nil,
       status: :running,
@@ -817,121 +541,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
       total: 0,
       steps: []
     }
-  end
-
-  # Build a per-step workflow view from a run (seed/refetch path): full status + cost
-  # from the row, the derived per-step progress (ordered, branching-safe), a derived
-  # duration, and a human-friendly `title` (loaded from the run's `Workflow`).
-  # Inference-only spec — the concrete view map narrows below `map()` under :underspecs.
-  defp workflow_view(run) do
-    progress = Workflows.run_progress(run)
-    workflow = run.workflow_id && Workflows.get_workflow(run.workflow_id)
-
-    %{
-      run_id: run.id,
-      workflow_id: run.workflow_id,
-      title: workflow_title(run, workflow),
-      type: workflow && workflow.type,
-      duration: workflow_duration(run),
-      status: run.status,
-      current: run.current_step,
-      cost: run.total_cost_usd,
-      completed: progress.completed,
-      total: progress.total,
-      steps: progress.steps
-    }
-  end
-
-  # The card title: the humanized `metadata["title"]` wins; else a non-machine-looking
-  # workflow name; else the humanized type; else the live step; else a short, never-raw
-  # `"ADW <short>"`. A bare UUID is never the title.
-  @spec workflow_title(Workflows.WorkflowRun.t(), Workflows.Workflow.t() | nil) :: String.t()
-  defp workflow_title(run, workflow) do
-    # First non-blank candidate wins; the `fallback_title/1` tail is always a binary, so
-    # the title is never nil. Expressed as `Enum.find/2` over the candidates rather than a
-    # 5-deep `||` chain — Dialyzer loses the `nil`-narrowing across the long chain and would
-    # otherwise infer a spurious `nil` in the return range (missing_range false positive).
-    candidates = [
-      meta_title(workflow),
-      human_name(workflow),
-      human_type(workflow),
-      step_title(run)
-    ]
-
-    case Enum.find(candidates, &is_binary/1) do
-      title when is_binary(title) -> title
-      nil -> fallback_title(run)
-    end
-  end
-
-  # The guaranteed non-nil tail of the title resolution: a short, never-raw `"ADW <short>"`.
-  @spec fallback_title(Workflows.WorkflowRun.t()) :: String.t()
-  defp fallback_title(run), do: "ADW " <> short_id(run.id)
-
-  @spec meta_title(Workflows.Workflow.t() | nil) :: String.t() | nil
-  defp meta_title(%{metadata: %{"title" => title}}) when is_binary(title), do: presence(title)
-  defp meta_title(_workflow), do: nil
-
-  # A workflow name only when it is human-friendly (a machine-looking name is skipped
-  # so the card shows the humanized type until the Fast-tier title arrives).
-  @spec human_name(Workflows.Workflow.t() | nil) :: String.t() | nil
-  defp human_name(%{name: name}) when is_binary(name) do
-    if TitleHumanizer.machine_name?(name), do: nil, else: presence(name)
-  end
-
-  defp human_name(_workflow), do: nil
-
-  @spec human_type(Workflows.Workflow.t() | nil) :: String.t() | nil
-  defp human_type(%{type: type}) when is_binary(type) and type != "",
-    do: presence(humanize_type(type))
-
-  defp human_type(_workflow), do: nil
-
-  @spec step_title(Workflows.WorkflowRun.t()) :: String.t() | nil
-  defp step_title(%{current_step: step}) when is_binary(step), do: presence(step)
-  defp step_title(_run), do: nil
-
-  @spec presence(String.t()) :: String.t() | nil
-  defp presence(value) do
-    case String.trim(value) do
-      "" -> nil
-      trimmed -> trimmed
-    end
-  end
-
-  # Slug → Title Case ("plan_build" → "Plan Build").
-  @spec humanize_type(String.t()) :: String.t()
-  defp humanize_type(type) do
-    type
-    |> String.split(~r/[-_\s]+/, trim: true)
-    |> Enum.map_join(" ", &String.capitalize/1)
-  end
-
-  # A display duration for the run: finished ⇒ inserted_at→updated_at; running ⇒
-  # inserted_at→now. `nil` when timestamps are absent.
-  @spec workflow_duration(Workflows.WorkflowRun.t()) :: String.t() | nil
-  defp workflow_duration(%{inserted_at: %DateTime{} = started} = run) do
-    finished =
-      case run do
-        %{status: status, updated_at: %DateTime{} = up}
-        when status in [:succeeded, :failed, :cancelled] ->
-          up
-
-        _ ->
-          DateTime.utc_now()
-      end
-
-    format_duration(DateTime.diff(finished, started, :second))
-  end
-
-  defp workflow_duration(_run), do: nil
-
-  @spec format_duration(integer()) :: String.t()
-  defp format_duration(seconds) when seconds < 0, do: "0s"
-  defp format_duration(seconds) when seconds < 60, do: "#{seconds}s"
-
-  defp format_duration(seconds) do
-    "#{div(seconds, 60)}m #{rem(seconds, 60)}s"
   end
 
   # The header grand total = Σ worker-own spend + the orchestrator's OWN spend. The
@@ -967,79 +576,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
   @spec nilify_acc(Decimal.t() | nil) :: Decimal.t() | nil
   defp nilify_acc(nil), do: nil
   defp nilify_acc(%Decimal{} = d), do: if(Decimal.equal?(d, 0), do: nil, else: d)
-
-  # Re-seed the center stream + chat buffer from the most-recent global logs so a
-  # reconnect backfills instead of starting empty (§9 reconnect rule).
-  @spec backfill_events(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  defp backfill_events(socket) do
-    logs = Logs.list_recent_global(200, socket.assigns.show_hidden?)
-
-    timezone = socket.assigns.timezone
-
-    {rows, seq} =
-      Enum.reduce(logs, {[], 0}, fn log, {rows, seq} ->
-        seq = seq + 1
-        row = log_to_row(log, seq, socket.assigns.agent_names, timezone)
-        # Operator chat turns are chat-pane-only (parity with the live path, where
-        # push_user_message/2 writes no center-stream row) — keep them out of the
-        # center stream (issue-operator-persist-operator-chat-messages). The chat pane
-        # is still seeded from backfill_messages/2 below.
-        if row.chat_role == "operator", do: {rows, seq}, else: {rows ++ [row], seq}
-      end)
-
-    rows = Enum.take(rows, -@buffer_limit)
-
-    # Seed the chat pane from a dedicated orchestrator-scoped query rather than the
-    # worker-dominated global slice above (issue-chat-history-backfill): orchestrator
-    # rows fall out of the global most-recent-200 window once workers dominate, so the
-    # chat would otherwise backfill empty on restart. A SEPARATE `chat_seq` keeps chat
-    # entry ids from colliding with the center-stream `seq`.
-    messages = backfill_messages(socket, timezone)
-
-    socket
-    |> assign(event_buffer: rows, messages: messages, seq: seq)
-    # A reconnect starts from persisted finalized history only — drop any stale
-    # in-flight streaming buffer so no token shards survive the reconnect (§9), and
-    # drop any selection referencing the now-reset row ids (issue-explain).
-    |> assign(streaming: %{}, stream_pending: %{}, stream_flush_ref: nil)
-    |> assign(selected_ids: MapSet.new())
-    # Re-seed the per-card context bar + counters from persisted logs so a reconnect
-    # restores them alongside the re-streamed history (issue-per-agent token/context).
-    |> seed_context_tokens()
-    |> seed_counters()
-    |> stream(:events, rows, reset: true)
-  end
-
-  # Build the chat pane's `@messages` from the ACTIVE orchestrator's scoped backfill
-  # query (issue-conversation-history-scope) so the conversation follows the project
-  # switcher and survives a restart even when worker rows dominate the global stream.
-  # Reuses the live path's `log_to_row/4` → `chat_for_row/1` → `append_chat/3` helpers
-  # (single source of truth) with its OWN `seq` so chat entry ids never collide with the
-  # center stream. A nil active orchestrator (deep-link/disconnected edge) yields an
-  # empty pane — the correct "no brain selected" state, never a global mix.
-  @spec backfill_messages(Phoenix.LiveView.Socket.t(), String.t()) :: [map()]
-  defp backfill_messages(socket, timezone) do
-    socket.assigns.orchestrator_id
-    |> scoped_orchestrator_messages(socket.assigns.show_hidden?)
-    |> Enum.reduce({[], 0}, fn log, {msgs, seq} ->
-      seq = seq + 1
-      row = log_to_row(log, seq, socket.assigns.agent_names, timezone)
-      {append_chat(msgs, chat_for_row(row), seq, timezone), seq}
-    end)
-    |> elem(0)
-    |> Enum.take(-@messages_limit)
-  end
-
-  # Scoped chat backfill: the active orchestrator's own conversation rows, or `[]`
-  # when no brain is selected (nil active id). Keeps the `Repo` access behind the
-  # `Logs` context (§8) and the nil-edge handling out of the reduce above.
-  @spec scoped_orchestrator_messages(Ecto.UUID.t() | nil, boolean()) :: [Logs.AgentLog.t()]
-  defp scoped_orchestrator_messages(orchestrator_id, show_hidden?)
-       when is_binary(orchestrator_id) do
-    Logs.list_orchestrator_messages(orchestrator_id, @messages_limit, show_hidden?)
-  end
-
-  defp scoped_orchestrator_messages(_orchestrator_id, _show_hidden?), do: []
 
   @spec agent_lanes([Agent.t()]) :: [Dashboard.lane()]
   defp agent_lanes(agents) do
@@ -1078,7 +614,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
      |> switch_orchestrator(previous_id)
      |> load_agents()
      |> ExternalApisPanel.load_external_apis()
-     |> restream()}
+     |> Shared.restream()}
   end
 
   # --- Registered APIs settings tab (issue-external-api-mcp-provisioning) ---
@@ -1087,372 +623,27 @@ defmodule RepoBuilderWeb.ConsoleLive do
   def handle_event(event, params, socket) when event in @external_api_events,
     do: ExternalApisPanel.handle_event(event, params, socket)
 
-  # Switch the orchestrator's harness (Claude ⇄ pi ⇄ …). Applies that harness's
-  # provider/model defaults (Claude ⇒ anthropic/opus; pi ⇒ operator-chosen), so the
-  # header reflects the full selection. The next run_turn picks it up.
-  def handle_event("set_harness", %{"harness" => harness}, socket) do
-    update_orchestrator(
-      socket,
-      &Orchestrators.set_harness(&1, harness),
-      "Could not switch harness"
-    )
-  end
+  # Brain panel (extracted: ConsoleLive.BrainPanel, audit F3 Phase 3): orchestrator
+  # harness/provider/model selection, context clear, and the agent-models rosters.
+  def handle_event(event, params, socket) when event in @brain_events,
+    do: BrainPanel.handle_event(event, params, socket)
 
-  # Set the orchestrator's provider (open identity). An empty selection clears it.
-  def handle_event("set_provider", %{"provider" => provider}, socket) do
-    provider = nilify_blank(provider)
+  # Cost panel (extracted: ConsoleLive.CostPanel, audit F3 Phase 3): per-project cost
+  # clear/restore, model-price catalog CRUD, and budget guardrails.
+  def handle_event(event, params, socket) when event in @cost_events,
+    do: CostPanel.handle_event(event, params, socket)
 
-    update_orchestrator(
-      socket,
-      &Orchestrators.set_provider(&1, provider),
-      "Could not set provider"
-    )
-  end
-
-  # Set the orchestrator's model (free text / suggested). Empty clears it. Clearing the
-  # resumable session is handled in `Orchestrators.set_model/2`, so the context bar
-  # zeroes via `assign_orchestrator_selection` (a model switch starts the next turn fresh).
-  def handle_event("set_model", %{"model" => model}, socket) do
-    model = nilify_blank(model)
-    update_orchestrator(socket, &Orchestrators.set_model(&1, model), "Could not set model")
-  end
-
-  # Clear the orchestrator's conversation context: drop the resumable session id so the
-  # next turn starts a fresh conversation, which zeroes the context-window bar (the
-  # visible chat log is persisted history and is left in place).
-  def handle_event("clear_orchestrator_context", _params, socket) do
-    case socket.assigns.orchestrator_id do
-      nil ->
-        {:noreply, put_flash(socket, :error, "No orchestrator available")}
-
-      id ->
-        case Orchestrators.set_session(id, nil) do
-          {:ok, orchestrator} ->
-            {:noreply,
-             socket
-             |> assign_orchestrator_selection(orchestrator)
-             |> put_flash(:info, "Context cleared — the next turn starts fresh")}
-
-          {:error, _reason} ->
-            {:noreply, put_flash(socket, :error, "Could not clear context")}
-        end
-    end
-  end
-
-  # Re-fetch the orchestrator from the DB when the user opens the agent-models modal
-  # so the panel always shows live state (including out-of-band mutations).
-  def handle_event("open_agent_models", _params, socket) do
-    case socket.assigns.orchestrator_id do
-      nil ->
-        {:noreply, socket}
-
-      id ->
-        case Orchestrators.fetch(id) do
-          {:ok, orchestrator} ->
-            {:noreply, assign_orchestrator_selection(socket, orchestrator)}
-
-          {:error, _} ->
-            {:noreply, socket}
-        end
-    end
-  end
-
-  # Assign a worker category's harness/provider/model (agent-models modal). Cascade:
-  # changing the harness clears provider+model; changing the provider clears model.
-  # On success: transiently set `agent_model_saved: true` for the "Saved ✓" chip.
-  def handle_event("set_agent_model", %{"category" => category} = params, socket) do
-    stored = Enum.find(socket.assigns.agent_model_rows, %{}, &(&1.category == category))
-    attrs = agent_model_attrs(params, stored)
-
-    case socket.assigns.orchestrator_id do
-      nil ->
-        {:noreply, put_flash(socket, :error, "No orchestrator available")}
-
-      id ->
-        case Orchestrators.set_agent_model(id, category, attrs) do
-          {:ok, orchestrator} ->
-            Process.send_after(self(), :clear_agent_model_saved, 2_000)
-
-            {:noreply,
-             socket
-             |> assign_orchestrator_selection(orchestrator)
-             |> assign(:agent_model_saved, true)}
-
-          {:error, _reason} ->
-            {:noreply, put_flash(socket, :error, "Could not set agent model")}
-        end
-    end
-  end
-
-  # Clear a worker category's per-project override so the tier re-inherits the global
-  # default (the "reset to default" affordance in the agent-models modal).
-  def handle_event("clear_agent_model", %{"category" => category}, socket) do
-    case socket.assigns.orchestrator_id do
-      nil ->
-        {:noreply, put_flash(socket, :error, "No orchestrator available")}
-
-      id ->
-        case Orchestrators.clear_agent_model(id, category) do
-          {:ok, orchestrator} ->
-            {:noreply, assign_orchestrator_selection(socket, orchestrator)}
-
-          {:error, _reason} ->
-            {:noreply, put_flash(socket, :error, "Could not reset agent model")}
-        end
-    end
-  end
-
-  # Save one tier of the GLOBAL default roster (Settings → Default Models tab). Same
-  # cascade as `set_agent_model` (harness change clears provider+model). Persists via the
-  # Settings context; new projects inherit this default.
-  def handle_event("set_default_agent_model", %{"category" => category} = params, socket) do
-    stored = Enum.find(socket.assigns.default_model_rows, %{}, &(&1.category == category))
-    attrs = agent_model_attrs(params, stored)
-
-    case Settings.set_default_agent_model(
-           category,
-           attrs["harness"],
-           attrs["provider"],
-           attrs["model"]
-         ) do
-      {:ok, _roster} ->
-        Process.send_after(self(), :clear_default_model_saved, 2_000)
-
-        {:noreply,
-         socket
-         |> assign(:default_model_rows, default_model_rows())
-         |> assign(:default_model_saved, true)}
-
-      {:error, :invalid_category} ->
-        {:noreply, put_flash(socket, :error, "Unknown worker category")}
-
-      {:error, :unknown_harness} ->
-        {:noreply, put_flash(socket, :error, "Pick a registered harness first")}
-
-      {:error, _reason} ->
-        {:noreply, put_flash(socket, :error, "Could not save default model")}
-    end
-  end
-
-  # Clear (soft-hide) the active project's cost rows — recoverable via "Restore".
-  def handle_event("clear_project_costs", _params, socket) do
-    case socket.assigns[:active_project_id] do
-      id when is_binary(id) ->
-        count = Logs.hide_logs_for_project(id)
-
-        {:noreply,
-         socket
-         |> load_cost_center()
-         |> put_flash(:info, "Cleared #{count} cost row(s) (restorable)")}
-
-      _ ->
-        {:noreply, put_flash(socket, :error, "Select a project first")}
-    end
-  end
-
-  # Restore (reveal) the active project's previously-cleared cost rows.
-  def handle_event("restore_project_costs", _params, socket) do
-    case socket.assigns[:active_project_id] do
-      id when is_binary(id) ->
-        count = Logs.release_hidden_logs_for_project(id)
-
-        {:noreply,
-         socket
-         |> load_cost_center()
-         |> put_flash(:info, "Restored #{count} cost row(s)")}
-
-      _ ->
-        {:noreply, put_flash(socket, :error, "Select a project first")}
-    end
-  end
-
-  # Save the custom system prompt + mode. Blank text persists as nil (spawn falls
-  # back to the generated default). The mode comes from the hidden field (current
-  # toggle state); never `String.to_atom/1` on operator input.
-  def handle_event("save_system_prompt", %{"system_prompt" => text} = params, socket) do
-    mode = system_prompt_mode(params["mode"])
-
-    update_orchestrator(
-      socket,
-      &Orchestrators.set_system_prompt(&1, nilify_blank(text), mode),
-      "Could not save system prompt"
-    )
-  end
-
-  # Persist the append/replace mode immediately (consistent with the other settings),
-  # keeping the current stored prompt text unchanged.
-  def handle_event("set_system_prompt_mode", %{"mode" => mode}, socket) do
-    mode = system_prompt_mode(mode)
-    text = nilify_blank(socket.assigns.orchestrator_system_prompt)
-
-    update_orchestrator(
-      socket,
-      &Orchestrators.set_system_prompt(&1, text, mode),
-      "Could not set prompt mode"
-    )
-  end
-
-  # Reset to the generated default (clears the override, restores :append).
-  def handle_event("reset_system_prompt", _params, socket) do
-    update_orchestrator(
-      socket,
-      &Orchestrators.reset_system_prompt(&1),
-      "Could not reset system prompt"
-    )
-  end
-
-  # Persist the orchestrator + worker working directory. Blank clears it (back to an
-  # isolated per-session workspace); a non-blank value must be an absolute path to an
-  # existing directory, validated before it is stored (no silent un-runnable cwd).
-  def handle_event("save_working_dir", %{"working_dir" => dir}, socket) do
-    save_working_dir(socket, dir)
-  end
-
-  # Clear the working dir (blank ⇒ each agent gets an isolated scratch workspace).
-  def handle_event("clear_working_dir", _params, socket) do
-    save_working_dir(socket, "")
-  end
-
-  # Open the directory picker, starting at the current working dir when it is a valid
-  # directory, otherwise the project root (the default).
-  def handle_event("open_dir_picker", _params, socket) do
-    start =
-      case nilify_blank(socket.assigns.orchestrator_working_dir) do
-        path when is_binary(path) ->
-          if File.dir?(path), do: path, else: FileBrowser.project_root()
-
-        nil ->
-          FileBrowser.project_root()
-      end
-
-    {:noreply, socket |> assign(:dir_picker_open?, true) |> load_dir_picker(start)}
-  end
-
-  def handle_event("dir_picker_browse", %{"path" => path}, socket) do
-    {:noreply, load_dir_picker(socket, path)}
-  end
-
-  # Browse straight to a typed/pasted absolute path. Blank ⇒ no-op (no flash spam);
-  # otherwise reuse load_dir_picker/2 (expands, lists, flashes + keeps prior view on error).
-  def handle_event("dir_picker_goto", %{"path" => path}, socket) do
-    case String.trim(path) do
-      "" -> {:noreply, socket}
-      trimmed -> {:noreply, load_dir_picker(socket, trimmed)}
-    end
-  end
-
-  def handle_event("close_dir_picker", _params, socket) do
-    {:noreply, assign(socket, :dir_picker_open?, false)}
-  end
-
-  # Commit the currently-browsed directory as the orchestrator cwd, then close the picker.
-  def handle_event("dir_picker_select", _params, socket) do
-    {:noreply, socket} = save_working_dir(socket, socket.assigns.dir_picker_path)
-    {:noreply, assign(socket, :dir_picker_open?, false)}
-  end
-
-  # Persist the harness-blind reasoning effort immediately (consistent with the other
-  # orchestrator settings). The next run_turn spawns with the per-harness flag.
-  def handle_event("set_reasoning_effort", %{"effort" => effort}, socket) do
-    update_orchestrator(
-      socket,
-      &Orchestrators.set_reasoning_effort(&1, reasoning_effort(effort)),
-      "Could not set reasoning effort"
-    )
-  end
-
-  # Persist the operator's display timezone and re-render the center stream in the new
-  # zone (the select snaps back to @timezone on an invalid/failed write — no-op here).
-  def handle_event("set_timezone", %{"timezone" => zone}, socket) do
-    case socket.assigns.orchestrator_id do
-      nil ->
-        {:noreply, put_flash(socket, :error, "No orchestrator available")}
-
-      id ->
-        case Orchestrators.set_timezone(id, zone) do
-          {:ok, orchestrator} ->
-            socket =
-              socket
-              |> assign_orchestrator_selection(orchestrator)
-              |> backfill_events()
-              |> refresh_cost_center_on_tz()
-
-            {:noreply, socket}
-
-          {:error, _reason} ->
-            {:noreply, socket}
-        end
-    end
-  end
+  # Settings panel (extracted: ConsoleLive.SettingsPanel, audit F3 Phase 3): system prompt,
+  # working dir + directory picker, reasoning effort, timezone, settings tabs, stack layers.
+  def handle_event(event, params, socket) when event in @settings_events,
+    do: SettingsPanel.handle_event(event, params, socket)
 
   # --- agent-template settings tab ---
 
-  # Start a blank new-template form (clears the selection + version history).
-  def handle_event("new_template", _params, socket) do
-    {:noreply, assign(socket, selected_template: nil, template_versions: [])}
-  end
-
-  # Load a template (current version) into the editor + its version history.
-  def handle_event("select_template", %{"name" => name}, socket) do
-    {:noreply, select_template(socket, name)}
-  end
-
-  # Save a new version of a template (author: operator) and re-select it.
-  def handle_event("save_agent_template", params, socket) do
-    attrs = %{
-      "name" => params["name"],
-      "description" => params["description"],
-      "body" => params["system_prompt"],
-      "model" => nilify_blank(params["model"] || ""),
-      "category" => nilify_blank(params["category"] || ""),
-      "author" => :operator
-    }
-
-    case Templates.save(attrs) do
-      {:ok, template} ->
-        {:noreply,
-         socket
-         |> assign_template_rows()
-         |> select_template(template.name)}
-
-      {:error, _reason} ->
-        {:noreply, put_flash(socket, :error, "Could not save template (check name/fields)")}
-    end
-  end
-
-  # Promote an old version to a fresh current one (non-destructive restore).
-  def handle_event("restore_template", %{"name" => name, "version" => version}, socket) do
-    case Integer.parse(version) do
-      {k, _rest} ->
-        case Templates.restore(name, k) do
-          {:ok, _template} ->
-            {:noreply, socket |> assign_template_rows() |> select_template(name)}
-
-          {:error, _reason} ->
-            {:noreply, put_flash(socket, :error, "Could not restore version")}
-        end
-
-      :error ->
-        {:noreply, put_flash(socket, :error, "Invalid version")}
-    end
-  end
-
-  # Delete a writable template's history; built-ins are read-only.
-  def handle_event("delete_template", %{"name" => name}, socket) do
-    case Templates.delete(name) do
-      :ok ->
-        {:noreply,
-         socket
-         |> assign(selected_template: nil, template_versions: [])
-         |> assign_template_rows()}
-
-      {:error, :builtin} ->
-        {:noreply, put_flash(socket, :error, "Built-in templates are read-only")}
-
-      {:error, _reason} ->
-        {:noreply, put_flash(socket, :error, "Could not delete template")}
-    end
-  end
+  # Templates panel (extracted: ConsoleLive.TemplatesPanel, audit F3 Phase 3): the
+  # agent-template settings tab's new/select/save/restore/delete handlers.
+  def handle_event(event, params, socket) when event in @template_events,
+    do: TemplatesPanel.handle_event(event, params, socket)
 
   # Cancel a still-queued operator/auto-resume turn before it runs (issue message-queue);
   # the in-flight turn is never affected (use interrupt for that). The queue broadcasts a
@@ -1487,203 +678,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
   def handle_event("set_chat_width", %{"width" => width}, socket),
     do: {:noreply, assign(socket, :chat_width, to_chat_width(width))}
 
-  def handle_event("toggle_adw_builder", _params, socket) do
-    {:noreply, assign(socket, adw_builder?: !socket.assigns.adw_builder?)}
-  end
-
-  # Switch the prompt palette's BASE/PROJECT source tab (issue palette-source-tabs).
-  def handle_event("set_palette_tab", %{"tab" => tab}, socket) do
-    tab = if tab == "project", do: :project, else: :base
-    {:noreply, assign(socket, :palette_source_tab, tab)}
-  end
-
-  def handle_event("adw_add_step", %{"step" => step}, socket) do
-    steps = socket.assigns.adw_steps
-    id = if steps == [], do: 1, else: Enum.max_by(steps, & &1.id).id + 1
-    new_step = %{id: id, name: step, expanded: false, prompt: nil}
-    {:noreply, assign(socket, adw_steps: steps ++ [new_step])}
-  end
-
-  def handle_event("adw_remove_step", %{"id" => id}, socket) do
-    id = String.to_integer(id)
-    {:noreply, assign(socket, adw_steps: Enum.reject(socket.assigns.adw_steps, &(&1.id == id)))}
-  end
-
-  def handle_event("adw_move_step", %{"id" => id, "dir" => dir}, socket) do
-    id = String.to_integer(id)
-    steps = socket.assigns.adw_steps
-    idx = Enum.find_index(steps, &(&1.id == id))
-    new_idx = if dir == "up", do: idx - 1, else: idx + 1
-
-    if new_idx < 0 or new_idx >= length(steps) do
-      {:noreply, socket}
-    else
-      {item, rest} = List.pop_at(steps, idx)
-      {:noreply, assign(socket, adw_steps: List.insert_at(rest, new_idx, item))}
-    end
-  end
-
-  def handle_event("adw_toggle_step", %{"id" => id}, socket) do
-    id = String.to_integer(id)
-
-    steps =
-      Enum.map(socket.assigns.adw_steps, fn s ->
-        if s.id == id, do: %{s | expanded: !s.expanded}, else: s
-      end)
-
-    {:noreply, assign(socket, adw_steps: steps)}
-  end
-
-  def handle_event("adw_set_name", %{"name" => name}, socket) do
-    {:noreply, assign(socket, adw_name: name)}
-  end
-
-  def handle_event("adw_set_spec", %{"spec" => spec}, socket) do
-    {:noreply, assign(socket, adw_spec: spec)}
-  end
-
-  def handle_event("adw_set_prompt", %{"prompt" => prompt}, socket) do
-    {:noreply, assign(socket, adw_prompt: prompt)}
-  end
-
-  def handle_event("adw_toggle_local", _params, socket) do
-    {:noreply, assign(socket, adw_local?: !socket.assigns.adw_local?)}
-  end
-
-  def handle_event("adw_set_harness", %{"harness" => h}, socket) do
-    {:noreply, assign(socket, adw_harness: nilify_blank(h))}
-  end
-
-  def handle_event("adw_set_step_prompt", %{"id" => id, "value" => v}, socket) do
-    id = String.to_integer(id)
-    prompt = if String.trim(v) == "", do: nil, else: v
-
-    steps =
-      Enum.map(socket.assigns.adw_steps, fn s ->
-        if s.id == id, do: %{s | prompt: prompt}, else: s
-      end)
-
-    {:noreply, assign(socket, adw_steps: steps)}
-  end
-
-  def handle_event("run_adw_builder", _params, socket) do
-    steps = socket.assigns.adw_steps
-
-    if steps == [] do
-      {:noreply, put_flash(socket, :error, "Add at least one step before launching")}
-    else
-      harness = socket.assigns.adw_harness || socket.assigns.orchestrator_harness || "fake"
-
-      name =
-        socket.assigns.adw_name
-        |> then(&if(&1 == "", do: "custom-adw", else: &1))
-        |> String.replace(" ", "-")
-
-      {:noreply, launch_adw_builder(steps, name, harness, socket)}
-    end
-  end
-
-  # Persist the current build as a named combo: writes the JSON sidecar AND
-  # materializes adws/adw_<name>_iso.py (or _local_iso.py) via Combos.save/2, then
-  # re-seeds the combo list so a Load-combo dropdown stays current.
-  def handle_event("adw_save_combo", _params, socket) do
-    %{adw_name: name, adw_steps: steps, adw_local?: local?} = socket.assigns
-
-    cond do
-      String.trim(name) == "" ->
-        {:noreply, put_flash(socket, :error, "Name the combo before saving")}
-
-      steps == [] ->
-        {:noreply, put_flash(socket, :error, "Add at least one step before saving")}
-
-      true ->
-        working_dir = nilify_blank(socket.assigns.orchestrator_working_dir)
-
-        attrs = %{
-          name: name,
-          steps: Enum.map(steps, fn s -> {String.to_existing_atom(s.name), s[:prompt]} end),
-          flavor: if(local?, do: :local_iso, else: :iso),
-          spec: socket.assigns.adw_spec,
-          initial_prompt: socket.assigns.adw_prompt,
-          harness: nilify_blank(socket.assigns.adw_harness || "")
-        }
-
-        case Combos.save(attrs, working_dir) do
-          {:ok, combo} ->
-            socket =
-              socket
-              |> assign(adw_combos: Combos.list(working_dir))
-              |> put_flash(:info, "Saved combo + generated #{Path.basename(combo.script_path)}")
-
-            {:noreply, socket}
-
-          {:error, :exists} ->
-            {:noreply,
-             put_flash(socket, :error, "A script for that name already exists — pick a new name")}
-
-          {:error, reason} ->
-            {:noreply, put_flash(socket, :error, "Could not save combo: #{inspect(reason)}")}
-        end
-    end
-  end
-
-  # Load-combo reuse: repopulate the builder (steps + flavor + spec + prompt + name)
-  # from a saved combo. A blank selection is a no-op that just clears the highlight.
-  def handle_event("adw_load_combo", %{"combo" => ""}, socket) do
-    {:noreply, assign(socket, adw_selected_combo: "")}
-  end
-
-  def handle_event("adw_load_combo", %{"combo" => name}, socket) do
-    working_dir = nilify_blank(socket.assigns.orchestrator_working_dir)
-
-    case Combos.fetch(name, working_dir) do
-      {:ok, combo} ->
-        steps =
-          combo.steps
-          |> Enum.with_index(1)
-          |> Enum.map(fn {{step_name, custom_prompt}, id} ->
-            %{id: id, name: Atom.to_string(step_name), expanded: false, prompt: custom_prompt}
-          end)
-
-        socket =
-          assign(socket,
-            adw_steps: steps,
-            adw_name: combo.name,
-            adw_local?: combo.flavor == :local_iso,
-            adw_spec: combo.spec || "",
-            adw_prompt: combo.initial_prompt || "",
-            adw_harness: combo.harness || "",
-            adw_selected_combo: combo.name
-          )
-
-        {:noreply, socket}
-
-      {:error, :not_found} ->
-        {:noreply, put_flash(socket, :error, "Combo not found: #{name}")}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not load combo: #{inspect(reason)}")}
-    end
-  end
-
-  # Delete a saved combo's sidecar (the generated .py stays a normal discovered ADW),
-  # then re-seed the combo list so the dropdown stays fresh.
-  def handle_event("adw_delete_combo", %{"combo" => name}, socket) do
-    working_dir = nilify_blank(socket.assigns.orchestrator_working_dir)
-
-    case Combos.delete(name, working_dir) do
-      :ok ->
-        socket =
-          socket
-          |> assign(adw_combos: Combos.list(working_dir), adw_selected_combo: "")
-          |> put_flash(:info, "Deleted combo #{name}")
-
-        {:noreply, socket}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not delete combo: #{inspect(reason)}")}
-    end
-  end
+  # ADW Builder panel (extracted: ConsoleLive.AdwBuilderPanel, audit F3 Phase 3): the
+  # builder toggle, palette tab, step editing, launch, and saved-combo handlers.
+  def handle_event(event, params, socket) when event in @adw_builder_events,
+    do: AdwBuilderPanel.handle_event(event, params, socket)
 
   # The ⌘K command modal is the sole prompt input: it routes to the orchestrator
   # (or the manually selected agent, if any) via run_prompt/4. The modal hides
@@ -1720,548 +718,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
   # the upload config (accept/max_*), so this is a no-op acknowledgement.
   def handle_event("validate_attachments", _params, socket), do: {:noreply, socket}
 
-  # --- filter handlers (re-stream from the bounded buffer; streams aren't filterable) ---
-
-  def handle_event("toggle_category", %{"cat" => cat}, socket) do
-    case to_category(cat) do
-      nil ->
-        {:noreply, socket}
-
-      category ->
-        active = toggle_member(socket.assigns.active_categories, category)
-        {:noreply, socket |> assign(:active_categories, active) |> restream()}
-    end
-  end
-
-  def handle_event("toggle_agent_filter", %{"id" => id}, socket) do
-    active =
-      if id in socket.assigns.active_agents,
-        do: List.delete(socket.assigns.active_agents, id),
-        else: [id | socket.assigns.active_agents]
-
-    {:noreply, socket |> assign(:active_agents, active) |> restream()}
-  end
-
-  def handle_event("set_search", %{"q" => q}, socket),
-    do: {:noreply, socket |> assign(:search, q) |> restream()}
-
-  def handle_event("toggle_regex", _params, socket),
-    do: {:noreply, socket |> assign(:regex?, not socket.assigns.regex?) |> restream()}
-
-  # Flip the project scope (issue-scope-logs-to-active-project) and re-filter the buffer.
-  # Scope off re-reveals other projects' buffered rows; on re-hides them (rows are never
-  # dropped from `event_buffer`, so this is a pure view toggle).
-  def handle_event("toggle_project_scope", _params, socket),
-    do:
-      {:noreply,
-       socket |> assign(:project_scoped?, not socket.assigns.project_scoped?) |> restream()}
-
-  def handle_event("toggle_auto_follow", _params, socket),
-    do: {:noreply, assign(socket, :auto_follow?, not socket.assigns.auto_follow?)}
-
-  def handle_event("toggle_thinking", _params, socket),
-    do: {:noreply, assign(socket, :show_thinking?, not socket.assigns.show_thinking?)}
-
-  # Troubleshooting: reveal (or re-hide) rows soft-hidden by CLEAR. Flip the flag, then
-  # re-seed the log stream + workflow swimlanes from the DB honoring the new flag.
-  def handle_event("toggle_show_hidden", _params, socket) do
-    socket = assign(socket, :show_hidden?, not socket.assigns.show_hidden?)
-    {:noreply, socket |> backfill_events() |> seed_workflow_progress()}
-  end
-
-  # Durable reveal: permanently un-hide every row soft-hidden by CLEAR (the inverse of
-  # CLEAR). Unlike the troubleshooting peek, this persists hidden=false so the rows stay
-  # visible across reconnects without holding a flag on. Re-seed the streams from the
-  # now-visible DB and flash a transient "Released N rows" confirmation.
-  def handle_event("release_hidden", _params, socket) do
-    released = Logs.release_hidden_logs() + Workflows.release_hidden_runs()
-    Process.send_after(self(), :clear_release_notice, 2_000)
-
-    {:noreply,
-     socket
-     |> assign(:release_notice, released)
-     |> backfill_events()
-     |> seed_workflow_progress()}
-  end
-
-  def handle_event("select_settings_tab", %{"tab" => tab}, socket) do
-    selected = settings_tab(tab)
-    socket = assign(socket, :settings_tab, selected)
-    socket = if selected == :cost_center, do: load_cost_center(socket), else: socket
-    socket = if selected == :stack_layers, do: load_stack_layers(socket), else: socket
-
-    socket =
-      if selected == :default_models,
-        do: assign(socket, :default_model_rows, default_model_rows()),
-        else: socket
-
-    {:noreply, socket}
-  end
-
-  # Save a catalog price (issue-cost-center). Routes to `update_price/2` when an edit is in
-  # flight (identity key fields dropped so the row can never be repointed, §key-immutability)
-  # or `upsert_price/1` when creating. On success re-derive the catalog + rollup and reset
-  # to create mode; on a validation error re-render the form with the changeset (staying in
-  # edit mode); a stale id (row deleted concurrently) falls back to create mode.
-  def handle_event("save_price", %{"model_price" => params}, socket) do
-    result =
-      case socket.assigns.editing_price_id do
-        nil ->
-          CostCenter.upsert_price(params)
-
-        id ->
-          case CostCenter.get_price(id) do
-            nil -> {:error, :not_found}
-            price -> CostCenter.update_price(price, Map.drop(params, ~w(harness provider model)))
-          end
-      end
-
-    case result do
-      {:ok, _price} ->
-        {:noreply, socket |> load_cost_center() |> reset_price_form()}
-
-      {:error, %Ecto.Changeset{} = changeset} ->
-        {:noreply, assign(socket, :price_form, to_form(changeset, as: :model_price))}
-
-      {:error, :not_found} ->
-        {:noreply, socket |> load_cost_center() |> reset_price_form()}
-    end
-  end
-
-  # Load a catalog row into the form and flip into edit mode. A stale id (concurrent
-  # delete) no-ops rather than crashing.
-  def handle_event("edit_price", %{"id" => id}, socket) do
-    case CostCenter.get_price(id) do
-      nil ->
-        {:noreply, socket}
-
-      %ModelPrice{} = price ->
-        {:noreply,
-         assign(socket,
-           editing_price_id: price.id,
-           price_form: to_form(ModelPrice.changeset(price, %{}), as: :model_price)
-         )}
-    end
-  end
-
-  def handle_event("cancel_edit", _params, socket) do
-    {:noreply, reset_price_form(socket)}
-  end
-
-  def handle_event("delete_price", %{"id" => id}, socket) do
-    _ = CostCenter.delete_price(id)
-    socket = load_cost_center(socket)
-
-    socket =
-      if socket.assigns.editing_price_id == id, do: reset_price_form(socket), else: socket
-
-    {:noreply, socket}
-  end
-
-  # --- stack layers catalog CRUD (stack-layers subsystem) ---
-
-  # Save a catalog layer: `update_layer/2` when an edit is in flight, else `create_layer/1`.
-  # On success re-derive the catalog and reset to create mode; a validation error re-renders
-  # the form with the changeset; a stale id (concurrent delete) falls back to create mode.
-  def handle_event("save_layer", %{"stack_layer" => params}, socket) do
-    result =
-      case socket.assigns.editing_layer_id do
-        nil ->
-          StackLayers.create_layer(params)
-
-        id ->
-          case StackLayers.get_layer(id) do
-            nil -> {:error, :not_found}
-            layer -> StackLayers.update_layer(layer, params)
-          end
-      end
-
-    case result do
-      {:ok, _layer} ->
-        {:noreply, socket |> load_stack_layers() |> reset_layer_form()}
-
-      {:error, %Ecto.Changeset{} = changeset} ->
-        {:noreply, assign(socket, :stack_layer_form, to_form(changeset, as: :stack_layer))}
-
-      {:error, :not_found} ->
-        {:noreply, socket |> load_stack_layers() |> reset_layer_form()}
-    end
-  end
-
-  def handle_event("edit_layer", %{"id" => id}, socket) do
-    case StackLayers.get_layer(id) do
-      nil ->
-        {:noreply, socket}
-
-      %StackLayer{} = layer ->
-        {:noreply,
-         assign(socket,
-           editing_layer_id: layer.id,
-           stack_layer_form: to_form(StackLayer.changeset(layer, %{}), as: :stack_layer)
-         )}
-    end
-  end
-
-  def handle_event("cancel_layer_edit", _params, socket) do
-    {:noreply, reset_layer_form(socket)}
-  end
-
-  def handle_event("delete_layer", %{"id" => id}, socket) do
-    _ = StackLayers.delete_layer(id)
-    socket = load_stack_layers(socket)
-
-    socket =
-      if socket.assigns.editing_layer_id == id, do: reset_layer_form(socket), else: socket
-
-    {:noreply, socket}
-  end
-
-  # --- budget guardrails (issue-budget-guardrails) ---
-
-  # Track the form's selected scope as the operator changes it, so the scope_id picker can
-  # show/hide (and swap orchestrator-vs-workflow targets) without a submit. Rebuild the form
-  # from the in-flight params so typed values survive the re-render.
-  def handle_event("budget_form_change", %{"budget" => params}, socket) do
-    changeset = Cap.changeset(%Cap{}, params)
-
-    {:noreply,
-     assign(socket,
-       budget_form: to_form(changeset, as: :budget),
-       budget_scope: params["scope"] || "global",
-       # Recompute live targets so the picker reflects orchestrators/workflows present
-       # right now (the mount seed runs before orchestrator assignment / before new runs).
-       budget_scope_targets: budget_scope_targets(socket)
-     )}
-  end
-
-  # Load an existing cap (from the merged DB+live rows, so even a not-yet-reconciled cap is
-  # editable) into the form. Submitting upserts it, which also reconciles any memory-vs-DB
-  # drift by writing the row back.
-  def handle_event("edit_budget", %{"id" => id}, socket) do
-    case Enum.find(socket.assigns.budget_caps, &(&1.cap.id == id)) do
-      %{cap: cap} ->
-        {:noreply,
-         assign(socket,
-           budget_form: to_form(Cap.changeset(cap, %{}), as: :budget),
-           budget_scope: to_string(cap.scope),
-           budget_scope_targets: budget_scope_targets(socket),
-           budget_editing?: true
-         )}
-
-      _ ->
-        {:noreply, socket}
-    end
-  end
-
-  def handle_event("cancel_edit_budget", _params, socket) do
-    {:noreply, reset_budget_form(socket)}
-  end
-
-  def handle_event("save_budget", %{"budget" => params}, socket) do
-    case Budget.upsert_cap(params) do
-      {:ok, _cap} ->
-        # A new/edited cap changes the live policy; force the Guard to reload + reconcile.
-        _ = Budget.Guard.refresh()
-        {:noreply, socket |> refresh_budget() |> reset_budget_form()}
-
-      {:error, %Ecto.Changeset{} = changeset} ->
-        {:noreply, assign(socket, :budget_form, to_form(changeset, as: :budget))}
-    end
-  end
-
-  def handle_event("delete_budget", %{"id" => id}, socket) do
-    _ = Budget.delete_cap(id)
-    _ = Budget.Guard.refresh()
-    {:noreply, refresh_budget(socket)}
-  end
-
-  def handle_event("reset_budget", %{"id" => id}, socket) do
-    _ = Budget.Guard.reset_cap(id)
-    {:noreply, refresh_budget(socket)}
-  end
-
-  def handle_event("toggle_kill_switch", _params, socket) do
-    if socket.assigns.budget_state.kill_switch? do
-      _ = Budget.Guard.release_all()
-    else
-      _ = Budget.Guard.engage_kill_switch()
-    end
-
-    {:noreply, refresh_budget(socket)}
-  end
-
-  # Reset every filter AND clear the log view. Empties the in-memory event buffer + the
-  # rendered stream (and collapses expanded rows) AND soft-hides the persisted rows, so
-  # the cleared state survives a reconnect. Nothing is deleted — the settings "show
-  # hidden" toggle reveals it again. When troubleshooting (show_hidden?), skip the
-  # persist so CLEAR stays a view-only reset.
-  def handle_event("clear_filters", _params, socket) do
-    # Discard the hidden-row count: the persist is a side effect, not a return value.
-    _ = unless socket.assigns.show_hidden?, do: Logs.hide_all_logs()
-
-    {:noreply,
-     socket
-     |> assign(
-       active_categories: MapSet.new(@categories),
-       active_agents: [],
-       search: "",
-       regex?: false,
-       # Return to the documented default scope-on; `project_agent_keys` is the roster
-       # set (rebuilt by `load_agents`), not a filter, so it survives a CLEAR.
-       project_scoped?: true,
-       event_buffer: [],
-       expanded_ids: MapSet.new(),
-       selected_ids: MapSet.new(),
-       log_count: 0
-     )
-     |> stream(:events, [], reset: true)}
-  end
-
-  # Clear finished (succeeded/failed/cancelled) workflows from the ADWS view, and trim the
-  # non-running event rows that back the LOGS view + workflow step-squares. Soft-hides the
-  # persisted data so the cleared state survives a reconnect. Running/queued work stays;
-  # nothing is deleted (reversible via the settings "show hidden" toggle). When
-  # troubleshooting (show_hidden?), skip the persist so CLEAR stays a view-only reset.
-  def handle_event("clear_workflows", _params, socket) do
-    # Existing: drop finished workflow cards and persist cleared state.
-    _ = unless socket.assigns.show_hidden?, do: Workflows.hide_finished_runs()
-
-    kept =
-      socket.assigns.workflow_progress
-      |> Enum.reject(fn {_run_id, view} -> view.status in @finished_workflow_statuses end)
-      |> Map.new()
-
-    # Derive the clearable agent_key set from event_buffer + statuses. Any key whose current
-    # status is not :running (nor :holding — a held worker is blocked and resumable, not
-    # finished) is clearable (issue holding-status-for-blocked-agents).
-    clearable_keys =
-      socket.assigns.event_buffer
-      |> Enum.map(& &1.agent_key)
-      |> Enum.uniq()
-      |> Enum.reject(fn k ->
-        Map.get(socket.assigns.statuses, k, :idle) in [:running, :holding]
-      end)
-      |> MapSet.new()
-
-    # Trim event_buffer; the LOGS stream + workflow step-squares recompute from it.
-    {cleared_rows, kept_buffer} =
-      Enum.split_with(socket.assigns.event_buffer, fn row ->
-        MapSet.member?(clearable_keys, row.agent_key)
-      end)
-
-    # Drop clearable keys from @statuses so running_count/1 badge stays accurate.
-    kept_statuses =
-      Map.reject(socket.assigns.statuses, fn {k, _} -> MapSet.member?(clearable_keys, k) end)
-
-    # Durable: soft-hide worker swimlanes (UUID-shaped agent_key) in the DB so the clear
-    # survives a reconnect (backfill_events reads list_recent_global which respects hidden).
-    # Orchestrator-derived lanes ("orch-…" keys) are cleared view-only; persisting those
-    # is governed by the orchestrator/chat backfill path and is out of scope here.
-    _ =
-      unless socket.assigns.show_hidden? do
-        worker_keys =
-          clearable_keys
-          |> Enum.filter(fn k -> match?({:ok, _}, Ecto.UUID.cast(k)) end)
-
-        Logs.hide_logs_for_agents(worker_keys)
-      end
-
-    socket =
-      socket
-      |> assign(:workflow_progress, kept)
-      |> assign(:event_buffer, kept_buffer)
-      |> assign(:statuses, kept_statuses)
-
-    # stream_delete each cleared row from :events (mirrors hide_selected, lines 1728-1734).
-    socket = Enum.reduce(cleared_rows, socket, &stream_delete(&2, :events, &1))
-
-    {:noreply, socket}
-  end
-
-  def handle_event("toggle_event", %{"id" => id}, socket) do
-    id = String.to_integer(id)
-    expanded = toggle_member(socket.assigns.expanded_ids, id)
-    socket = assign(socket, :expanded_ids, expanded)
-
-    case Enum.find(socket.assigns.event_buffer, &(&1.id == id)) do
-      nil -> {:noreply, socket}
-      row -> {:noreply, stream_insert(socket, :events, row)}
-    end
-  end
-
-  def handle_event("open_event", %{"id" => id}, socket) do
-    id = String.to_integer(id)
-
-    {:noreply,
-     assign(socket, :selected_event, Enum.find(socket.assigns.event_buffer, &(&1.id == id)))}
-  end
-
-  def handle_event("close_event", _params, socket),
-    do: {:noreply, assign(socket, :selected_event, nil)}
-
-  # Open a file in the operator's configured editor (issue file-diff-event-cards).
-  # `RepoBuilder.Editor.open/1` validates the path and guards the editor command.
-  def handle_event("open_file", %{"path" => path}, socket) do
-    msg =
-      case RepoBuilder.Editor.open(path) do
-        {:ok, opened} ->
-          {:info, "Opened #{Path.basename(opened)} in editor"}
-
-        {:error, :disabled} ->
-          {:error, "Editor integration is disabled"}
-
-        {:error, :invalid_path} ->
-          {:error, "Invalid file path"}
-
-        {:error, :not_found} ->
-          {:error, "File not found: #{Path.basename(path)}"}
-
-        {:error, {:exit, code}} ->
-          {:error, "Editor exited with code #{code}"}
-      end
-
-    case msg do
-      {:info, text} -> {:noreply, put_flash(socket, :info, text)}
-      {:error, text} -> {:noreply, put_flash(socket, :error, text)}
-    end
-  end
-
-  # --- reusable event-stream selection + bulk actions (issue-explain) ---
-
-  # Toggle one row's membership in the action-agnostic selection. Re-stream the row so
-  # its checkbox reflects the new state (the stream only re-renders changed items).
-  def handle_event("toggle_select", %{"id" => id}, socket) do
-    id = String.to_integer(id)
-    selected = toggle_member(socket.assigns.selected_ids, id)
-    socket = assign(socket, :selected_ids, selected)
-
-    case Enum.find(socket.assigns.event_buffer, &(&1.id == id)) do
-      nil -> {:noreply, socket}
-      row -> {:noreply, stream_insert(socket, :events, row)}
-    end
-  end
-
-  # Range selection committed by the DragSelect JS hook (issue drag-select): ADD or
-  # REMOVE the dragged ids (additive/subtractive over the existing selection, honoring
-  # `mode`) in a SINGLE round-trip, then re-stream only the rows whose membership actually
-  # changed so authoritative checkbox state reconciles the hook's optimistic paint.
-  def handle_event("select_drag", %{"ids" => ids, "mode" => mode}, socket) do
-    {:noreply, apply_drag_selection(socket, parse_ids(ids), normalize_mode(mode))}
-  end
-
-  def handle_event("clear_selection", _params, socket),
-    do: {:noreply, clear_selection(socket)}
-
-  # --- Log Database manager (issue-log-db-manager) ---
-  # A paginated, filterable DB browser over `agent_logs`. Its selection is a MapSet of
-  # `id` UUID STRINGS, persisting across pages so a purge/visibility action can span them.
-
-  # Re-query the manager's current filter/page when it opens (its assigns are seeded on
-  # mount, but rows may have changed since; this keeps the first paint authoritative).
-  def handle_event("open_log_manager", _params, socket),
-    do: {:noreply, refresh_log_manager(socket)}
-
-  # Switch the All/Visible/Hidden filter: reset to page 1, clear the selection (so stale,
-  # off-page ids can't apply to a different filtered set), and re-query.
-  def handle_event("select_log_filter", %{"filter" => filter}, socket) do
-    socket =
-      socket
-      |> assign(:log_mgr_filter, log_filter(filter))
-      |> assign(:log_mgr_offset, 0)
-      |> assign(:log_mgr_selected, MapSet.new())
-      |> refresh_log_manager()
-
-    {:noreply, socket}
-  end
-
-  def handle_event("log_page_next", _params, socket) do
-    %{log_mgr_offset: offset, log_mgr_limit: limit} = socket.assigns
-    socket = socket |> assign(:log_mgr_offset, offset + limit) |> refresh_log_manager()
-    {:noreply, socket}
-  end
-
-  def handle_event("log_page_prev", _params, socket) do
-    %{log_mgr_offset: offset, log_mgr_limit: limit} = socket.assigns
-    socket = socket |> assign(:log_mgr_offset, max(offset - limit, 0)) |> refresh_log_manager()
-    {:noreply, socket}
-  end
-
-  def handle_event("log_toggle_select", %{"id" => id}, socket) do
-    {:noreply,
-     assign(socket, :log_mgr_selected, toggle_member(socket.assigns.log_mgr_selected, id))}
-  end
-
-  # Range selection committed by the LogDragSelect JS hook: union/difference the dragged
-  # ids (UUID strings — no integer parse) into the manager selection in one round-trip.
-  def handle_event("log_select_drag", %{"ids" => ids, "mode" => mode}, socket) do
-    current = socket.assigns.log_mgr_selected
-    delta = MapSet.new(Enum.filter(List.wrap(ids), &is_binary/1))
-
-    next =
-      case normalize_mode(mode) do
-        :select -> MapSet.union(current, delta)
-        :deselect -> MapSet.difference(current, delta)
-      end
-
-    {:noreply, assign(socket, :log_mgr_selected, next)}
-  end
-
-  def handle_event("clear_log_selection", _params, socket),
-    do: {:noreply, assign(socket, :log_mgr_selected, MapSet.new())}
-
-  def handle_event("log_make_visible", _params, socket),
-    do: {:noreply, mutate_log_selection(socket, &Logs.unhide_logs/1)}
-
-  def handle_event("log_make_invisible", _params, socket),
-    do: {:noreply, mutate_log_selection(socket, &Logs.hide_logs/1)}
-
-  def handle_event("log_purge_selected", _params, socket),
-    do: {:noreply, mutate_log_selection(socket, &Logs.purge_logs/1)}
-
-  # Guarded purge-EVERYTHING (also reachable from the Log Database settings tab). Resets
-  # the manager to page 1, clears the selection, and re-queries (now empty).
-  def handle_event("purge_all_logs", _params, socket) do
-    _ = Logs.purge_all_logs()
-
-    socket =
-      socket
-      |> assign(:log_mgr_offset, 0)
-      |> assign(:log_mgr_selected, MapSet.new())
-      |> refresh_log_manager()
-
-    {:noreply, socket}
-  end
-
-  # EXPLAIN: gather the selected rows (order-preserving), resolve the Fast tier, and
-  # start the ephemeral runner. The modal is shown client-side by the button's JS; this
-  # only flips the assign to :running (or to an actionable error when no Fast agent).
-  def handle_event("explain_selected", _params, socket) do
-    rows = selected_rows(socket.assigns.event_buffer, socket.assigns.selected_ids)
-
-    if rows == [] do
-      {:noreply, socket}
-    else
-      explain_selected(socket, rows)
-    end
-  end
-
-  # HIDE: soft-hide the selected rows from the view (declutter), then clear the
-  # selection. View-only — persisted history is untouched (reconnect re-backfills).
-  def handle_event("hide_selected", _params, socket) do
-    rows = selected_rows(socket.assigns.event_buffer, socket.assigns.selected_ids)
-    ids = MapSet.new(rows, & &1.id)
-    buffer = Enum.reject(socket.assigns.event_buffer, &MapSet.member?(ids, &1.id))
-
-    socket =
-      socket
-      |> assign(event_buffer: buffer, selected_ids: MapSet.new())
-
-    socket = Enum.reduce(rows, socket, &stream_delete(&2, :events, &1))
-    {:noreply, socket}
-  end
-
-  def handle_event("close_explain", _params, socket),
-    do: {:noreply, assign(socket, :explain, %{status: :idle, request_id: nil, count: 0})}
+  # Logs panel (extracted: ConsoleLive.LogsPanel, audit F3 Phase 3): event-stream
+  # filters/clears, row expand/detail/open-file, multi-select + EXPLAIN/HIDE bulk
+  # actions, and the Log Database manager.
+  def handle_event(event, params, socket) when event in @logs_events,
+    do: LogsPanel.handle_event(event, params, socket)
 
   # Operator resume from the escalation banner (self-healing Phase 6): clear the holding reason
   # and re-engage the orchestrator with one operator turn so it resumes from the ledger checkpoint.
@@ -2325,69 +786,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
     {:noreply, socket}
   end
-
-  defp launch_adw_builder(steps, name, harness, socket) do
-    spec = socket.assigns.adw_spec
-    initial_prompt = socket.assigns.adw_prompt
-
-    # Each builder step gets a REAL prompt_template from the canonical per-step map
-    # (shared with Catalog), so launched steps render against the typed prompt/spec
-    # instead of the empty-string default in `Step.from_map/1`.
-    step_list =
-      steps
-      |> Enum.map(fn s ->
-        %{
-          "name" => s.name,
-          "harness" => harness,
-          "prompt_template" => s[:prompt] || Catalog.default_prompt_template(s.name),
-          "on_success" => "done",
-          "on_failure" => "abort"
-        }
-      end)
-      |> Enum.with_index()
-      |> Enum.map(fn {step, i} ->
-        next = Enum.at(steps, i + 1)
-        if next, do: Map.put(step, "on_success", next.name), else: step
-      end)
-
-    # Thread the spec + initial prompt into the run as artifacts so `Runner.render/2`
-    # resolves `{{input}}`/`{{spec}}`. Fall back to name-only when BOTH are blank,
-    # preserving today's behavior for empty launches.
-    inputs =
-      if blank?(initial_prompt) and blank?(spec) do
-        %{"input" => name}
-      else
-        %{"input" => initial_prompt, "spec" => spec}
-      end
-
-    with {:ok, wf} <-
-           Workflows.create_workflow(%{
-             name: "#{name}-#{System.unique_integer([:positive])}",
-             type: "custom",
-             steps: step_list
-           }),
-         {:ok, _run_id, _pid} <- WorkflowEngine.start_workflow(wf, inputs: inputs) do
-      # Fire-and-forget Fast-tier title humanization (machine-looking name ⇒ friendly).
-      _ = TitleHumanizer.maybe_humanize_async(wf, socket.assigns.orchestrator_id)
-
-      socket
-      |> assign(
-        adw_builder?: false,
-        adw_steps: [],
-        adw_name: "",
-        adw_spec: "",
-        adw_prompt: "",
-        adw_harness: nil
-      )
-      |> put_flash(:info, "ADW launched — check the ADWS tab")
-    else
-      {:error, reason} -> put_flash(socket, :error, "Could not launch ADW: #{inspect(reason)}")
-    end
-  end
-
-  @spec blank?(String.t() | nil) :: boolean()
-  defp blank?(nil), do: true
-  defp blank?(value) when is_binary(value), do: String.trim(value) == ""
 
   # Routing is derived from the agent-filter set: exactly one active filter ⇒ route the
   # prompt to that single agent (the manual single-agent run); zero or multiple active
@@ -2481,173 +879,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
     end
   end
 
-  # Run an orchestrator mutation (set_harness/provider/model) and re-reflect the full
-  # selection in the header on success; flash on error. Shared by the three setters.
-  # Seed the command-panel context bar: 0 when there's no resumable session (a cleared
-  # or never-started conversation), else the orchestrator's latest persisted own-usage
-  # occupancy. A model/provider/harness/cwd switch clears `session_id`, so this returns
-  # 0 right after — the bar zeroes out exactly when the next turn will start fresh.
-  @spec orchestrator_context_for(RepoBuilder.Orchestrator.Orchestrator.t()) :: non_neg_integer()
-  defp orchestrator_context_for(%{session_id: nil}), do: 0
-
-  defp orchestrator_context_for(orchestrator),
-    do: Logs.orchestrator_context_tokens(orchestrator.id)
-
-  @spec update_orchestrator(
-          Phoenix.LiveView.Socket.t(),
-          (Ecto.UUID.t() ->
-             {:ok, RepoBuilder.Orchestrator.Orchestrator.t()} | {:error, term()}),
-          String.t()
-        ) :: {:noreply, Phoenix.LiveView.Socket.t()}
-  defp update_orchestrator(socket, mutate, error_message) do
-    case socket.assigns.orchestrator_id do
-      nil ->
-        {:noreply, put_flash(socket, :error, "No orchestrator available")}
-
-      id ->
-        case mutate.(id) do
-          {:ok, orchestrator} ->
-            {:noreply, assign_orchestrator_selection(socket, orchestrator)}
-
-          {:error, _reason} ->
-            {:noreply, put_flash(socket, :error, error_message)}
-        end
-    end
-  end
-
-  @spec assign_template_rows(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  defp assign_template_rows(socket), do: assign(socket, :template_rows, Templates.list())
-
-  # Load a template's current version + version history into the editor assigns.
-  # A missing template falls back to the blank-form state (flash on error).
-  @spec select_template(Phoenix.LiveView.Socket.t(), String.t()) :: Phoenix.LiveView.Socket.t()
-  defp select_template(socket, name) do
-    case Templates.fetch(name) do
-      {:ok, template} ->
-        assign(socket, selected_template: template, template_versions: Templates.versions(name))
-
-      {:error, _reason} ->
-        socket
-        |> assign(selected_template: nil, template_versions: [])
-        |> put_flash(:error, "Template not found")
-    end
-  end
-
-  @spec nilify_blank(String.t()) :: String.t() | nil
-  defp nilify_blank(value) when is_binary(value) do
-    case String.trim(value) do
-      "" -> nil
-      trimmed -> trimmed
-    end
-  end
-
-  # Validate + persist a working directory on the orchestrator (shared by the prompt
-  # modal's CWD button, the Clear button, and the directory picker's "Use" action).
-  @spec save_working_dir(Phoenix.LiveView.Socket.t(), String.t()) ::
-          {:noreply, Phoenix.LiveView.Socket.t()}
-  defp save_working_dir(socket, dir) do
-    case validate_working_dir(dir) do
-      {:ok, working_dir} ->
-        {:noreply, socket} =
-          update_orchestrator(
-            socket,
-            &Orchestrators.set_working_dir(&1, working_dir),
-            "Could not save working directory"
-          )
-
-        # Re-resolve the merged definitions for the new working dir: refresh/1 updates
-        # the watcher's tracked dir + broadcasts to every console; the local re-seed
-        # makes this console's chips update without waiting on the round-trip.
-        :ok = Definitions.refresh(working_dir)
-        {:noreply, seed_definitions(socket)}
-
-      {:error, message} ->
-        {:noreply, put_flash(socket, :error, message)}
-    end
-  end
-
-  # Load one directory's listing into the picker assigns; flash + keep the prior view
-  # on an unreadable/missing path so the picker never lands in a broken state.
-  @spec load_dir_picker(Phoenix.LiveView.Socket.t(), String.t()) :: Phoenix.LiveView.Socket.t()
-  defp load_dir_picker(socket, path) do
-    case FileBrowser.list(path) do
-      {:ok, listing} ->
-        socket
-        |> assign(:dir_picker_path, listing.path)
-        |> assign(:dir_picker_parent, listing.parent)
-        |> assign(:dir_picker_dirs, listing.dirs)
-
-      {:error, _reason} ->
-        put_flash(socket, :error, "Cannot open directory: #{path}")
-    end
-  end
-
-  # Validate an operator-supplied working directory: blank ⇒ {:ok, nil} (clear it);
-  # otherwise it must be an ABSOLUTE path to an EXISTING directory before we store it,
-  # so a turn never spawns into a missing/relative cwd.
-  @spec validate_working_dir(String.t()) :: {:ok, String.t() | nil} | {:error, String.t()}
-  defp validate_working_dir(dir) when is_binary(dir) do
-    case nilify_blank(dir) do
-      nil ->
-        {:ok, nil}
-
-      path ->
-        cond do
-          not absolute_path?(path) ->
-            {:error, "Working directory must be an absolute path"}
-
-          not File.dir?(path) ->
-            {:error, "Working directory does not exist: #{path}"}
-
-          true ->
-            {:ok, Path.expand(path)}
-        end
-    end
-  end
-
-  @spec absolute_path?(String.t()) :: boolean()
-  defp absolute_path?(path), do: Path.type(path) == :absolute
-
-  # Cascade an agent-models row change, driven by an *actual* value change against
-  # the tier's currently-stored entry (`stored`) — not merely by which input fired.
-  # Changing the harness clears provider+model; changing the provider clears model;
-  # a no-op `change` event (LiveView reconnect reconciliation, or re-picking the same
-  # option) preserves the stored downstream fields so a saved model is never wiped.
-  @spec agent_model_attrs(map(), map()) :: %{optional(String.t()) => String.t() | nil}
-  defp agent_model_attrs(%{"_target" => ["harness" | _]} = params, stored) do
-    submitted = nilify_blank(params["harness"])
-
-    if submitted == stored[:harness] do
-      # Harness unchanged: spurious cascade. Keep the stored row intact.
-      %{
-        "harness" => stored[:harness],
-        "provider" => stored[:provider],
-        "model" => stored[:model]
-      }
-    else
-      %{"harness" => submitted, "provider" => nil, "model" => nil}
-    end
-  end
-
-  defp agent_model_attrs(%{"_target" => ["provider" | _]} = params, stored) do
-    submitted = nilify_blank(params["provider"])
-
-    %{
-      "harness" => nilify_blank(params["harness"]),
-      "provider" => submitted,
-      # Provider unchanged: keep the stored model; otherwise clear the now-invalid model.
-      "model" => if(submitted == stored[:provider], do: stored[:model], else: nil)
-    }
-  end
-
-  defp agent_model_attrs(params, _stored) do
-    %{
-      "harness" => nilify_blank(params["harness"]),
-      "provider" => nilify_blank(params["provider"]),
-      "model" => nilify_blank(params["model"])
-    }
-  end
-
   @spec push_user_message(Phoenix.LiveView.Socket.t(), String.t()) :: Phoenix.LiveView.Socket.t()
   defp push_user_message(socket, ""), do: socket
 
@@ -2657,7 +888,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
     socket
     |> assign(:seq, seq)
-    |> assign(:messages, append_chat(socket.assigns.messages, msg, seq, socket.assigns.timezone))
+    |> assign(
+      :messages,
+      Shared.append_chat(socket.assigns.messages, msg, seq, socket.assigns.timezone)
+    )
   end
 
   @spec start_session(Phoenix.LiveView.Socket.t(), keyword()) :: Phoenix.LiveView.Socket.t()
@@ -2718,10 +952,14 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   # Budget guardrails: any breaker event re-seeds the snapshot + caps so the panel,
   # banner, and badge re-render live (issue-budget-guardrails).
-  def handle_info({:budget_tripped, _cap, _spent}, socket), do: {:noreply, refresh_budget(socket)}
-  def handle_info({:budget_warning, _cap, _spent}, socket), do: {:noreply, refresh_budget(socket)}
-  def handle_info({:budget_reset, _cap}, socket), do: {:noreply, refresh_budget(socket)}
-  def handle_info({:kill_switch, _state}, socket), do: {:noreply, refresh_budget(socket)}
+  def handle_info({:budget_tripped, _cap, _spent}, socket),
+    do: {:noreply, Shared.refresh_budget(socket)}
+
+  def handle_info({:budget_warning, _cap, _spent}, socket),
+    do: {:noreply, Shared.refresh_budget(socket)}
+
+  def handle_info({:budget_reset, _cap}, socket), do: {:noreply, Shared.refresh_budget(socket)}
+  def handle_info({:kill_switch, _state}, socket), do: {:noreply, Shared.refresh_budget(socket)}
 
   def handle_info({:agent_event, agent_id, %Event.SessionStarted{} = event, log_no}, socket) do
     {:noreply,
@@ -2966,7 +1204,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
       # A worker spawned under the active project must enter the scoped stream: recompute
       # the owned-key set off the updated roster and re-filter the buffer.
-      {:noreply, socket |> assign(:project_agent_keys, project_agent_keys(socket)) |> restream()}
+      {:noreply,
+       socket |> assign(:project_agent_keys, project_agent_keys(socket)) |> Shared.restream()}
     end
   end
 
@@ -3031,8 +1270,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
     if orchestrator.id == socket.assigns.orchestrator_id do
       # A timezone change from another tab/session must re-format already-rendered rows.
       tz_changed? = Orchestrators.timezone(orchestrator) != socket.assigns.timezone
-      socket = assign_orchestrator_selection(socket, orchestrator)
-      socket = if tz_changed?, do: backfill_events(socket), else: socket
+      socket = Shared.assign_orchestrator_selection(socket, orchestrator)
+      socket = if tz_changed?, do: Shared.backfill_events(socket), else: socket
       {:noreply, socket}
     else
       {:noreply, socket}
@@ -3061,7 +1300,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
       |> stream_insert(:lanes, lane)
 
     # A worker reassigned to/from the active project must enter/leave the scoped stream.
-    {:noreply, socket |> assign(:project_agent_keys, project_agent_keys(socket)) |> restream()}
+    {:noreply,
+     socket |> assign(:project_agent_keys, project_agent_keys(socket)) |> Shared.restream()}
   end
 
   # A worker the orchestrator just deleted (issue agent-CRUD): drop it from the
@@ -3087,7 +1327,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
       |> stream_delete(:lanes, %{id: "agent:#{agent.id}"})
 
     # A worker removed from the active project must leave the scoped stream.
-    {:noreply, socket |> assign(:project_agent_keys, project_agent_keys(socket)) |> restream()}
+    {:noreply,
+     socket |> assign(:project_agent_keys, project_agent_keys(socket)) |> Shared.restream()}
   end
 
   # Workflow lanes drive the per-step swimlane (status/current step), not the flat
@@ -3142,7 +1383,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
       # The workflow stage this event belongs to (`adw_step` on the neutral ADW envelope,
       # carried in `event.raw` ⇒ the row payload). Drives stage-lane grouping; defaults to
       # `"_workflow"` for non-ADW workers. Single source of truth with the backfill path.
-      step: event_step(Map.get(attrs, :payload, %{})),
+      step: Shared.event_step(Map.get(attrs, :payload, %{})),
       body: to_string(attrs.body),
       # The presenter render model drives the structured card; the single source of truth
       # shared with the backfill path (log_to_row) so live + reconnect render identically.
@@ -3150,7 +1391,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
       thinking?: Map.get(attrs, :thinking?, false),
       tokens: Map.get(attrs, :tokens),
       time: now_hms(socket.assigns.timezone),
-      payload_json: pretty_json(Map.get(attrs, :payload, %{}))
+      payload_json: Shared.pretty_json(Map.get(attrs, :payload, %{}))
     }
 
     buffer = Enum.take(socket.assigns.event_buffer ++ [row], -@buffer_limit)
@@ -3187,7 +1428,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   # Inference-only spec — the row map is narrowed to its concrete shape (:underspecs).
   defp maybe_stream_insert(socket, row) do
-    if passes?(row, socket.assigns) do
+    if Shared.passes?(row, socket.assigns) do
       stream_insert(socket, :events, row, at: -1, limit: -@buffer_limit)
     else
       socket
@@ -3203,25 +1444,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
       assign(
         socket,
         :messages,
-        append_chat(socket.assigns.messages, chat, seq, socket.assigns.timezone)
+        Shared.append_chat(socket.assigns.messages, chat, seq, socket.assigns.timezone)
       )
 
-  @spec append_chat([map()], map() | nil, pos_integer(), String.t()) :: [map()]
-  defp append_chat(messages, nil, _seq, _timezone), do: messages
-
-  defp append_chat(messages, chat, seq, timezone) do
-    entry = Map.merge(chat, %{id: seq, time: now_hm(timezone)})
-    Enum.take(messages ++ [entry], -@messages_limit)
-  end
-
   # --- live streaming buffer (partials coalesced per agent + channel) -------
-
-  # The chat pane is orchestrator ↔ user only. Orchestrator turns broadcast under an
-  # `"orch-#{orchestrator_id}-#{n}"` agent_id (orchestrator/server.ex:85,113); worker
-  # DB agents broadcast under their Ecto UUID (never `"orch-"`). Gate every chat-pane
-  # surface on this so worker text stays in the center event stream, not the chat.
-  @spec orchestrator_event?(String.t()) :: boolean()
-  defp orchestrator_event?(agent_id), do: String.starts_with?(to_string(agent_id), "orch-")
 
   # The chat pane is scoped to the ACTIVE orchestrator (issue-conversation-history-scope):
   # `orchestrator_event?/1` only tells us a turn came from *some* orchestrator, so a
@@ -3349,7 +1575,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
       {messages, seq}
     else
       seq = seq + 1
-      {append_chat(messages, stream_chat(channel, text), seq, timezone), seq}
+      {Shared.append_chat(messages, stream_chat(channel, text), seq, timezone), seq}
     end
   end
 
@@ -3366,81 +1592,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   defp stream_chat(:thinking, text),
     do: %{role: :thinking, label: nil, content: text, tool_name: nil, params_json: nil}
-
-  @spec restream(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  defp restream(socket) do
-    filtered = Enum.filter(socket.assigns.event_buffer, &passes?(&1, socket.assigns))
-    stream(socket, :events, filtered, reset: true)
-  end
-
-  @spec passes?(map(), map()) :: boolean()
-  defp passes?(row, assigns) do
-    category_pass?(row, assigns.active_categories) and
-      agent_pass?(row, assigns.active_agents) and
-      project_pass?(row, assigns) and
-      search_pass?(row.body, assigns.search, assigns.regex?)
-  end
-
-  # Project-scope predicate (issue-scope-logs-to-active-project): when scope is on, a
-  # project is active, and the owned-key set is non-empty, require the row's `agent_key`
-  # to belong to the active project's orchestrator + workers. Otherwise no-op — scope
-  # off, no active project, or an empty (unresolved) set all fail-open to the global feed.
-  #
-  # Worker rows carry a bare worker UUID `agent_key`, which matches `project_agent_keys`
-  # exactly. The bound orchestrator, however, broadcasts its identity in three formats
-  # that all share the `"orch-<orchestrator_id>"` prefix but never equal the bare UUID:
-  # live turn keys `"orch-<id>-<int>"` (server.ex), live op keys `"orch-<id>-op-<int>"`
-  # (logs.ex), and backfill keys `"orch-<id>"` (log_to_row). An exact-string membership
-  # test therefore drops every orchestrator row. Match orchestrator ownership by the
-  # `"orch-<orchestrator_id>"` prefix off the single active `orchestrator_id` so all three
-  # formats — live and backfill — are accepted at this one site.
-  @spec project_pass?(map(), map()) :: boolean()
-  defp project_pass?(row, assigns) do
-    if assigns.project_scoped? and assigns.active_project_id != nil and
-         MapSet.size(assigns.project_agent_keys) > 0 do
-      key = to_string(row.agent_key)
-
-      MapSet.member?(assigns.project_agent_keys, key) or
-        orchestrator_owned?(key, assigns[:orchestrator_id])
-    else
-      true
-    end
-  end
-
-  # Orchestrator-ownership check for project scope: all of the bound orchestrator's
-  # `agent_key` formats share the `"orch-<orchestrator_id>"` prefix, and worker UUIDs
-  # (Ecto `binary_id`/UUIDv4, hex+hyphen) can never carry an `"orch-"` prefix, so a prefix
-  # test against the single active `orchestrator_id` is correct and cannot misclassify a
-  # worker row. A nil active orchestrator owns nothing.
-  @spec orchestrator_owned?(String.t(), String.t() | nil) :: boolean()
-  defp orchestrator_owned?(_key, nil), do: false
-
-  defp orchestrator_owned?(key, orchestrator_id),
-    do: String.starts_with?(key, "orch-#{orchestrator_id}")
-
-  @spec category_pass?(map(), MapSet.t()) :: boolean()
-  defp category_pass?(%{category: :system}, _active), do: true
-  defp category_pass?(%{category: category}, active), do: MapSet.member?(active, category)
-
-  @spec agent_pass?(map(), [String.t()]) :: boolean()
-  defp agent_pass?(_row, []), do: true
-  defp agent_pass?(row, active), do: row.agent_key in active
-
-  @spec search_pass?(String.t(), String.t(), boolean()) :: boolean()
-  defp search_pass?(_body, "", _regex?), do: true
-
-  defp search_pass?(body, query, true) do
-    case Regex.compile(query, "i") do
-      {:ok, re} -> Regex.match?(re, body)
-      {:error, _reason} -> substring?(body, query)
-    end
-  end
-
-  defp search_pass?(body, query, false), do: substring?(body, query)
-
-  @spec substring?(String.t(), String.t()) :: boolean()
-  defp substring?(body, query),
-    do: String.contains?(String.downcase(body), String.downcase(query))
 
   @spec bump_counter(Phoenix.LiveView.Socket.t(), String.t(), atom()) ::
           Phoenix.LiveView.Socket.t()
@@ -3625,7 +1776,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
         cost={@cost}
         view_mode={@view_mode}
         orchestrator_harness={@orchestrator_harness}
-        orchestrating_harnesses={orchestrator_harness_options()}
+        orchestrating_harnesses={Shared.orchestrator_harness_options()}
         orchestrator_provider={@orchestrator_provider}
         orchestrator_model={@orchestrator_model}
         provider_options={@provider_options}
@@ -4059,127 +2210,12 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   # --- selection / explain helpers (issue-explain) ---
 
-  # Selected rows in buffer order (so the prompt reads top-to-bottom, not click order).
-  @spec selected_rows([map()], MapSet.t()) :: [map()]
-  defp selected_rows(event_buffer, selected_ids) do
-    Enum.filter(event_buffer, &MapSet.member?(selected_ids, &1.id))
-  end
-
   # The selected rows' raw bodies joined by newlines, for the COPY action's `data-copy`.
   @spec selected_copy_payload([map()], MapSet.t()) :: String.t()
   defp selected_copy_payload(event_buffer, selected_ids) do
     event_buffer
-    |> selected_rows(selected_ids)
+    |> Shared.selected_rows(selected_ids)
     |> Enum.map_join("\n", & &1.body)
-  end
-
-  # Reset the selection and re-stream the formerly-selected rows so their checkboxes
-  # clear (the stream only re-renders items it is handed).
-  @spec clear_selection(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  defp clear_selection(socket) do
-    rows = selected_rows(socket.assigns.event_buffer, socket.assigns.selected_ids)
-    socket = assign(socket, :selected_ids, MapSet.new())
-    Enum.reduce(rows, socket, &stream_insert(&2, :events, &1))
-  end
-
-  # Apply a drag-committed range to the selection and re-stream ONLY the rows whose
-  # membership actually flipped (symmetric difference of old vs new), mirroring the
-  # single-row `toggle_select` re-stream pattern.
-  @spec apply_drag_selection(
-          Phoenix.LiveView.Socket.t(),
-          [non_neg_integer()],
-          :select | :deselect
-        ) ::
-          Phoenix.LiveView.Socket.t()
-  defp apply_drag_selection(socket, [], _mode), do: socket
-
-  defp apply_drag_selection(socket, ids, mode) do
-    current = socket.assigns.selected_ids
-    delta = MapSet.new(ids)
-
-    next =
-      case mode do
-        :select -> MapSet.union(current, delta)
-        :deselect -> MapSet.difference(current, delta)
-      end
-
-    changed = MapSet.symmetric_difference(current, next)
-    socket = assign(socket, :selected_ids, next)
-
-    socket.assigns.event_buffer
-    |> Enum.filter(&MapSet.member?(changed, &1.id))
-    |> Enum.reduce(socket, &stream_insert(&2, :events, &1))
-  end
-
-  # Guarded parse of the drag payload's ids: keep only well-formed non-negative integers,
-  # dropping any non-numeric/stale entries.
-  @spec parse_ids(term()) :: [non_neg_integer()]
-  defp parse_ids(ids) when is_list(ids), do: Enum.flat_map(ids, &parse_one_id/1)
-  defp parse_ids(_ids), do: []
-
-  @spec parse_one_id(term()) :: [non_neg_integer()]
-  defp parse_one_id(id) when is_integer(id) and id >= 0, do: [id]
-
-  defp parse_one_id(id) when is_binary(id) do
-    case Integer.parse(id) do
-      {n, ""} when n >= 0 -> [n]
-      _ -> []
-    end
-  end
-
-  defp parse_one_id(_id), do: []
-
-  @spec normalize_mode(term()) :: :select | :deselect
-  defp normalize_mode("deselect"), do: :deselect
-  defp normalize_mode(_mode), do: :select
-
-  # Apply a context mutation (`hide`/`unhide`/`purge`) to the manager's selected ids, then
-  # clear the selection and re-query so the table, total, and pagination stay correct (the
-  # offset clamps via `seed_log_manager/1` if the last page shrank below it).
-  @spec mutate_log_selection(Phoenix.LiveView.Socket.t(), ([Ecto.UUID.t()] -> non_neg_integer())) ::
-          Phoenix.LiveView.Socket.t()
-  defp mutate_log_selection(socket, fun) do
-    _ = fun.(MapSet.to_list(socket.assigns.log_mgr_selected))
-
-    socket
-    |> assign(:log_mgr_selected, MapSet.new())
-    |> refresh_log_manager()
-  end
-
-  # Guarded string→atom for the manager's visibility filter (never `String.to_atom/1` on
-  # input, AGENTS.md); an unknown value falls back to `:all`.
-  @spec log_filter(term()) :: Logs.log_filter()
-  defp log_filter("visible"), do: :visible
-  defp log_filter("hidden"), do: :hidden
-  defp log_filter(_filter), do: :all
-
-  @spec explain_selected(Phoenix.LiveView.Socket.t(), [map()]) ::
-          {:noreply, Phoenix.LiveView.Socket.t()}
-  defp explain_selected(socket, rows) do
-    count = length(rows)
-
-    with id when is_binary(id) <- socket.assigns.orchestrator_id,
-         {:ok, orchestrator} <- Orchestrators.fetch(id),
-         {:ok, request_id} <- Explain.explain(orchestrator, rows) do
-      {:noreply,
-       assign(socket, :explain, %{status: :running, request_id: request_id, count: count})}
-    else
-      {:error, :no_fast_agent} ->
-        {:noreply,
-         assign(socket, :explain, %{
-           status: {:error, no_fast_agent_message()},
-           request_id: nil,
-           count: count
-         })}
-
-      _ ->
-        {:noreply,
-         assign(socket, :explain, %{
-           status: {:error, "Could not start the explanation — no orchestrator available."},
-           request_id: nil,
-           count: count
-         })}
-    end
   end
 
   @spec no_fast_agent_message() :: String.t()
@@ -4208,18 +2244,6 @@ defmodule RepoBuilderWeb.ConsoleLive do
     end)
   end
 
-  # The workflow stage of one event row: the envelope's `adw_step` when present, else the
-  # `"_workflow"` fallback (mirrors the reference's `event.adw_step || '_workflow'`).
-  @spec event_step(map()) :: String.t()
-  defp event_step(payload) when is_map(payload) do
-    case payload["adw_step"] do
-      step when is_binary(step) and step != "" -> step
-      _ -> "_workflow"
-    end
-  end
-
-  defp event_step(_payload), do: "_workflow"
-
   # The run's buffered event rows grouped by `:step`, for the matching workflow card's step
   # boxes (squares live under the step that emitted them). Rows are matched to the run by the
   # `wf-<run_id>-<step>` agent-key prefix (WorkflowEngine.step_agent_id/2) or a bare run-id
@@ -4233,7 +2257,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
     event_buffer
     |> Enum.filter(fn row ->
       key = to_string(row.agent_key)
-      (key == run_id or String.starts_with?(key, prefix)) and category_pass?(row, active)
+      (key == run_id or String.starts_with?(key, prefix)) and Shared.category_pass?(row, active)
     end)
     |> Enum.group_by(&step_key(to_string(&1.agent_key), run_id, &1.step))
   end
@@ -4285,125 +2309,14 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   @spec agent_label(Phoenix.LiveView.Socket.t(), String.t()) :: String.t()
   defp agent_label(socket, agent_id) do
-    Map.get(socket.assigns.agent_names, agent_id, short_id(agent_id))
+    Map.get(socket.assigns.agent_names, agent_id, Shared.short_id(agent_id))
   end
-
-  @spec short_id(String.t()) :: String.t()
-  defp short_id(id), do: id |> to_string() |> String.slice(0, 8)
-
-  # Convert one persisted log row into an event-stream row for reconnect backfill.
-  @spec log_to_row(
-          Logs.AgentLog.t(),
-          pos_integer(),
-          %{optional(String.t()) => String.t()},
-          String.t()
-        ) :: map()
-  defp log_to_row(log, seq, names, timezone) do
-    category = category_for_type(log.event_type)
-    # Worker rows carry an `agent_id` (UUID). Orchestrator rows carry `agent_id: nil`
-    # and an `orchestrator_id`; their `session_id` is the harness session UUID — NOT
-    # the live `"orch-…"` broadcast key. Synthesize the `"orch-#{orchestrator_id}"` key
-    # for those rows so the backfill agent_key matches the live path and the chat gate
-    # (`orchestrator_event?/1`) recognizes orchestrator text on reconnect/restart
-    # (issue-chat-history-backfill). Worker rows keep their UUID agent_id.
-    agent_key =
-      case log.orchestrator_id do
-        nil -> log.agent_id || log.session_id
-        orch_id -> "orch-#{orch_id}"
-      end
-
-    # Same presenter as the live path (single source of truth) so reconnect backfill
-    # renders the identical structured card; best-effort for variants whose persisted
-    # payload is the raw wire frame (see EventPresenter.from_payload/2).
-    render = EventPresenter.from_payload(log.event_type, log.payload)
-
-    %{
-      id: seq,
-      line: seq,
-      log_no: log.log_no,
-      agent: Map.get(names, log.agent_id, short_id(agent_key)),
-      agent_key: agent_key,
-      color: AgentColors.hex(to_string(agent_key)),
-      category: category,
-      kind: to_string(log.event_type),
-      # Stage from the persisted payload's `adw_step` (reconnect path) — identical to the
-      # live `record_event/4` derivation so backfill groups into the same stage lanes.
-      step: event_step(log.payload),
-      body: EventPresenter.search_text(render),
-      render: render,
-      # Persisted text_delta rows carry the thinking flag (Logs.event_payload), so
-      # backfill can route reasoning to the thinking pane like the live path does.
-      thinking?: log.payload["thinking"] == true,
-      # Operator chat turns are orchestrator-scoped text_delta rows marked
-      # `payload["role"] == "operator"` (issue-operator-persist-operator-chat-messages);
-      # carry the marker so chat_for_row/1 routes them to the :user bubble and
-      # backfill_events/1 keeps them out of the center stream.
-      chat_role: log.payload["role"],
-      tokens: nil,
-      time: log_time(log, timezone),
-      payload_json: pretty_json(log.payload)
-    }
-  end
-
-  @spec category_for_type(Logs.AgentLog.event_type() | nil) :: atom()
-  defp category_for_type(:text_delta), do: :response
-  defp category_for_type(:tool_call), do: :tool
-  defp category_for_type(:tool_result), do: :tool
-  defp category_for_type(:status), do: :hook
-  defp category_for_type(_other), do: :system
-
-  @spec log_time(Logs.AgentLog.t(), String.t()) :: String.t()
-  defp log_time(%{inserted_at: %DateTime{} = at}, timezone),
-    do: RepoBuilder.Timezones.format_datetime(at, timezone)
-
-  defp log_time(_log, _timezone), do: ""
-
-  # Convert a backfilled row into the chat entry it maps to (text → orchestrator
-  # message). Only finalized orchestrator text reaches the chat; thinking and tool
-  # activity stay in the center event stream (mirrors the live path and the tac-14
-  # chat/events separation), so reasoning rows fall through to nil here.
-  # (Inference-only spec — a hand-written one would be a supertype under :underspecs.)
-  defp chat_for_row(%{category: :response, thinking?: true}), do: nil
-
-  # An operator-marked orchestrator text row is the human side of the transcript:
-  # render it as the distinct :user bubble ("YOU"), not the orchestrator bubble
-  # (issue-operator-persist-operator-chat-messages).
-  defp chat_for_row(%{category: :response, chat_role: "operator", body: body}) do
-    %{role: :user, label: "YOU", content: body, tool_name: nil, params_json: nil}
-  end
-
-  defp chat_for_row(%{category: :response, body: body, agent_key: agent_key}) do
-    if orchestrator_event?(agent_key) do
-      %{
-        role: :orchestrator,
-        label: "ORCHESTRATOR",
-        content: body,
-        tool_name: nil,
-        params_json: nil
-      }
-    end
-  end
-
-  defp chat_for_row(_row), do: nil
 
   @spec default_harness() :: String.t() | nil
   defp default_harness do
     known = HarnessRegistry.known()
     if "fake" in known, do: "fake", else: List.first(known)
   end
-
-  # Real harnesses for the orchestrator toggle — the keyless `fake` harness is a
-  # dev/test stand-in, not an operator choice.
-  @spec orchestrator_harness_options() :: [String.t()]
-  defp orchestrator_harness_options,
-    do: Enum.reject(HarnessRegistry.orchestrating_harnesses(), &(&1 == "fake"))
-
-  @spec to_category(String.t()) :: atom() | nil
-  defp to_category("response"), do: :response
-  defp to_category("tool"), do: :tool
-  defp to_category("thinking"), do: :thinking
-  defp to_category("hook"), do: :hook
-  defp to_category(_other), do: nil
 
   # Cycle the chat-column width sm → md → lg → sm for the single toggle button.
   @spec next_chat_width(:sm | :md | :lg) :: :sm | :md | :lg
@@ -4416,132 +2329,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
   defp to_chat_width("lg"), do: :lg
   defp to_chat_width(_other), do: :sm
 
-  @spec settings_tab(String.t()) ::
-          :general
-          | :appearance
-          | :about
-          | :prompt
-          | :templates
-          | :cost_center
-          | :stack_layers
-          | :default_models
-          | :external_apis
-          | :logs
-  defp settings_tab("appearance"), do: :appearance
-  defp settings_tab("about"), do: :about
-  defp settings_tab("prompt"), do: :prompt
-  defp settings_tab("templates"), do: :templates
-  defp settings_tab("cost_center"), do: :cost_center
-  defp settings_tab("stack_layers"), do: :stack_layers
-  defp settings_tab("default_models"), do: :default_models
-  defp settings_tab("external_apis"), do: :external_apis
-  defp settings_tab("logs"), do: :logs
-  defp settings_tab(_other), do: :general
-
-  # Re-derive the Cost Center tab's data from the DB (no reliance on socket state, so a
-  # reconnect re-renders correctly). Cheap enough to run on each tab open.
-  # The period-spend windows are timezone-relative — recompute them when the operator
-  # changes timezone WHILE looking at the Cost Center tab so the numbers track the new zone.
-  @spec refresh_cost_center_on_tz(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  defp refresh_cost_center_on_tz(%{assigns: %{settings_tab: :cost_center}} = socket),
-    do: load_cost_center(socket)
-
-  defp refresh_cost_center_on_tz(socket), do: socket
-
-  @spec load_cost_center(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  defp load_cost_center(socket) do
-    assign(socket,
-      cost_rollups: CostCenter.rollup(include_hidden?: socket.assigns.show_hidden?),
-      period_spend: CostCenter.period_spend(timezone: socket.assigns.timezone),
-      price_rows: CostCenter.list_prices(),
-      project_report: project_report_for(socket)
-    )
-  end
-
-  # The active project's lifetime cost report + period strip for the Cost Center tab
-  # (issue per-project-cost-tracking). `nil` when no project is selected (platform view).
-  @spec project_report_for(Phoenix.LiveView.Socket.t()) ::
-          %{report: CostCenter.ProjectReport.t(), periods: map()} | nil
-  defp project_report_for(socket) do
-    case socket.assigns[:active_project_id] do
-      id when is_binary(id) ->
-        %{
-          report: CostCenter.project_spend(id),
-          periods: CostCenter.project_period_spend(id, timezone: socket.assigns.timezone)
-        }
-
-      _ ->
-        nil
-    end
-  end
-
-  @spec reset_price_form(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  defp reset_price_form(socket) do
-    assign(socket,
-      editing_price_id: nil,
-      price_form: to_form(ModelPrice.changeset(%ModelPrice{}, %{}), as: :model_price)
-    )
-  end
-
-  @spec load_stack_layers(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  defp load_stack_layers(socket) do
-    assign(socket, :stack_layer_rows, StackLayers.list_layers())
-  end
-
-  @spec reset_layer_form(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  defp reset_layer_form(socket) do
-    assign(socket,
-      editing_layer_id: nil,
-      stack_layer_form: to_form(StackLayer.changeset(%StackLayer{}, %{}), as: :stack_layer)
-    )
-  end
-
-  @spec reset_budget_form(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  defp reset_budget_form(socket) do
-    assign(socket,
-      budget_form: to_form(Cap.changeset(%Cap{}, %{}), as: :budget),
-      budget_scope: "global",
-      budget_editing?: false
-    )
-  end
-
-  # Guard operator-supplied mode string into the closed atom set (never
-  # String.to_atom/1 on input). Anything but "replace" defaults to :append.
-  @spec system_prompt_mode(String.t() | nil) :: :append | :replace
-  defp system_prompt_mode("replace"), do: :replace
-  defp system_prompt_mode(_other), do: :append
-
-  # Guard operator-supplied effort string into the closed atom set (never
-  # String.to_atom/1 on input). Anything unrecognized defaults to :default (no flag).
-  @spec reasoning_effort(String.t() | nil) :: RepoBuilder.Orchestrator.Orchestrator.effort()
-  defp reasoning_effort("off"), do: :off
-  defp reasoning_effort("low"), do: :low
-  defp reasoning_effort("medium"), do: :medium
-  defp reasoning_effort("high"), do: :high
-  defp reasoning_effort("max"), do: :max
-  defp reasoning_effort(_other), do: :default
-
-  # Inference-only spec — a `term()` member would be a supertype under :underspecs.
-  defp toggle_member(set, member) do
-    if MapSet.member?(set, member),
-      do: MapSet.delete(set, member),
-      else: MapSet.put(set, member)
-  end
-
-  @spec pretty_json(term()) :: String.t()
-  defp pretty_json(value) do
-    case Jason.encode(value, pretty: true) do
-      {:ok, json} -> json
-      {:error, _reason} -> inspect(value, pretty: true)
-    end
-  end
-
   # Live-row timestamp: format the current UTC instant as a full local datetime so
   # live rows match the backfill path (which formats the persisted `inserted_at`).
   @spec now_hms(String.t()) :: String.t()
   defp now_hms(timezone), do: RepoBuilder.Timezones.format_datetime(DateTime.utc_now(), timezone)
-
-  # Chat-entry timestamp: compact local time-of-day.
-  @spec now_hm(String.t()) :: String.t()
-  defp now_hm(timezone), do: RepoBuilder.Timezones.format_time(DateTime.utc_now(), timezone)
 end
