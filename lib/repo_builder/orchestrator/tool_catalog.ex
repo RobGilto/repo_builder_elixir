@@ -5,12 +5,19 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
   the IDENTICAL tools from here: the MCP `tools/list` response
   (`RepoBuilderWeb.OrchestratorMCPController`) and the pi extension manifest
   (`priv/orchestrator/pi_extension`). Pure data — no side effects.
+
+  `summary` is the terse one-liner the SYSTEM PROMPT's tools block renders
+  (`prompt_line/1`); it never reaches the MCP/pi channel, where the full
+  `description` remains the tool schema the model sees. Policy (when/why/how)
+  lives once in the prompt's prose sections — a summary only says what the tool
+  does and points at the section that owns its policy.
   """
 
   @type tool_def :: %{
-          name: String.t(),
-          description: String.t(),
-          input_schema: map()
+          required(:name) => String.t(),
+          required(:description) => String.t(),
+          required(:input_schema) => map(),
+          optional(:summary) => String.t()
         }
 
   alias RepoBuilder.WorkflowEngine.Catalog
@@ -21,6 +28,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
     [
       %{
         name: "create_agent",
+        summary:
+          "Create a worker owned by you; prefer `category` (worker tier) over an explicit harness/model. Returns the worker's id and name.",
         description:
           "Create a new worker agent owned by this orchestrator. Prefer `category` (fast/main/heavy/leader) to spawn into the operator-configured harness/provider/model for that tier; that fails if no model is assigned to the category. Returns the worker's id and name. Names are unique within this orchestrator.",
         input_schema: %{
@@ -95,12 +104,16 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "list_apis",
+        summary:
+          "List the registered external APIs you may provision to workers via `apis` — never callable by you (see Registered APIs).",
         description:
           "List the external APIs/MCP servers registered for this orchestrator (platform + project scope) that you may PROVISION to a worker. Returns each registration's name/scope/transport/description/instructions/doc_urls — never any secret. You CANNOT call these tools yourself — pass their names in `apis` to `create_agent`/`command_agent` to transfer them to a worker.",
         input_schema: %{"type" => "object", "properties" => %{}}
       },
       %{
         name: "check_agent_status",
+        summary:
+          "Read a worker's status, cost, and findings — `final_message` carries its actual output text.",
         description:
           "Get a worker's current status, accumulated cost, and its findings: " <>
             "`final_message` carries the worker's latest result/summary text, and each " <>
@@ -131,6 +144,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "start_adw",
+        summary:
+          "Launch an AI Developer Workflow run; returns a run id for `check_adw`. Modes and the selection ladder: see the ADWs section.",
         description:
           "Launch an AI Developer Workflow. Two modes by `harness`: with `harness:\"adw\"` it runs a REAL portable Python ADW (the full /plan→/build→/review→/fix slash-command logic, plus scout/parallel variants) — pass a `workflow_type` from the discovered ADWS list in your system prompt. With any other harness it runs the lightweight in-app catalog workflow (`#{Catalog.default_type()}` by default). Pick by complexity: trivial→`plan_build`, standard→`plan_build_review_fix`, non-trivial→full SDLC, large/exploratory→a scout/parallel ADW; decompose a big project into several `start_adw` runs you track with `check_adw`. Returns the run id (use `check_adw` to watch per-step progress).",
         input_schema: %{
@@ -158,6 +173,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "update_agent",
+        summary:
+          "Update a worker's system_prompt/model/harness/tools by name (provider/category need a re-create).",
         description:
           "Update a worker by name. At least one of `system_prompt`, `model`, or `harness` must be provided; `harness` is validated against the registry. `provider`/`category` are not updatable here — delete and re-create to change tier.",
         input_schema: %{
@@ -216,6 +233,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "get_logs",
+        summary:
+          "Fetch persisted console logs by `log-<n>` number — a single `log`, a `from`..`to` range, or a `numbers` array. Distinct from `read_system_logs` (audit table) and `check_agent_status` (tails a worker).",
         description:
           "Fetch the critical content of persisted console logs by their durable `log-<n>` " <>
             "number (the labels shown on every event in the console, e.g. `log-8219`). Resolve " <>
@@ -263,6 +282,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "check_adw",
+        summary:
+          "Inspect an ADW run by id: status, cost, per-step progress, recent activity. Pairs with `start_adw`.",
         description:
           "Inspect an ADW run by the id `start_adw` returned: status, cost, completed/total progress, a per-step status+cost list, and a recent activity tail. Works for both modes — in-app catalog runs and real portable `adw`-harness runs (whose per-step status/cost come from the canonical event log). Pairs with `start_adw`.",
         input_schema: %{
@@ -278,12 +299,16 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "get_config",
+        summary:
+          "Read your config: own harness/provider/model, per-project tier roster, registered harnesses, available models. Call it first when a spawn fails with 'no model selected'.",
         description:
           "Read this orchestrator's current configuration: its own harness/provider/model, the per-project worker-tier roster (fast/main/heavy/leader with each tier's effective harness/provider/model, plus `inherited?` — true when the tier inherits the operator's global default rather than being set on this project), the registered harnesses, and the available models per harness/provider. Use this first when a spawn fails with 'no model selected' to see what needs configuring.",
         input_schema: %{"type" => "object", "properties" => %{}, "required" => []}
       },
       %{
         name: "configure_tier",
+        summary:
+          "Assign a harness/provider/model to a worker tier for THIS project — self-unblock an unassigned tier.",
         description:
           "Assign a harness/provider/model to a worker tier (fast/main/heavy/leader) for THIS project so `create_agent` with that `category` can spawn. The roster is per-project (scoped to this orchestrator's bound project); any tier left unset inherits the operator's global default, and the override you set here changes only this project. `model` is required; `harness` defaults to the orchestrator's harness; `provider` is optional (open identity). Use this to self-unblock when a tier is unassigned.",
         input_schema: %{
@@ -327,12 +352,16 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "report_cost",
+        summary:
+          "Your session's running USD cost, cumulative tokens, and context-window usage % — watch spend and context pressure.",
         description:
           "Report this orchestrator's session id, status, running USD cost, cumulative input/output/total tokens, and context-window usage % (from the latest turn's occupancy). Includes a warning when usage is high — call it to watch your own spend and context pressure.",
         input_schema: %{"type" => "object", "properties" => %{}, "required" => []}
       },
       %{
         name: "compact_agent",
+        summary:
+          "Dispatch `/compact` to a worker nearing its context limit (vs `clear_context`; see Context management).",
         description:
           "Compact a worker's context by dispatching `/compact` to it (sugar over command_agent). Use it on a worker approaching its context-window limit to free up room before its output degrades.",
         input_schema: %{
@@ -345,6 +374,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "clear_context",
+        summary:
+          "Fully reset a worker to a blank context window before NEW, unrelated work (vs `compact_agent`; see Context management).",
         description:
           "Fully reset a worker's context window to blank — reaps its live session and drops its resumable session id so its next task starts a fresh harness session with zero prior history. Use this (not compact_agent) before handing a worker NEW, unrelated work, especially when its context usage is high. Use compact_agent instead when the next task continues prior work.",
         input_schema: %{
@@ -357,6 +388,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "list_agent_templates",
+        summary:
+          "On-demand form of the worker-templates list in your prompt (name + description per template).",
         description:
           "List the available subagent templates (name + description) — the reusable worker recipes you can apply with `create_agent`'s `subagent_template`. This is the on-demand form of the SUBAGENT MAP in your system prompt.",
         input_schema: %{"type" => "object", "properties" => %{}, "required" => []}
@@ -375,6 +408,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "save_agent_template",
+        summary:
+          "Create or refine a subagent template (writes a new version; history preserved) for reuse via `create_agent(subagent_template:)`.",
         description:
           "Create or refine a subagent template, writing a NEW version (history is preserved). `system_prompt` is the worker recipe's body. Use this to mint your own reusable specialists; the saved template is then applicable via `create_agent(subagent_template:)`.",
         input_schema: %{
@@ -404,6 +439,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "set_goal",
+        summary:
+          "Set (or refresh) the durable goal + concrete `definition_of_done` (and optional plan) you drive each turn (see Core loop).",
         description:
           "Set (or refresh) the durable GOAL you are driving — your Task Ledger. `goal` is " <>
             "the objective; `definition_of_done` is how you VERIFY completion (be concrete and " <>
@@ -429,6 +466,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "record_progress",
+        summary:
+          "Record this turn's Progress Ledger entry — do it EVERY turn; an unreported turn reads as a stall (see Core loop).",
         description:
           "Record a Progress Ledger entry for THIS turn: whether the goal is `satisfied` (done), " <>
             "whether you are `looping` (repeating without advancing), whether you `made_progress`, " <>
@@ -462,6 +501,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "get_ledger",
+        summary:
+          "Read your Task Ledger + latest progress entry to re-orient at the start of a turn.",
         description:
           "Read your current Task Ledger + latest Progress entry: the goal, definition-of-done, " <>
             "step plan, lifecycle status, stall count, and the last recorded progress. Use it to " <>
@@ -470,6 +511,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "set_focus",
+        summary:
+          "Declare the single thing you are working on (per scope) BEFORE spending budget; pass `workstream` to focus a stream (see Core loop).",
         description:
           "Declare your FOCUS — the single concrete thing you are working on right now. Set it " <>
             "BEFORE commanding or spawning a worker: an unfocused scope is blocked from spending " <>
@@ -494,6 +537,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "clear_focus",
+        summary:
+          "Clear a verified-done focus (yours or a workstream's), then set the next one (see Core loop).",
         description:
           "Clear a focus once it is VERIFIED done against the tree, then set the next one. Pass " <>
             "`workstream` (id or title) to clear that stream's focus; omit it to clear the " <>
@@ -512,6 +557,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "report_complete",
+        summary:
+          "Declare the goal complete and notify the operator — only after verifying the definition-of-done (see Core loop).",
         description:
           "Declare the GOAL complete: marks the Task Ledger done (the drive loop stops) and " <>
             "notifies the operator with your `summary` and any `recommendations`. Only call this " <>
@@ -531,6 +578,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "inspect_repo",
+        summary:
+          "Read-only working-dir inspection (`op`: git_status / changed_files / read_file / surfaces) — your verification instrument; makes no edits.",
         description:
           "Read-only inspection of your working directory so you can verify work against the " <>
             "ACTUAL tree (not a worker's self-report). `op`: `git_status` (short status + branch), " <>
@@ -556,6 +605,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "record_reflection",
+        summary:
+          "Bank a durable, project-scoped lesson into memory the moment you learn it (see Core loop).",
         description:
           "Bank a durable verbal lesson you learned this run into your project memory so " <>
             "the NEXT run for this project starts ahead. Use it the moment you learn " <>
@@ -583,6 +634,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "create_workstream",
+        summary:
+          "Create a durable workstream — one unit of your external memory; returns its id. Next: decompose and `plan_phases` (see Durable memory).",
         description:
           "Create a durable WORKSTREAM — an independent objective you deliver as right-sized " <>
             "phases (spec→implement→test→review). A workstream is your EXTERNAL MEMORY: its " <>
@@ -604,6 +657,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "plan_phases",
+        summary:
+          "Persist a workstream's right-sized phase breakdown (replaces existing phases — a re-plan). See Phased delivery.",
         description:
           "Persist the work-decomposer's right-sized PHASE breakdown for a workstream. Each " <>
             "phase is delivered spec→implement→test→review and sized so ONE worker can carry it " <>
@@ -649,6 +704,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "record_stage",
+        summary:
+          "Record the current phase's verified stage outcome and advance the machine; pass the spec's path as `artifact` (see Phased delivery).",
         description:
           "Record the CURRENT phase's stage outcome and ADVANCE the machine. VERIFY first with " <>
             "`inspect_repo` — do not trust a worker's self-report. On `passed` the stage " <>
@@ -689,6 +746,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "list_workstreams",
+        summary:
+          "Your memory index — one compact row per workstream. Call it at the start of every turn (see Durable memory).",
         description:
           "Read your durable MEMORY INDEX — one compact row per workstream (id, title, status, " <>
             "phase k/n, current stage, next_action, stall_count). Call this at the START of every " <>
@@ -697,6 +756,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "get_workstream",
+        summary:
+          "The full rehydration record for one workstream — reconstructs its state (phases, stages, next action) after compaction.",
         description:
           "Read the FULL rehydration record for one workstream: goal/definition-of-done, every " <>
             "phase with its `spec_path`, completed vs remaining stages, the current pointer, and " <>
@@ -730,6 +791,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "run_quality_gate",
+        summary:
+          "Resolve/evaluate the stack-aware quality gate: no `outputs` → the ordered command plan; with `outputs` → the GateResult (see Quality gate).",
         description:
           "Resolve and run this project's stack-aware QUALITY GATE for a workstream phase " <>
             "(quality-gate-plugins) — the ordered five-stage green gate (format · lint · type · " <>
@@ -785,6 +848,8 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       },
       %{
         name: "compact_self",
+        summary:
+          "Compact your OWN context window — safe because workstreams are durable (see Durable memory).",
         description:
           "Compact your OWN context window. Your workstreams are durable external memory, so " <>
             "compacting is SAFE — the platform reseeds the next turn with your `list_workstreams` " <>
@@ -795,6 +860,15 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
       }
     ]
   end
+
+  @doc """
+  The terse one-line form of a tool for the system prompt's tools block. Falls
+  back to the full `description` for any tool without a `summary`, so a new tool
+  never renders blank.
+  """
+  @spec prompt_line(tool_def()) :: String.t()
+  def prompt_line(%{summary: summary}) when is_binary(summary) and summary != "", do: summary
+  def prompt_line(%{description: description}), do: description
 
   @doc "The set of tool names this catalog advertises."
   @spec names() :: [String.t()]

@@ -8,6 +8,7 @@ defmodule RepoBuilder.Orchestrator.SystemPromptTest do
   """
   use ExUnit.Case, async: false
 
+  alias Ecto.Adapters.SQL.Sandbox
   alias RepoBuilder.Orchestrator.{Orchestrator, SystemPrompt, Templates}
 
   setup do
@@ -85,9 +86,10 @@ defmodule RepoBuilder.Orchestrator.SystemPromptTest do
     assert prompt =~ "Available slash commands"
     # Narrative framing.
     assert prompt =~ "conductor of this multi-agent orchestra"
-    # Worker roles are now DATA-DRIVEN from the subagent-template registry (self-healing
-    # Phase 5) — no frozen five-role list. The empty-state still names the conventional roles.
-    assert prompt =~ "Worker roles (data-driven"
+    # Worker roles are DATA-DRIVEN from the subagent-template registry (self-healing
+    # Phase 5), printed ONCE as the merged templates-&-roles block (dedupe refactor).
+    # The empty-state still names the conventional roles.
+    assert prompt =~ "Available subagent templates & worker roles"
     assert prompt =~ "builder/reviewer/tester/documenter/debugger"
   end
 
@@ -116,14 +118,23 @@ defmodule RepoBuilder.Orchestrator.SystemPromptTest do
     assert prompt =~ "DECLARE YOUR FOCUS"
   end
 
-  test "teaches the quality-gate protocol at the :test stage" do
-    prompt = SystemPrompt.build(orchestrator())
+  test "teaches the quality-gate protocol at the :test stage (repo-bound render)" do
+    # The quality gate is repo-gated (dedupe refactor): it only renders when the
+    # orchestrator has a working directory / project to run it against. The DB is
+    # needed because a working_dir triggers the registered-project lookup.
+    :ok = Sandbox.checkout(RepoBuilder.Repo)
+
+    dir = Path.join(System.tmp_dir!(), "rb_sp_repo_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf(dir) end)
+
+    prompt = SystemPrompt.build(%{orchestrator() | working_dir: dir})
 
     assert prompt =~ "Quality gate (per-phase rigorous testing"
     assert prompt =~ "run_quality_gate"
     assert prompt =~ "format · lint · type · test · mutation"
     assert prompt =~ ~r/mutation.*pre_merge/s
-    assert prompt =~ ~r/test:.*run_quality_gate/s
+    assert prompt =~ ~r/test:.*QUALITY GATE/s
   end
 
   test "documents clear_context and the clear-vs-compact distinction" do

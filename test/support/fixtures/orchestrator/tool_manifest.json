@@ -2,6 +2,7 @@
   {
     "name": "create_agent",
     "description": "Create a new worker agent owned by this orchestrator. Prefer `category` (fast/main/heavy/leader) to spawn into the operator-configured harness/provider/model for that tier; that fails if no model is assigned to the category. Returns the worker's id and name. Names are unique within this orchestrator.",
+    "summary": "Create a worker owned by you; prefer `category` (worker tier) over an explicit harness/model. Returns the worker's id and name.",
     "input_schema": {
       "properties": {
         "apis": {
@@ -101,6 +102,7 @@
   {
     "name": "list_apis",
     "description": "List the external APIs/MCP servers registered for this orchestrator (platform + project scope) that you may PROVISION to a worker. Returns each registration's name/scope/transport/description/instructions/doc_urls — never any secret. You CANNOT call these tools yourself — pass their names in `apis` to `create_agent`/`command_agent` to transfer them to a worker.",
+    "summary": "List the registered external APIs you may provision to workers via `apis` — never callable by you (see Registered APIs).",
     "input_schema": {
       "properties": {},
       "type": "object"
@@ -109,6 +111,7 @@
   {
     "name": "check_agent_status",
     "description": "Get a worker's current status, accumulated cost, and its findings: `final_message` carries the worker's latest result/summary text, and each `recent_events` entry includes a truncated `text` excerpt. This is how you read what a worker actually produced.",
+    "summary": "Read a worker's status, cost, and findings — `final_message` carries its actual output text.",
     "input_schema": {
       "properties": {
         "limit": {
@@ -145,6 +148,7 @@
   {
     "name": "start_adw",
     "description": "Launch an AI Developer Workflow. Two modes by `harness`: with `harness:\"adw\"` it runs a REAL portable Python ADW (the full /plan→/build→/review→/fix slash-command logic, plus scout/parallel variants) — pass a `workflow_type` from the discovered ADWS list in your system prompt. With any other harness it runs the lightweight in-app catalog workflow (`plan_build_review_fix` by default). Pick by complexity: trivial→`plan_build`, standard→`plan_build_review_fix`, non-trivial→full SDLC, large/exploratory→a scout/parallel ADW; decompose a big project into several `start_adw` runs you track with `check_adw`. Returns the run id (use `check_adw` to watch per-step progress).",
+    "summary": "Launch an AI Developer Workflow run; returns a run id for `check_adw`. Modes and the selection ladder: see the ADWs section.",
     "input_schema": {
       "properties": {
         "harness": {
@@ -173,6 +177,7 @@
   {
     "name": "update_agent",
     "description": "Update a worker by name. At least one of `system_prompt`, `model`, or `harness` must be provided; `harness` is validated against the registry. `provider`/`category` are not updatable here — delete and re-create to change tier.",
+    "summary": "Update a worker's system_prompt/model/harness/tools by name (provider/category need a re-create).",
     "input_schema": {
       "properties": {
         "harness": {
@@ -259,6 +264,7 @@
   {
     "name": "get_logs",
     "description": "Fetch the critical content of persisted console logs by their durable `log-<n>` number (the labels shown on every event in the console, e.g. `log-8219`). Resolve a reference in three shapes: a single `log` (`\"log-8219\"` or `8219`), an inclusive `from`..`to` range (the \"log-8219 to log-8228\" case), or an explicit `numbers` array. Each returned log carries its label, owner (worker/orchestrator), session, event type, harness/provider/model, a capped text excerpt, token/cost usage, and timestamp. Numbers with no row come back under `missing` (never an error); the resolved set is bounded to 100 numbers (`capped: true` when truncated). Distinct from `read_system_logs` (the separate system-log audit table) and `check_agent_status` (which tails a worker by name).",
+    "summary": "Fetch persisted console logs by `log-<n>` number — a single `log`, a `from`..`to` range, or a `numbers` array. Distinct from `read_system_logs` (audit table) and `check_agent_status` (tails a worker).",
     "input_schema": {
       "properties": {
         "from": {
@@ -292,6 +298,7 @@
   {
     "name": "check_adw",
     "description": "Inspect an ADW run by the id `start_adw` returned: status, cost, completed/total progress, a per-step status+cost list, and a recent activity tail. Works for both modes — in-app catalog runs and real portable `adw`-harness runs (whose per-step status/cost come from the canonical event log). Pairs with `start_adw`.",
+    "summary": "Inspect an ADW run by id: status, cost, per-step progress, recent activity. Pairs with `start_adw`.",
     "input_schema": {
       "properties": {
         "run_id": {
@@ -308,6 +315,7 @@
   {
     "name": "get_config",
     "description": "Read this orchestrator's current configuration: its own harness/provider/model, the per-project worker-tier roster (fast/main/heavy/leader with each tier's effective harness/provider/model, plus `inherited?` — true when the tier inherits the operator's global default rather than being set on this project), the registered harnesses, and the available models per harness/provider. Use this first when a spawn fails with 'no model selected' to see what needs configuring.",
+    "summary": "Read your config: own harness/provider/model, per-project tier roster, registered harnesses, available models. Call it first when a spawn fails with 'no model selected'.",
     "input_schema": {
       "properties": {},
       "required": [],
@@ -317,6 +325,7 @@
   {
     "name": "configure_tier",
     "description": "Assign a harness/provider/model to a worker tier (fast/main/heavy/leader) for THIS project so `create_agent` with that `category` can spawn. The roster is per-project (scoped to this orchestrator's bound project); any tier left unset inherits the operator's global default, and the override you set here changes only this project. `model` is required; `harness` defaults to the orchestrator's harness; `provider` is optional (open identity). Use this to self-unblock when a tier is unassigned.",
+    "summary": "Assign a harness/provider/model to a worker tier for THIS project — self-unblock an unassigned tier.",
     "input_schema": {
       "properties": {
         "category": {
@@ -374,6 +383,7 @@
   {
     "name": "report_cost",
     "description": "Report this orchestrator's session id, status, running USD cost, cumulative input/output/total tokens, and context-window usage % (from the latest turn's occupancy). Includes a warning when usage is high — call it to watch your own spend and context pressure.",
+    "summary": "Your session's running USD cost, cumulative tokens, and context-window usage % — watch spend and context pressure.",
     "input_schema": {
       "properties": {},
       "required": [],
@@ -383,6 +393,7 @@
   {
     "name": "compact_agent",
     "description": "Compact a worker's context by dispatching `/compact` to it (sugar over command_agent). Use it on a worker approaching its context-window limit to free up room before its output degrades.",
+    "summary": "Dispatch `/compact` to a worker nearing its context limit (vs `clear_context`; see Context management).",
     "input_schema": {
       "properties": {
         "name": {
@@ -399,6 +410,7 @@
   {
     "name": "clear_context",
     "description": "Fully reset a worker's context window to blank — reaps its live session and drops its resumable session id so its next task starts a fresh harness session with zero prior history. Use this (not compact_agent) before handing a worker NEW, unrelated work, especially when its context usage is high. Use compact_agent instead when the next task continues prior work.",
+    "summary": "Fully reset a worker to a blank context window before NEW, unrelated work (vs `compact_agent`; see Context management).",
     "input_schema": {
       "properties": {
         "name": {
@@ -415,6 +427,7 @@
   {
     "name": "list_agent_templates",
     "description": "List the available subagent templates (name + description) — the reusable worker recipes you can apply with `create_agent`'s `subagent_template`. This is the on-demand form of the SUBAGENT MAP in your system prompt.",
+    "summary": "On-demand form of the worker-templates list in your prompt (name + description per template).",
     "input_schema": {
       "properties": {},
       "required": [],
@@ -440,6 +453,7 @@
   {
     "name": "save_agent_template",
     "description": "Create or refine a subagent template, writing a NEW version (history is preserved). `system_prompt` is the worker recipe's body. Use this to mint your own reusable specialists; the saved template is then applicable via `create_agent(subagent_template:)`.",
+    "summary": "Create or refine a subagent template (writes a new version; history preserved) for reuse via `create_agent(subagent_template:)`.",
     "input_schema": {
       "properties": {
         "category": {
@@ -480,6 +494,7 @@
   {
     "name": "set_goal",
     "description": "Set (or refresh) the durable GOAL you are driving — your Task Ledger. `goal` is the objective; `definition_of_done` is how you VERIFY completion (be concrete and checkable). Optional `plan` is an ordered list of steps. This persists across turns and a restart, so you reconcile against it each turn instead of re-deriving intent. Required before the autonomous drive loop will keep advancing the work.",
+    "summary": "Set (or refresh) the durable goal + concrete `definition_of_done` (and optional plan) you drive each turn (see Core loop).",
     "input_schema": {
       "properties": {
         "definition_of_done": {
@@ -508,6 +523,7 @@
   {
     "name": "record_progress",
     "description": "Record a Progress Ledger entry for THIS turn: whether the goal is `satisfied` (done), whether you are `looping` (repeating without advancing), whether you `made_progress`, and `next_agent`/`next_instruction` for the next step plus a one-line `summary`. Do this EVERY turn — the drive loop reads it to decide whether to keep driving, replan, or report complete; an unreported turn is treated as a stall.",
+    "summary": "Record this turn's Progress Ledger entry — do it EVERY turn; an unreported turn reads as a stall (see Core loop).",
     "input_schema": {
       "properties": {
         "looping": {
@@ -544,6 +560,7 @@
   {
     "name": "get_ledger",
     "description": "Read your current Task Ledger + latest Progress entry: the goal, definition-of-done, step plan, lifecycle status, stall count, and the last recorded progress. Use it to re-orient at the start of a turn.",
+    "summary": "Read your Task Ledger + latest progress entry to re-orient at the start of a turn.",
     "input_schema": {
       "properties": {},
       "required": [],
@@ -553,6 +570,7 @@
   {
     "name": "set_focus",
     "description": "Declare your FOCUS — the single concrete thing you are working on right now. Set it BEFORE commanding or spawning a worker: an unfocused scope is blocked from spending budget. Pass `workstream` (id or title) to focus a specific parallel workstream before commanding a worker on it; omit it to focus the orchestrator itself for untagged work. Exactly one focus per scope — calling this again replaces it.",
+    "summary": "Declare the single thing you are working on (per scope) BEFORE spending budget; pass `workstream` to focus a stream (see Core loop).",
     "input_schema": {
       "properties": {
         "focus": {
@@ -573,6 +591,7 @@
   {
     "name": "clear_focus",
     "description": "Clear a focus once it is VERIFIED done against the tree, then set the next one. Pass `workstream` (id or title) to clear that stream's focus; omit it to clear the orchestrator's own focus.",
+    "summary": "Clear a verified-done focus (yours or a workstream's), then set the next one (see Core loop).",
     "input_schema": {
       "properties": {
         "workstream": {
@@ -587,6 +606,7 @@
   {
     "name": "report_complete",
     "description": "Declare the GOAL complete: marks the Task Ledger done (the drive loop stops) and notifies the operator with your `summary` and any `recommendations`. Only call this once you have VERIFIED the definition-of-done against the actual tree (use `inspect_repo`), not just a worker's self-report.",
+    "summary": "Declare the goal complete and notify the operator — only after verifying the definition-of-done (see Core loop).",
     "input_schema": {
       "properties": {
         "recommendations": {
@@ -607,6 +627,7 @@
   {
     "name": "inspect_repo",
     "description": "Read-only inspection of your working directory so you can verify work against the ACTUAL tree (not a worker's self-report). `op`: `git_status` (short status + branch), `changed_files` (the porcelain change list), `read_file` (read one file by `path`), or `surfaces` (detect the app's front-end surface(s) — web/desktop/tui — to decide whether to append a UI/UX phase; an empty list means no front end). Path-jailed to the working dir and capped; makes NO edits.",
+    "summary": "Read-only working-dir inspection (`op`: git_status / changed_files / read_file / surfaces) — your verification instrument; makes no edits.",
     "input_schema": {
       "properties": {
         "op": {
@@ -633,6 +654,7 @@
   {
     "name": "record_reflection",
     "description": "Bank a durable verbal lesson you learned this run into your project memory so the NEXT run for this project starts ahead. Use it the moment you learn something generalizable (a wasted step, a non-obvious gotcha, a workflow that worked) — don't wait for `report_complete`. `lesson` is one or two sentences, imperative and concrete. Optional `goal` ties it to what you were driving (defaults to your active goal). Persisted, project-scoped, and injected into future runs' prompts.",
+    "summary": "Bank a durable, project-scoped lesson into memory the moment you learn it (see Core loop).",
     "input_schema": {
       "properties": {
         "goal": {
@@ -653,6 +675,7 @@
   {
     "name": "create_workstream",
     "description": "Create a durable WORKSTREAM — an independent objective you deliver as right-sized phases (spec→implement→test→review). A workstream is your EXTERNAL MEMORY: its goal/definition-of-done and per-phase state persist across turns and a restart, so you can hold several in parallel and `compact_self` safely. Returns its `workstream_id`. Next: spawn the `work-decomposer` and call `plan_phases`.",
+    "summary": "Create a durable workstream — one unit of your external memory; returns its id. Next: decompose and `plan_phases` (see Durable memory).",
     "input_schema": {
       "properties": {
         "definition_of_done": {
@@ -678,6 +701,7 @@
   {
     "name": "plan_phases",
     "description": "Persist the work-decomposer's right-sized PHASE breakdown for a workstream. Each phase is delivered spec→implement→test→review and sized so ONE worker can carry it without exhausting its context. Replaces any existing phases (a re-plan); phase 1 starts running at the spec stage. `workstream` selects by id or title.",
+    "summary": "Persist a workstream's right-sized phase breakdown (replaces existing phases — a re-plan). See Phased delivery.",
     "input_schema": {
       "properties": {
         "phases": {
@@ -733,6 +757,7 @@
   {
     "name": "record_stage",
     "description": "Record the CURRENT phase's stage outcome and ADVANCE the machine. VERIFY first with `inspect_repo` — do not trust a worker's self-report. On `passed` the stage advances (spec→implement→test→review→done); a passed review completes the phase and promotes the next one. A `failed` review enters the fix branch (re-review after the fix); `blocked` blocks the phase. Pass the spec stage's `spec_path` as `artifact` so `get_workstream` can always reconstruct what remains.",
+    "summary": "Record the current phase's verified stage outcome and advance the machine; pass the spec's path as `artifact` (see Phased delivery).",
     "input_schema": {
       "properties": {
         "artifact": {
@@ -786,6 +811,7 @@
   {
     "name": "list_workstreams",
     "description": "Read your durable MEMORY INDEX — one compact row per workstream (id, title, status, phase k/n, current stage, next_action, stall_count). Call this at the START of every turn to re-orient, then `get_workstream` the one you're about to advance.",
+    "summary": "Your memory index — one compact row per workstream. Call it at the start of every turn (see Durable memory).",
     "input_schema": {
       "properties": {},
       "required": [],
@@ -795,6 +821,7 @@
   {
     "name": "get_workstream",
     "description": "Read the FULL rehydration record for one workstream: goal/definition-of-done, every phase with its `spec_path`, completed vs remaining stages, the current pointer, and the single `next_action`. This is how you reconstruct enough state to continue after compaction. `workstream` selects by id or title.",
+    "summary": "The full rehydration record for one workstream — reconstructs its state (phases, stages, next action) after compaction.",
     "input_schema": {
       "properties": {
         "workstream": {
@@ -836,6 +863,7 @@
   {
     "name": "run_quality_gate",
     "description": "Resolve and run this project's stack-aware QUALITY GATE for a workstream phase (quality-gate-plugins) — the ordered five-stage green gate (format · lint · type · test · mutation). Call it during a phase's `:test` stage. Two modes: with NO `outputs` it returns the ordered, token-filled COMMAND PLAN for the requested `cadence` (default `per_phase`) — dispatch a worker to run those commands in order in the repo. Once the worker reports each command's exit code + output, call it AGAIN with `outputs` to get the structured GateResult (green/red per stage + parsed file:line diagnostics + which stage failed). On any red stage, dispatch a fix worker with the diagnostics, re-run, and loop until green before recording the test stage passed. A `pre_merge` cadence runs the slow mutation/property stages once at workstream close.",
+    "summary": "Resolve/evaluate the stack-aware quality gate: no `outputs` → the ordered command plan; with `outputs` → the GateResult (see Quality gate).",
     "input_schema": {
       "properties": {
         "cadence": {
@@ -883,6 +911,7 @@
   {
     "name": "compact_self",
     "description": "Compact your OWN context window. Your workstreams are durable external memory, so compacting is SAFE — the platform reseeds the next turn with your `list_workstreams` index (rehydrate-on-resume) and you wake re-oriented. Use it when `report_cost` shows high context usage instead of degrading or stalling. Returns once compaction is scheduled; in-flight workers keep running and return by workstream.",
+    "summary": "Compact your OWN context window — safe because workstreams are durable (see Durable memory).",
     "input_schema": {
       "properties": {},
       "required": [],

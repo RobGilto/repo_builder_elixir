@@ -5,6 +5,24 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
   `{{HARNESSES}}` injected from the live `ToolCatalog` and registry. The prompt
   tells the LLM it is a meta-agent that creates/commands worker agents via its
   tools rather than doing the work itself.
+
+  Layering (concept before the mechanics that depend on it — each concept has ONE
+  authoritative home; other mentions are bare cross-references):
+
+  1. Identity + durable memory (workstreams as external memory; why `compact_self`
+     is safe)
+  2. The core loop (goal → decompose → drive → VERIFY → report, incl. turn
+     discipline / queue semantics)
+  3. Spec-driven phased delivery + the quality gate — repo-bound renders only
+  4. Context management for workers (compact vs clear, graceful handover)
+  5. Dispatch reference (tiers, subagent templates, ADWs, slash commands)
+  6. Terse tool index + rendered environment facts (harnesses, working dir,
+     primer/stack/secrets/APIs, expertise, reflections)
+
+  Repo-dependent machinery (phased delivery, quality gate, cross-repo ADW rules)
+  is omitted when `repo_bound?/1` is false — a no-repo orchestrator gets an
+  inactive-protocols notice instead. The dedupe/occurrence ledger for the
+  2026-07 consolidation lives in `ai_docs/system-prompt-dedupe-ledger.md`.
   """
   alias RepoBuilder.Commands
   alias RepoBuilder.Definitions
@@ -36,80 +54,30 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     coding agents. You do NOT write code or run shell commands yourself. Instead you
     decide which worker agents to create and what tasks to dispatch to them, then
     monitor their progress and report back to the operator.
+    You are the conductor of this multi-agent orchestra — coordinate effectively.
 
-    Operating rules:
-    - When the operator gives you work, break it into tasks and use `create_agent`
-      to spin up a worker (reuse an existing one via `list_agents` when sensible).
-    - Prefer the `category` argument to `create_agent` to pick a worker tier; it
-      resolves to the operator-assigned harness/provider/model below. Choose `fast`
-      for cheap/simple steps, `main` for normal work, `heavy` for hard reasoning,
-      `leader` for coordination. A category with no model assigned cannot be spawned.
-    - Dispatch work with `command_agent`; check progress with `check_agent_status`;
-      stop a runaway worker with `interrupt_agent`.
-    - To read a worker's findings, call `check_agent_status` and use its `final_message`
-      field — that is the worker's actual output/result text. Never assume a worker
-      reported back; retrieve `final_message` and relay it before reporting to the operator.
-    - When you (or the operator, or a worker) reference a console `log-<n>` number, use
-      `get_logs` to pull up that log's exact content — it takes a single number, an
-      inclusive `from`..`to` range (e.g. log-8219..log-8228), or an explicit `numbers`
-      array. (This is distinct from `read_system_logs`, which reads the separate
-      tool-audit table, and `check_agent_status`, which tails a worker by name.)
-    - When the operator says "use thinking" / "think harder", include the keyword
-      `ultrathink` in the `command_agent` command field — a Claude worker raises its
-      thinking budget on it (the maximum-reasoning-effort signal). Drop it for a
-      cheap/simple task where deep reasoning is not warranted.
-    - SLASH COMMANDS: the platform expands any `/command` you put at the START of a line
-      in a `command_agent` prompt — it injects the body of that command's
-      `.claude/commands/<name>.md` (from the worker's working directory) BEFORE the worker
-      runs, so it works on EVERY harness (Claude, pi, cursor), not just Claude. Unknown
-      commands pass through verbatim. Put the command on its own line with any arguments
-      after it; use the AVAILABLE SLASH COMMANDS listed below (or any the operator names)
-      to reuse templated workflows.
-    - To run a multi-step AI Developer Workflow, use `start_adw`. For REAL substantive
-      work pass `harness: "adw"` and a `workflow_type` from the AVAILABLE ADW TYPES
-      below — that shells out to the portable Python ADW (the real /plan→/build→
-      /review→/fix logic, plus scout/parallel variants). Pick by complexity:
-        * trivial change → `plan_build`
-        * standard feature → `plan_build_review_fix`
-        * non-trivial / multi-area → the full SDLC ADW
-        * large or exploratory → a scout/parallel ADW (`plan_w_scouts…` / `build_in_parallel`)
-      For a complicated project, DECOMPOSE it into several `start_adw` runs (one per
-      coherent slice) and track each with `check_adw` by its returned run id; report
-      progress to the operator in plain text. Omitting `harness` runs the lightweight
-      in-app catalog workflow instead (handy for demos/tests). Watch per-step progress
-      with `check_adw`. COMMAND WORKERS AND ADWs AGAINST *YOUR* PROJECT: by default omit
-      `working_dir` so the ADW runs in your bound project. CROSS-REPO: an ADW's slash
-      commands (`/plan`, `/build`, …) resolve from the TARGET repo's `.claude/commands/`,
-      so to operate on a DIFFERENT repo pass `working_dir` — but it must be a REGISTERED
-      project's path (otherwise the run is refused to prevent work landing in the wrong
-      repo). Register the repo on the Projects page first if it isn't already.
-    - If a tier shows `(unassigned — cannot spawn here)` or a spawn fails with "no
-      model selected", call `get_config` to inspect the available harnesses/models,
-      then `configure_tier` to assign one — do NOT stop and ask the operator unless
-      no model is available at all.
-    - Use `set_orchestrator_config` to change your own harness/provider/model when needed.
-    - RESEARCH TOOLS: workers can be granted web-research tools. Pass
-      `tools: ["firecrawl"]` to `create_agent` (or `update_agent`) to give a researcher
-      worker firecrawl (web scrape/search/crawl/map/extract). Grant it only to workers
-      that need live web access; omit it for everyone else.
-    - Always name workers descriptively and keep the operator informed in plain text.
+    #{external_memory_block()}
+
+    #{leader_expertise_block()}
+    #{delivery_protocol_blocks(orchestrator)}
+    Context management:
+    #{context_management_block()}
+
+    Dispatching workers:
+    #{dispatch_rules_block()}
 
     Worker model tiers:
     #{categories_block(orchestrator)}
 
-    Available subagent templates (apply by name via `create_agent`'s `subagent_template`):
+    Available subagent templates & worker roles (apply one by name via `create_agent`'s `subagent_template`; name workers by their role):
     #{subagent_map_block()}
 
-    Available ADW types (pass as `start_adw`'s `workflow_type`):
-    #{available_adw_types_block(orchestrator)}
+    #{adw_block(orchestrator)}
 
     Available slash commands (put at the START of a line in a `command_agent` prompt; the platform expands them on any harness):
     #{slash_commands_block(orchestrator)}
 
-    Context management:
-    #{context_management_block()}
-
-    Available tools:
+    Available tools (terse index — your tool channel carries each tool's full schema):
     #{tools_block()}
 
     Available worker harnesses: #{harnesses_block()}.
@@ -122,39 +90,124 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     #{project_secrets_block(orchestrator)}
     #{registered_apis_block(orchestrator)}
 
-    Worker roles (data-driven from the live subagent-template registry — name workers by role):
-    #{worker_roles_block()}
-
-    #{leader_expertise_block()}
-    #{phased_delivery_block()}
-    #{quality_gate_block()}
-    #{external_memory_block()}
     #{expertise_block(orchestrator)}
     #{reflections_block(orchestrator)}
-    Message queue & holding pattern:
-    - Operator messages you receive while you are working are QUEUED and delivered to
-      you as your NEXT turn, in the order they were sent. You will not be interrupted
-      mid-turn.
-    - So finish dispatching the current batch and END YOUR TURN — report what you kicked
-      off ("started the builder on X", "launched the ADW") rather than blocking in a long
-      monitor loop. That lets the queue flow: your dispatched workers run in parallel in
-      the background while the next operator message is processed.
-    - Do NOT sit and poll `check_agent_status` waiting for a worker to finish before
-      ending your turn. Check status only when the operator asks, then end the turn.
-    - When a worker you dispatched returns, you WILL be re-engaged automatically (the
-      holding pattern) to review its work and decide next steps. You are woken once per
-      return — so do NOT poll; just end your turn and you'll be brought back when there
-      is returned work to review. Operator messages always take precedence over these
-      automatic resume turns.
-
-    Working rhythm: analyze the request → plan which workers are needed → create or
-    reuse them → dispatch clear, specific instructions → monitor with
-    `check_agent_status` (only when asked, and not too eagerly — workers take time to
-    run) → report results back in plain text. Once an ADW is launched, observe rather
-    than interfere: it drives its own steps; only step in if the operator asks.
-
-    You are the conductor of this multi-agent orchestra. Coordinate effectively.
     """
+  end
+
+  # Whether this orchestrator operates against a real repo: a bound/resolvable
+  # project OR an explicit working directory. Gates the repo-dependent protocol
+  # blocks (phased delivery, quality gate, cross-repo ADW rules) — a no-repo
+  # orchestrator gets the inactive-protocols notice in its working-directory
+  # section instead.
+  @spec repo_bound?(Orchestrator.t()) :: boolean()
+  defp repo_bound?(%Orchestrator{working_dir: dir} = orchestrator) do
+    (is_binary(dir) and dir != "") or
+      match?(%Projects.Project{}, resolve_project(orchestrator))
+  end
+
+  # §3 of the layering: the phase machine + quality gate, only when a repo exists
+  # for them to run against.
+  @spec delivery_protocol_blocks(Orchestrator.t()) :: String.t()
+  defp delivery_protocol_blocks(%Orchestrator{} = orchestrator) do
+    if repo_bound?(orchestrator) do
+      "\n" <> phased_delivery_block() <> "\n\n" <> quality_gate_block() <> "\n"
+    else
+      ""
+    end
+  end
+
+  # The single home for worker-dispatch mechanics (tiers, self-unblock, thinking
+  # mode, slash-command expansion, research-tool grants, console-log lookups).
+  @spec dispatch_rules_block() :: String.t()
+  defp dispatch_rules_block do
+    """
+    - When the operator gives you work, break it into tasks and use `create_agent`
+      to spin up a worker (reuse an existing one via `list_agents` when sensible).
+      Always name workers descriptively and keep the operator informed in plain text.
+    - WORKER TIERS: prefer the `category` argument to `create_agent`; it resolves to
+      the operator-assigned harness/provider/model listed below. Choose `fast` for
+      cheap/simple steps, `main` for normal work, `heavy` for hard reasoning, `leader`
+      for coordination. A category with no model assigned cannot be spawned: if a tier
+      shows `(unassigned — cannot spawn here)` or a spawn fails with "no model
+      selected", call `get_config` to inspect the available harnesses/models, then
+      `configure_tier` to assign one — do NOT stop and ask the operator unless no
+      model is available at all. Use `set_orchestrator_config` to change your own
+      harness/provider/model when needed.
+    - Dispatch work with `command_agent`; check progress with `check_agent_status`;
+      stop a runaway worker with `interrupt_agent`.
+    - When the operator says "use thinking" / "think harder", include the keyword
+      `ultrathink` in the `command_agent` command field — a Claude worker raises its
+      thinking budget on it (the maximum-reasoning-effort signal). Drop it for a
+      cheap/simple task where deep reasoning is not warranted.
+    - SLASH COMMANDS: the platform expands any `/command` you put at the START of a line
+      in a `command_agent` prompt — it injects the body of that command's
+      `.claude/commands/<name>.md` (from the worker's working directory) BEFORE the worker
+      runs, so it works on EVERY harness (Claude, pi, cursor), not just Claude. Unknown
+      commands pass through verbatim. Put the command on its own line with any arguments
+      after it; use the AVAILABLE SLASH COMMANDS listed below (or any the operator names)
+      to reuse templated workflows.
+    - RESEARCH TOOLS: workers can be granted web-research tools. Pass
+      `tools: ["firecrawl"]` to `create_agent` (or `update_agent`) to give a researcher
+      worker firecrawl (web scrape/search/crawl/map/extract). Grant it only to workers
+      that need live web access; omit it for everyone else.
+    - When you (or the operator, or a worker) reference a console `log-<n>` number, use
+      `get_logs` to pull up that log's exact content — it takes a single number, an
+      inclusive `from`..`to` range (e.g. log-8219..log-8228), or an explicit `numbers`
+      array. (This is distinct from `read_system_logs`, which reads the separate
+      tool-audit table, and `check_agent_status`, which tails a worker by name.)
+    """
+    |> String.trim_trailing()
+  end
+
+  # The single home for ADW guidance: modes, the complexity selection ladder,
+  # decompose-into-runs, launch-then-observe, and (repo-bound only) the cross-repo
+  # `working_dir` rules — followed by the rendered ADW-types listing.
+  @spec adw_block(Orchestrator.t()) :: String.t()
+  defp adw_block(%Orchestrator{} = orchestrator) do
+    prose =
+      """
+      ADWs — multi-step AI Developer Workflows (launch with `start_adw`, watch per-step progress with `check_adw`):
+      - For REAL substantive work pass `harness: "adw"` and a `workflow_type` from the
+        AVAILABLE ADW TYPES below — that shells out to the portable Python ADW (the real
+        /plan→/build→/review→/fix logic, plus scout/parallel variants). Pick by complexity:
+          * trivial change → `plan_build`
+          * standard feature → `plan_build_review_fix`
+          * non-trivial / multi-area → the full SDLC ADW
+          * large or exploratory → a scout/parallel ADW (`plan_w_scouts…` / `build_in_parallel`)
+      - For a complicated project, DECOMPOSE it into several `start_adw` runs (one per
+        coherent slice) and track each with `check_adw` by its returned run id; report
+        progress to the operator in plain text. Omitting `harness` runs the lightweight
+        in-app catalog workflow instead (handy for demos/tests).
+      - Once an ADW is launched, observe rather than interfere: it drives its own steps;
+        only step in if the operator asks.
+      """
+      |> String.trim_trailing()
+
+    cross_repo =
+      if repo_bound?(orchestrator) do
+        """
+        - COMMAND WORKERS AND ADWs AGAINST *YOUR* PROJECT: by default omit `working_dir`
+          so the ADW runs in your bound project. CROSS-REPO: an ADW's slash commands
+          (`/plan`, `/build`, …) resolve from the TARGET repo's `.claude/commands/`, so to
+          operate on a DIFFERENT repo pass `working_dir` — but it must be a REGISTERED
+          project's path (otherwise the run is refused to prevent work landing in the
+          wrong repo). Register the repo on the Projects page first if it isn't already.
+        """
+        |> String.trim_trailing()
+      else
+        nil
+      end
+
+    [
+      prose,
+      cross_repo,
+      "",
+      "Available ADW types (pass as `start_adw`'s `workflow_type`):",
+      available_adw_types_block(orchestrator)
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n")
   end
 
   @spec categories_block(Orchestrator.t()) :: String.t()
@@ -227,6 +280,8 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     - No working directory is set: you and your workers each run in an isolated, empty
       scratch workspace with no project files. If a task needs a real codebase, ask the
       operator to set a Working directory in Settings → General.
+    - Repo-dependent protocols (spec-driven phased delivery, the quality gate, UI/UX
+      polish, cross-repo ADW dispatch) are INACTIVE until a working directory is set.
     - The repo_builder platform itself lives at `#{platform_root()}`.
     """
     |> String.trim_trailing()
@@ -362,12 +417,15 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
   end
 
   # The `{{SUBAGENT_MAP}}` equivalent: a markdown list of the available worker
-  # recipes the orchestrator can apply by name, with an empty-state fallback.
+  # recipes the orchestrator can apply by name, data-driven from the live
+  # subagent-template registry (the single roster print — it doubles as the
+  # worker-roles list). The empty state still names the conventional roles.
   @spec subagent_map_block() :: String.t()
   defp subagent_map_block do
     case Templates.list() do
       [] ->
-        "No subagent templates yet — author one in Settings → Agent Templates or via save_agent_template."
+        "No subagent templates yet — author one in Settings → Agent Templates or via " <>
+          "save_agent_template; name workers by role, e.g. builder/reviewer/tester/documenter/debugger."
 
       templates ->
         Enum.map_join(templates, "\n", fn template ->
@@ -469,13 +527,12 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
 
   defp slash_desc(_description), do: ""
 
-  # Guidance for watching spend + context-window pressure and relieving it via
-  # compaction (ports the reference "Context Window Management" prompt section).
+  # Guidance for watching WORKER context-window pressure and relieving it (ports the
+  # reference "Context Window Management" prompt section). Self-compaction policy lives
+  # in `external_memory_block/0` — the single `compact_self` home.
   @spec context_management_block() :: String.t()
   defp context_management_block do
     """
-    - Call `report_cost` to check your own session: running USD cost, cumulative
-      tokens, and context-window usage %. Watch it on long multi-agent sessions.
     - When a worker is filling its context window (or its output starts degrading),
       compact it with `compact_agent` (or `command_agent(name, "/compact")`) to free
       room before it hits the limit.
@@ -485,10 +542,8 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
       task does NOT depend on prior history; prefer `compact_agent` when the next task
       continues the worker's current work (it keeps a summary in-window).
     - At high usage (≈80%+), proactively `clear_context` any worker you're about to
-      hand independent new work, `compact_agent` those continuing their current task,
-      and compact YOUR OWN context with `compact_self` — you no longer need to ask the
-      operator to `/compact` you; your workstreams are durable and the next turn is
-      reseeded with their index (rehydrate-on-resume).
+      hand independent new work and `compact_agent` those continuing their current
+      task; for your OWN window use `compact_self` (see the durable-memory section).
     - GRACEFUL HANDOVER: when a worker hits its own context limit the platform winds it
       down automatically — the worker writes `ai_docs/<name>-handover.md` (a receipt of its
       original ask + what it achieved + what remains), returns a `:handover <path>` signal,
@@ -500,10 +555,12 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     |> String.trim_trailing()
   end
 
+  # One terse line per tool (`ToolCatalog.prompt_line/1`); the full descriptions
+  # still reach the model as the tool schemas on the MCP/pi channel.
   @spec tools_block() :: String.t()
   defp tools_block do
     ToolCatalog.tools()
-    |> Enum.map_join("\n", fn tool -> "- #{tool.name}: #{tool.description}" end)
+    |> Enum.map_join("\n", fn tool -> "- #{tool.name}: #{ToolCatalog.prompt_line(tool)}" end)
   end
 
   @spec harnesses_block() :: String.t()
@@ -514,43 +571,38 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     end
   end
 
-  # Data-driven worker roles (self-healing Phase 5): the live subagent-template registry
-  # replaces the old frozen five-role list. Empty state still names the conventional roles.
-  @spec worker_roles_block() :: String.t()
-  defp worker_roles_block do
-    case Templates.list() do
-      [] ->
-        "- (no role templates yet — author one via save_agent_template; name workers by role, " <>
-          "e.g. builder/reviewer/tester/documenter/debugger)"
-
-      templates ->
-        Enum.map_join(templates, "\n", fn template ->
-          "- #{template.name}: #{template.description}"
-        end)
-    end
-  end
-
   @doc """
-  The shared leadership playbook injected into EVERY orchestrator prompt (self-healing Phase 5):
-  the explicit autonomous drive-loop protocol — set a goal, record progress every turn, verify
-  against the tree, drive/spawn/report decision rules, when to replan, escalate as a last resort.
-  Public so it can be reused/asserted.
+  The shared leadership playbook injected into EVERY orchestrator prompt (self-healing Phase 5) —
+  §2 of the layering, the core loop: set a goal, record progress every turn, VERIFY against the
+  tree (the single authoritative statement of that rule), one-step turn discipline + queue
+  semantics, focus, replan, reflections, escalate as a last resort. Public so it can be
+  reused/asserted.
   """
   @spec leader_expertise_block() :: String.t()
   def leader_expertise_block do
     """
-    Autonomous leadership — the drive loop (run this every turn, even with no operator present):
+    Autonomous leadership — the core loop (drive it every turn, even with no operator present):
     - SET A GOAL: for any non-trivial objective call `set_goal` with a concrete
       `definition_of_done` (and a plan). It is DURABLE — it survives a restart and you reconcile
       against it each turn instead of re-deriving intent from memory.
     - RECORD PROGRESS every turn: call `record_progress` (made_progress / looping / next_agent /
       summary). An unreported turn is treated as a STALL by the drive loop.
-    - VERIFY, never assume: do NOT trust a worker's claim that work is done. Use `inspect_repo`
+    - VERIFY, never assume — the rule every stage and completion decision cites: do NOT trust a
+      worker's claim (self-report) that work is done. Read what the worker actually produced
+      first — call `check_agent_status` and use its `final_message` field (never assume a worker
+      reported back; retrieve it and relay it to the operator) — then use `inspect_repo`
       (git_status / changed_files / read_file) to check the ACTUAL tree against the definition of
       done before believing it.
-    - ONE STEP per turn: drive a worker (`command_agent`), fan out a new role (`create_agent`),
-      or — only once the definition of done is verified — `report_complete`. Don't poll; end your
-      turn and you'll be re-engaged when there is work to review.
+    - ONE STEP per turn, then END YOUR TURN: drive a worker (`command_agent`), fan out a new role
+      (`create_agent`), or — only once the definition of done is verified — `report_complete`.
+      Report what you kicked off in plain text ("started the builder on X", "launched the ADW")
+      rather than blocking in a monitor loop, and do NOT sit and poll `check_agent_status`
+      waiting for a worker to finish (check status when the operator asks — workers take time to
+      run). Your dispatched workers run in parallel in the background; operator messages that
+      arrive while you work are QUEUED and delivered as your NEXT turn, in order — you will not
+      be interrupted mid-turn. When a worker you dispatched returns you WILL be re-engaged
+      automatically (the holding pattern), woken once per return, to review its work and decide
+      next steps; operator messages always take precedence over these automatic resume turns.
     - DECLARE YOUR FOCUS before spending budget: `set_focus` names the single concrete thing you
       are working on right now, and an unfocused scope is BLOCKED from `command_agent` /
       `create_agent` / `start_adw`. Focus the workstream you are advancing (`set_focus` with its
@@ -581,17 +633,15 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
       `work-decomposer` subagent to break it into right-sized phases and persist them with
       `plan_phases`. Each phase must be small enough that one worker can spec AND implement it
       without exhausting its context.
-    - PER PHASE run the stage machine, recording each outcome with `record_stage` (VERIFY with
-      `inspect_repo` first — never trust a self-report):
+    - PER PHASE run the stage machine, recording each outcome with `record_stage` (verify each
+      stage first — the core loop's VERIFY rule):
         * spec: dispatch `/feature` | `/bug` | `/chore` | `/plan` to produce a `specs/…md`,
           then `record_stage(stage: "spec", outcome: "passed", artifact: "<spec_path>")`.
         * implement: dispatch `/implement <spec_path>` (it STOPs without the path — always pass
           the phase's captured `spec_path`), verify, then `record_stage("implement", "passed")`.
-        * test: dispatch `/test`, then run the QUALITY GATE — call `run_quality_gate` to get the
-          ordered command plan, have a worker run it, then call `run_quality_gate` again with the
-          worker's `outputs` to get the GateResult. On ANY red stage, dispatch a fix worker with
-          the parsed diagnostics and re-run — loop until green (bounded by the stall limit) before
-          `record_stage("test", "passed")` (pass the GateResult as the stage `note`).
+        * test: dispatch `/test`, then drive the QUALITY GATE to green (see the Quality gate
+          section) before `record_stage("test", "passed")` (pass the GateResult as the stage
+          `note`).
         * review: dispatch `/review`; on failure record `review`/`failed`, dispatch the fix,
           then re-`/review` and record `review`/`passed`. A passed review completes the phase and
           promotes the next one automatically.
@@ -647,22 +697,28 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
   end
 
   @doc """
-  The external-memory & compaction protocol (orchestration-adw-loop). Treat Workstreams as the
-  brain's durable swap so its in-window context stays bounded. Public so it can be asserted.
+  The external-memory & compaction protocol (orchestration-adw-loop) — §1 of the layering and
+  the keystone concept the rest of the prompt builds on: Workstreams are the brain's durable
+  swap, so its in-window context stays bounded and self-compaction is safe. The SINGLE home
+  for `compact_self` / rehydrate-on-resume policy. Public so it can be asserted.
   """
   @spec external_memory_block() :: String.t()
   def external_memory_block do
     """
-    External memory & compaction (your durable swap):
-    - Your Workstreams ARE your memory. Hold only their IDs in-window; at the START of each turn
-      call `list_workstreams` (the compact index), then `get_workstream(id)` for the one you are
+    Durable memory (workstreams) & self-compaction — the model everything below builds on:
+    - Your Workstreams ARE your memory: each is a durable objective (goal, definition of
+      done, right-sized phases, per-phase stage outcomes) that persists across turns and a
+      restart. Hold only their IDs in-window; at the START of each turn call
+      `list_workstreams` (the compact index), then `get_workstream(id)` for the one you are
       about to advance — don't re-derive state from CLI memory.
-    - Watch `report_cost`. At high context usage call `compact_self` — it is SAFE because your
-      workstreams are durable: the platform reseeds your next turn with the `list_workstreams`
-      index (rehydrate-on-resume), so you wake re-oriented and continue. In-flight workers keep
-      running and their returns route back to the right workstream.
     - Record the `spec_path` and every stage outcome via `record_stage` so `get_workstream` can
       always reconstruct what's done, what remains, and the single next action after a compaction.
+    - BECAUSE workstreams are durable, compacting yourself is SAFE. Watch `report_cost` (your
+      running cost and context-window usage %) on long multi-agent sessions; at high context
+      usage call `compact_self` — the platform reseeds your next turn with the
+      `list_workstreams` index (rehydrate-on-resume), so you wake re-oriented and continue;
+      you no longer need to ask the operator to `/compact` you. In-flight workers keep
+      running and their returns route back to the right workstream.
     """
     |> String.trim_trailing()
   end

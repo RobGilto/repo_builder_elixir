@@ -65,7 +65,7 @@ defmodule RepoBuilder.Orchestrator.ReflectionsTest do
 
     prompt = SystemPrompt.build(orch)
     assert prompt =~ "Autonomous leadership"
-    assert prompt =~ "Worker roles (data-driven"
+    assert prompt =~ "Available subagent templates & worker roles"
     assert SystemPrompt.leader_expertise_block() =~ "record_progress"
   end
 end
