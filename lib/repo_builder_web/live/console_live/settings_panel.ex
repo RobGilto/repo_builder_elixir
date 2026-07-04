@@ -20,7 +20,8 @@ defmodule RepoBuilderWeb.ConsoleLive.SettingsPanel do
   @events ~w(save_system_prompt set_system_prompt_mode reset_system_prompt save_working_dir
              clear_working_dir open_dir_picker dir_picker_browse dir_picker_goto
              close_dir_picker dir_picker_select set_reasoning_effort set_timezone
-             select_settings_tab save_layer edit_layer cancel_layer_edit delete_layer)
+             select_settings_tab save_layer edit_layer cancel_layer_edit delete_layer
+             toggle_planf3_placeholders)
 
   @doc "The event names this panel owns (ConsoleLive's dispatch guard)."
   @spec events() :: [String.t()]
@@ -143,6 +144,21 @@ defmodule RepoBuilderWeb.ConsoleLive.SettingsPanel do
           {:error, _reason} ->
             {:noreply, socket}
         end
+    end
+  end
+
+  # Flip the planf3 plan-image policy (General tab, spec
+  # planf3-html-plans-for-heavy-adw-planner Phase 5). Persist the new value, then reseed
+  # both assigns so the OFF-state missing-key warning reflects the vault right now.
+  def handle_event("toggle_planf3_placeholders", _params, socket) do
+    case RepoBuilder.Settings.put_planf3_image_placeholders(
+           not socket.assigns.planf3_placeholders?
+         ) do
+      {:ok, _stored} ->
+        {:noreply, Shared.seed_planf3_image_policy(socket)}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Could not save the plan-image setting")}
     end
   end
 

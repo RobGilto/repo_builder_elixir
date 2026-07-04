@@ -56,6 +56,8 @@ defmodule RepoBuilderWeb.Console.SettingsComponents do
   attr :reasoning_efforts, :list, default: []
   attr :timezone, :string, default: "UTC"
   attr :timezones, :list, default: []
+  attr :planf3_placeholders?, :boolean, default: true
+  attr :planf3_key_present?, :boolean, default: false
   attr :template_rows, :list, default: []
   attr :selected_template, :any, default: nil
   attr :template_versions, :list, default: []
@@ -198,6 +200,31 @@ defmodule RepoBuilderWeb.Console.SettingsComponents do
                 <p class="mt-1 text-[0.625rem]" style="color: var(--cns-text-2)">
                   Log timestamps render in this timezone (YYYY-MM-DD HH:MM:SS). The
                   setting persists across sessions.
+                </p>
+              </.settings_field>
+
+              <.settings_field label="Plan images: use placeholders (no OpenAI cost)">
+                <button
+                  id="settings-planf3-placeholders"
+                  type="button"
+                  phx-click="toggle_planf3_placeholders"
+                  class={["cns-chip", @planf3_placeholders? && "cns-chip--active cns-chip--hook"]}
+                >
+                  {if @planf3_placeholders?, do: "ON", else: "OFF"}
+                </button>
+                <p class="mt-1 text-[0.625rem]" style="color: var(--cns-text-2)">
+                  ON: planf3 plans embed stock placeholder images — zero image spend.
+                  Unticked: planf3 generates bespoke plan images with OpenAI — requires an
+                  OPENAI_API_KEY secret (project or platform scope) in the Secrets section.
+                </p>
+                <p
+                  :if={not @planf3_placeholders? and not @planf3_key_present?}
+                  id="settings-planf3-key-warning"
+                  class="mt-1 text-[0.625rem]"
+                  style="color: var(--cns-warn, #b45309)"
+                >
+                  No OPENAI_API_KEY secret found in either scope — plan runs will fall back
+                  to placeholder images until one is deposited in the Secrets section.
                 </p>
               </.settings_field>
             </div>

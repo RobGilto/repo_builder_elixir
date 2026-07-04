@@ -19,6 +19,20 @@ defmodule RepoBuilder.SettingsTest do
     end
   end
 
+  describe "planf3_image_placeholders?/0" do
+    test "defaults to true when no row exists (placeholders — zero image spend)" do
+      assert Settings.planf3_image_placeholders?()
+    end
+
+    test "round-trips a persisted false and back" do
+      assert {:ok, false} = Settings.put_planf3_image_placeholders(false)
+      refute Settings.planf3_image_placeholders?()
+
+      assert {:ok, true} = Settings.put_planf3_image_placeholders(true)
+      assert Settings.planf3_image_placeholders?()
+    end
+  end
+
   describe "set_default_agent_model/4" do
     test "sets one tier and merges with existing tiers" do
       {:ok, _} = Settings.set_default_agent_model("fast", "fake", nil, "f1")

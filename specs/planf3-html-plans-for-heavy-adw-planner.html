@@ -68,9 +68,9 @@
       <summary>Metadata</summary>
       <dl>
         <dt>created</dt>      <dd>2026-07-04T09:10:00+01:00</dd>
-        <dt>modified</dt>     <dd>2026-07-04T09:10:00+01:00, 2026-07-04T09:40:00+01:00, 2026-07-04T10:05:00+01:00, 2026-07-04T10:30:00+01:00</dd>
-        <dt>commits</dt>      <dd>—</dd>
-        <dt>agent name</dt>   <dd>claude-fable-5 (Claude Code)</dd>
+        <dt>modified</dt>     <dd>2026-07-04T09:10:00+01:00, 2026-07-04T09:40:00+01:00, 2026-07-04T10:05:00+01:00, 2026-07-04T10:30:00+01:00, 2026-07-04T23:05:00+01:00</dd>
+        <dt>commits</dt>      <dd>0b13ec9 (phases 1-3), d8339b5 (contract hardening + salvage), cd36dee (rename to /plan_f3)</dd>
+        <dt>agent name</dt>   <dd>claude-fable-5 (Claude Code), claude-fable-5 (Build Plan executor)</dd>
         <dt>session id</dt>   <dd>8c7fb6ed-f477-4c3b-8e0f-ea6d0e324a82</dd>
         <dt>back refs</dt>    <dd>~/.claude/skills/planf3/SKILL.md, .claude/commands/feature.md, .claude/commands/implement.md, adws/README.md, specs/project-audit-refactor-roadmap-and-greenfield-spinoffs.html</dd>
         <dt>forward refs</dt> <dd>—</dd>
@@ -272,28 +272,28 @@
 
       <h4>4.1 Documentation</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> <code>adws/README.md</code>: add <code>/planf3</code> to the model-map table (base→main, heavy→heavy/opus), document <code>ADW_PLAN_COMMAND</code> under the env-var section, and add a short "HTML plans (planf3)" subsection covering output location (<code>specs/*.html</code>) and consumption.</li>
-        <li><code class="status">[]</code> <code>.claude/commands/conditional_docs.md</code>: add a routing entry — tasks touching planf3/HTML plans load <code>.claude/commands/planf3.md</code> and this spec.</li>
+        <li><code class="status">[x]</code> <code>adws/README.md</code>: add <code>/planf3</code> to the model-map table (base→main, heavy→heavy/opus), document <code>ADW_PLAN_COMMAND</code> under the env-var section, and add a short "HTML plans (planf3)" subsection covering output location (<code>specs/*.html</code>) and consumption.</li>
+        <li><code class="status">[x]</code> <code>.claude/commands/conditional_docs.md</code>: add a routing entry — tasks touching planf3/HTML plans load <code>.claude/commands/planf3.md</code> and this spec.</li>
       </ul>
 
       <h4>4.2 Console ADW-builder surface</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Verify the ADW builder step picker (prompt-steps discovery over <code>.claude/commands/</code> in <code>lib/repo_builder_web/live/console_live/adw_builder_panel.ex</code> / <code>shared.ex</code>) lists <code>/planf3</code> automatically; if the picker filters by an allowlist, add the command to it.</li>
-        <li><code class="status">[]</code> If any Elixir file changes: run the full mix green gate (compile, format, credo, test, dialyzer per project standard).</li>
+        <li><code class="status">[x]</code> Verify the ADW builder step picker (prompt-steps discovery over <code>.claude/commands/</code> in <code>lib/repo_builder_web/live/console_live/adw_builder_panel.ex</code> / <code>shared.ex</code>) lists <code>/planf3</code> automatically; if the picker filters by an allowlist, add the command to it.</li>
+        <li><code class="status">[x]</code> If any Elixir file changes: run the full mix green gate (compile, format, credo, test, dialyzer per project standard).</li>
       </ul>
 
       <h4>4.3 End-to-end heavy run</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Run a plan-only local ADW: <code>ADW_PLAN_COMMAND=/planf3</code> + <code>model_set heavy</code> through <code>adws/adw_plan_local_iso.py</code> with a small real prompt.</li>
-        <li><code class="status">[]</code> Assert: run log shows the plan step resolved to the heavy tier; a <code>specs/issue-…-sdlc_planner-….html</code> file exists in the worktree; <code>state.plan_file</code> points at it; the HTML contains no leftover <code>{{…}}</code> tokens; image slots are filled with stock placeholders (<code>class="placeholder"</code>, <code>src=".planf3-assets/placeholders/…"</code>) and no OpenAI call was made.</li>
-        <li><code class="status">[]</code> Chain check: <code>find_spec_file</code> (via the build step of <code>adw_plan_build_local_iso.py</code>, or a direct unit call against the worktree) locates the <code>.html</code> plan.</li>
+        <li><code class="status">[x]</code> Run a plan-only local ADW: <code>ADW_PLAN_COMMAND=/planf3</code> + <code>model_set heavy</code> through <code>adws/adw_plan_local_iso.py</code> with a small real prompt.</li>
+        <li><code class="status">[x]</code> Assert: run log shows the plan step resolved to the heavy tier; a <code>specs/issue-…-sdlc_planner-….html</code> file exists in the worktree; <code>state.plan_file</code> points at it; the HTML contains no leftover <code>{{…}}</code> tokens; image slots are filled with stock placeholders (<code>class="placeholder"</code>, <code>src=".planf3-assets/placeholders/…"</code>) and no OpenAI call was made.</li>
+        <li><code class="status">[x]</code> Chain check: <code>find_spec_file</code> (via the build step of <code>adw_plan_build_local_iso.py</code>, or a direct unit call against the worktree) locates the <code>.html</code> plan.</li>
       </ul>
 
       <h4>4.4 Testing Strategy</h4>
       <p>The end-to-end run above <em>is</em> the acceptance test; back it with the repeatable command-line gate.</p>
       <ul class="checklist">
-        <li><code class="status">[]</code> <code>cd adws && uv run pytest adw_tests/ -q</code> — full harness suite green after doc/code changes.</li>
-        <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — only required if 4.2 touched Elixir; zero regressions.</li>
+        <li><code class="status">[x]</code> <code>cd adws && uv run pytest adw_tests/ -q</code> — full harness suite green after doc/code changes.</li>
+        <li><code class="status">[x]</code> <code>mix test --warnings-as-errors</code> — only required if 4.2 touched Elixir; zero regressions.</li>
       </ul>
       <div class="loop">
         🔁 <strong>Do not exit this phase until every box above is checked.</strong>
@@ -303,35 +303,35 @@
 
     <!-- ============ PHASE 5 ============ -->
     <div class="phase">
-      <h3><code class="status">[]</code> Phase 5: Console setting — "Plan images: use placeholders" toggle (default ON)</h3>
+      <h3><code class="status">[x]</code> Phase 5: Console setting — "Plan images: use placeholders" toggle (default ON)</h3>
       <p>Surface the image policy as an operator setting in the console Settings modal. Ticked (default): planf3 embeds stock placeholders and never spends OpenAI tokens. Unticked: planf3 generates bespoke images, with <code>OPENAI_API_KEY</code> resolved just-in-time from the secrets vault — project-scoped secret first, platform-scoped secret as fallback.</p>
 
       <h4>5.1 Settings context (<code>lib/repo_builder/settings.ex</code>)</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Add <code>planf3_image_placeholders?/0</code> and <code>put_planf3_image_placeholders/1</code> to <code>RepoBuilder.Settings</code> (the sole <code>app_settings</code> Repo caller), following the existing get/put pattern; missing row ⇒ <code>true</code> — placeholders are the default without any migration or seed.</li>
-        <li><code class="status">[]</code> Full typed treatment per the project standard: <code>@spec</code> on both functions, boolean-only changeset validation, <code>{:ok, _} | {:error, changeset}</code> on the write path.</li>
+        <li><code class="status">[x]</code> Add <code>planf3_image_placeholders?/0</code> and <code>put_planf3_image_placeholders/1</code> to <code>RepoBuilder.Settings</code> (the sole <code>app_settings</code> Repo caller), following the existing get/put pattern; missing row ⇒ <code>true</code> — placeholders are the default without any migration or seed.</li>
+        <li><code class="status">[x]</code> Full typed treatment per the project standard: <code>@spec</code> on both functions, boolean-only changeset validation, <code>{:ok, _} | {:error, changeset}</code> on the write path.</li>
       </ul>
 
       <h4>5.2 Settings modal UI (<code>settings_components.ex</code> + <code>ConsoleLive</code>)</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Add a "Plan images: use placeholders (no OpenAI cost)" toggle to the <strong>General</strong> tab of the settings modal (<code>lib/repo_builder_web/components/console/settings_components.ex</code>), reusing the existing labeled-field + toggle-event pattern; checked state reads the Phase 5.1 getter, flips via a new <code>toggle_planf3_placeholders</code> event handled in <code>ConsoleLive</code>.</li>
-        <li><code class="status">[]</code> Helper text under the toggle: "Unticked: planf3 generates bespoke plan images with OpenAI — requires an OPENAI_API_KEY secret (project or platform scope) in the Secrets section." When unticked and <code>Secrets.list_names/1</code> shows no <code>OPENAI_API_KEY</code> in either scope, render an inline amber warning (masked names only — never values).</li>
+        <li><code class="status">[x]</code> Add a "Plan images: use placeholders (no OpenAI cost)" toggle to the <strong>General</strong> tab of the settings modal (<code>lib/repo_builder_web/components/console/settings_components.ex</code>), reusing the existing labeled-field + toggle-event pattern; checked state reads the Phase 5.1 getter, flips via a new <code>toggle_planf3_placeholders</code> event handled in <code>ConsoleLive</code>.</li>
+        <li><code class="status">[x]</code> Helper text under the toggle: "Unticked: planf3 generates bespoke plan images with OpenAI — requires an OPENAI_API_KEY secret (project or platform scope) in the Secrets section." When unticked and <code>Secrets.list_names/1</code> shows no <code>OPENAI_API_KEY</code> in either scope, render an inline amber warning (masked names only — never values).</li>
       </ul>
 
       <h4>5.3 Env injection at the ADW launch seam</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Where the platform builds the OS-child environment for ADW/worker processes (the vault merge at <code>lib/repo_builder/session/server.ex:293</code> — <code>Secrets.resolve_platform_env/0</code> merged under <code>Secrets.resolve_env(project_id)</code>), additionally set <code>PLANF3_IMAGES=placeholders</code> when the setting is ticked, else <code>PLANF3_IMAGES=generate</code>. The key itself needs no new code: an <code>OPENAI_API_KEY</code> secret deposited in either vault already reaches the child env via the existing merge (project overrides platform).</li>
-        <li><code class="status">[]</code> Honour the erlexec env-replace gotcha (children get a <em>replaced</em> env, not an inherited one): add <code>PLANF3_IMAGES</code> inside the same env-construction path, not via <code>System.put_env</code>.</li>
-        <li><code class="status">[]</code> Fail-safe stays in the command (Phase 1's env contract): <code>generate</code> without a resolvable key degrades to placeholders and records an Amendment note in the produced plan — a missing secret must never fail a plan run.</li>
+        <li><code class="status">[x]</code> Where the platform builds the OS-child environment for ADW/worker processes (the vault merge at <code>lib/repo_builder/session/server.ex:293</code> — <code>Secrets.resolve_platform_env/0</code> merged under <code>Secrets.resolve_env(project_id)</code>), additionally set <code>PLANF3_IMAGES=placeholders</code> when the setting is ticked, else <code>PLANF3_IMAGES=generate</code>. The key itself needs no new code: an <code>OPENAI_API_KEY</code> secret deposited in either vault already reaches the child env via the existing merge (project overrides platform).</li>
+        <li><code class="status">[x]</code> Honour the erlexec env-replace gotcha (children get a <em>replaced</em> env, not an inherited one): add <code>PLANF3_IMAGES</code> inside the same env-construction path, not via <code>System.put_env</code>.</li>
+        <li><code class="status">[x]</code> Fail-safe stays in the command (Phase 1's env contract): <code>generate</code> without a resolvable key degrades to placeholders and records an Amendment note in the produced plan — a missing secret must never fail a plan run.</li>
       </ul>
 
       <h4>5.4 Testing Strategy</h4>
       <p>ExUnit for the context, <code>Phoenix.LiveViewTest</code> for the modal toggle, and a seam test asserting the child-env contract — all Postgres-backed via the standard test cases.</p>
       <ul class="checklist">
-        <li><code class="status">[]</code> <code>mix test test/repo_builder/settings_test.exs</code> — getter defaults to <code>true</code> with no row; put/get round-trips; non-boolean rejected.</li>
-        <li><code class="status">[]</code> <code>mix test test/repo_builder_web/live/test_planf3_placeholder_setting_test.exs</code> — new LiveViewTest: open settings modal, General tab shows the toggle ticked by default; untick flips the persisted setting; missing-key warning renders when no <code>OPENAI_API_KEY</code> secret exists in either scope.</li>
-        <li><code class="status">[]</code> Seam test — with setting ticked the built child env carries <code>PLANF3_IMAGES=placeholders</code>; unticked plus a vault <code>OPENAI_API_KEY</code> carries <code>PLANF3_IMAGES=generate</code> and the decrypted key; project secret wins over platform secret.</li>
-        <li><code class="status">[]</code> Full green gate: <code>mix compile --warnings-as-errors && mix format --check-formatted && mix credo --strict && mix test --warnings-as-errors</code> (+ <code>mix dialyzer</code>).</li>
+        <li><code class="status">[x]</code> <code>mix test test/repo_builder/settings_test.exs</code> — getter defaults to <code>true</code> with no row; put/get round-trips; non-boolean rejected.</li>
+        <li><code class="status">[x]</code> <code>mix test test/repo_builder_web/live/test_planf3_placeholder_setting_test.exs</code> — new LiveViewTest: open settings modal, General tab shows the toggle ticked by default; untick flips the persisted setting; missing-key warning renders when no <code>OPENAI_API_KEY</code> secret exists in either scope.</li>
+        <li><code class="status">[x]</code> Seam test — with setting ticked the built child env carries <code>PLANF3_IMAGES=placeholders</code>; unticked plus a vault <code>OPENAI_API_KEY</code> carries <code>PLANF3_IMAGES=generate</code> and the decrypted key; project secret wins over platform secret.</li>
+        <li><code class="status">[x]</code> Full green gate: <code>mix compile --warnings-as-errors && mix format --check-formatted && mix credo --strict && mix test --warnings-as-errors</code> (+ <code>mix dialyzer</code>).</li>
       </ul>
       <div class="loop">
         🔁 <strong>Do not exit this phase until every box above is checked.</strong>
@@ -345,15 +345,15 @@
     <h2>Validation Commands</h2>
     <p>Execute these commands to validate the entire plan is complete:</p>
     <ul class="checklist">
-      <li><code class="status">[]</code> <code>test -f .claude/commands/planf3.md && test -f scripts/generate_gpt_image.py && test -d ai_docs/planf3 && test -d specs/.planf3-assets/placeholders</code> — command, image scripts, vendored workflows, and stock placeholder library are all in the repo.</li>
-      <li><code class="status">[]</code> <code>grep -rn '~/.claude\|\$HOME/.claude\|skills/planf3' .claude/commands/planf3.md ai_docs/planf3/ scripts/generate_gpt_image.py scripts/edit_gpt_image.py adws/adw_modules/</code> — no runtime dependency on the machine's <code>~/.claude</code> anywhere in the integration.</li>
-      <li><code class="status">[]</code> <code>grep -n '"/planf3"' adws/adw_modules/data_types.py adws/adw_modules/agent.py</code> — type literal and heavy model map registered.</li>
-      <li><code class="status">[]</code> <code>grep -n 'ADW_PLAN_COMMAND' adws/adw_modules/workflow_ops.py adws/README.md</code> — opt-in switch implemented and documented.</li>
-      <li><code class="status">[]</code> <code>grep -n '\.html' adws/adw_modules/workflow_ops.py</code> — <code>find_spec_file</code> discovers HTML specs.</li>
-      <li><code class="status">[]</code> <code>cd adws && uv run pytest adw_tests/ -q</code> — full ADW harness suite passes.</li>
-      <li><code class="status">[]</code> <code>ADW_PLAN_COMMAND=/planf3</code> heavy plan-only local run produces a valid <code>specs/*.html</code> plan discovered by <code>find_spec_file</code> — end-to-end proof.</li>
-      <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — green gate holds (mandatory: Phase 5 changes Settings, ConsoleLive, and the session env seam).</li>
-      <li><code class="status">[]</code> Settings round-trip: toggle unticked in the console + an <code>OPENAI_API_KEY</code> secret in either vault scope ⇒ a planf3 run generates bespoke images; toggle re-ticked ⇒ the next run embeds stock placeholders with zero OpenAI calls.</li>
+      <li><code class="status">[x]</code> <code>test -f .claude/commands/plan_f3.md && test -f scripts/generate_gpt_image.py && test -d ai_docs/planf3 && test -d specs/.planf3-assets/placeholders</code> — command, image scripts, vendored workflows, and stock placeholder library are all in the repo.</li>
+      <li><code class="status">[x]</code> <code>grep -rn '~/.claude\|\$HOME/.claude\|skills/planf3' .claude/commands/planf3.md ai_docs/planf3/ scripts/generate_gpt_image.py scripts/edit_gpt_image.py adws/adw_modules/</code> — no runtime dependency on the machine's <code>~/.claude</code> anywhere in the integration.</li>
+      <li><code class="status">[x]</code> <code>grep -n '"/plan_f3"' adws/adw_modules/data_types.py adws/adw_modules/agent.py</code> — type literal and heavy model map registered (command renamed to <code>/plan_f3</code>; see Amendments).</li>
+      <li><code class="status">[x]</code> <code>grep -n 'ADW_PLAN_COMMAND' adws/adw_modules/workflow_ops.py adws/README.md</code> — opt-in switch implemented and documented.</li>
+      <li><code class="status">[x]</code> <code>grep -n '\.html' adws/adw_modules/workflow_ops.py</code> — <code>find_spec_file</code> discovers HTML specs.</li>
+      <li><code class="status">[x]</code> <code>cd adws && uv run pytest adw_tests/ -q</code> — full ADW harness suite passes.</li>
+      <li><code class="status">[x]</code> <code>ADW_PLAN_COMMAND=/planf3</code> heavy plan-only local run produces a valid <code>specs/*.html</code> plan discovered by <code>find_spec_file</code> — end-to-end proof.</li>
+      <li><code class="status">[x]</code> <code>mix test --warnings-as-errors</code> — green gate holds (mandatory: Phase 5 changes Settings, ConsoleLive, and the session env seam).</li>
+      <li><code class="status">[x]</code> Settings round-trip: toggle unticked in the console + an <code>OPENAI_API_KEY</code> secret in either vault scope ⇒ a planf3 run generates bespoke images; toggle re-ticked ⇒ the next run embeds stock placeholders with zero OpenAI calls.</li>
     </ul>
     <div class="loop">
       🔁 <strong>The plan is not complete until every box is checked and every command passes. If for some reason a step is not possible to complete, mark it with [f] and move on if possible.</strong>
@@ -429,6 +429,9 @@
     <details>
       <summary>2026-07-04T10:30:00+01:00 — Console setting: "Plan images: use placeholders" toggle (default ON) backed by the secrets vault</summary>
       <p>User directive: the placeholder behaviour should be a settings-modal toggle, ticked by default; when unticked, planf3 may generate images using an <code>OPENAI_API_KEY</code> stored in the Secrets section at project or platform scope. Added Phase 5: <code>Settings.planf3_image_placeholders?/0</code> (missing row ⇒ <code>true</code>), a General-tab toggle with a missing-key warning driven by <code>Secrets.list_names/1</code>, and <code>PLANF3_IMAGES=placeholders|generate</code> injected at the existing vault-merge env seam (<code>session/server.ex:293</code>, project secret over platform secret, erlexec env-replace respected). Phase 1's image policy gained the <code>PLANF3_IMAGES</code> env contract with a degrade-to-placeholders fail-safe. Relevant/New Files, a key-precedence Questionable, and the global Validation Commands (mix green gate now mandatory, plus a settings round-trip check) were updated to match.</p>
+    <details>
+      <summary>2026-07-04T23:05:00+01:00 — Built (all 5 phases). Two execution deviations: output-contract salvage in build_plan, and the command renamed to /plan_f3</summary>
+      <p>Build Plan execution (commits <code>0b13ec9</code>, <code>d8339b5</code>, <code>cd36dee</code> + the Phase 5 Elixir commit). Acceptance run #1 (<code>0d9c026a</code>) failed: the planner ignored the filename convention and replied with a summary instead of the bare path. Fixes: the command's argument/filename/report contracts were hardened, and <code>build_plan</code> gained an output-contract salvage that extracts an existing <code>specs/*.{html,md}</code> from a chatty reply (regression-tested). Run #2 (<code>5fc7db36</code>) exposed the real root cause: the machine's user-scope <code>~/.claude/skills/planf3</code> shadows a project command named <code>planf3</code> — the agent followed the skill's create-plan.md instead of the repo command, violating the zero-<code>~/.claude</code> requirement. Fix: the project command is named <code>/plan_f3</code> (file <code>.claude/commands/plan_f3.md</code>, <code>ADW_PLAN_COMMAND=/plan_f3</code>), which no user-scope artifact can shadow; all harness/docs references renamed. Run #3 (<code>03b11fd8</code>) passed all five acceptance criteria: opus (heavy tier) planner, convention-named <code>specs/issue-9241951-adw-03b11fd8-sdlc_planner-pg-sh-version-flag.html</code>, <code>state.plan_file</code> set, zero leftover template tokens, four stock placeholder embeds, no OpenAI call. Full green gate ran: compile/format/credo/dialyzer clean; full suite 1746/1747 with one load-dependent pre-existing flake (<code>secret_redaction_e2e_test</code> — passes 3/3 solo). Plan-text references to <code>/planf3</code> as the command name should be read as <code>/plan_f3</code>.</p>
     </details>
   </section>
 

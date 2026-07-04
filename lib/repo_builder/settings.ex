@@ -3,7 +3,7 @@ defmodule RepoBuilder.Settings do
   Operator-editable application settings (BUILD_PROMPT.md §8). This module is the **only**
   `Repo` caller for the `app_settings` table.
 
-  It backs two settings today:
+  It backs three settings today:
 
     * the **global default worker-model roster** (`"default_agent_models"`) — a new
       project's orchestrator seeds its per-project roster
@@ -14,6 +14,11 @@ defmodule RepoBuilder.Settings do
     * the operator's **last-selected console project** (`"active_project"`) — so the console
       reopens on the same project after navigating away or reloading
       (`get_active_project_id/0` / `put_active_project_id/1`).
+    * the **planf3 plan-image policy** (`"planf3_image_placeholders"`) — ticked (the
+      default when no row exists) means planf3 plans embed stock placeholder images and
+      never call OpenAI; unticked lets planf3 generate bespoke images, with the
+      `OPENAI_API_KEY` resolved from the secrets vault at the OS-child env boundary
+      (`planf3_image_placeholders?/0` / `put_planf3_image_placeholders/1`).
 
   When no `"default_agent_models"` row exists yet (first boot / tests), reads fall back to
   the compile-time `config :repo_builder, :default_agent_models` map.
@@ -84,6 +89,45 @@ defmodule RepoBuilder.Settings do
     )
     |> case do
       {:ok, %AppSetting{value: value}} -> {:ok, value}
+      {:error, %Ecto.Changeset{} = changeset} -> {:error, changeset}
+    end
+  end
+
+  @planf3_placeholders_key "planf3_image_placeholders"
+
+  @doc """
+  Whether planf3 plans should embed stock placeholder images instead of generating
+  bespoke ones via OpenAI. Defaults to `true` (placeholders — zero image spend) when no
+  row exists, so no migration or seed is needed. The launch seam translates this into
+  `PLANF3_IMAGES=placeholders|generate` on ADW/worker child processes.
+  """
+  @spec planf3_image_placeholders?() :: boolean()
+  def planf3_image_placeholders? do
+    case Repo.get_by(AppSetting, key: @planf3_placeholders_key) do
+      %AppSetting{value: %{"enabled" => enabled}} when is_boolean(enabled) -> enabled
+      _ -> true
+    end
+  end
+
+  @doc """
+  Persist the planf3 plan-image policy. Boolean-only by the guard; the stored value is
+  string-keyed JSON to round-trip through JSONB unchanged.
+  """
+  @spec put_planf3_image_placeholders(boolean()) ::
+          {:ok, boolean()} | {:error, Ecto.Changeset.t()}
+  def put_planf3_image_placeholders(enabled) when is_boolean(enabled) do
+    %AppSetting{}
+    |> AppSetting.changeset(%{
+      "key" => @planf3_placeholders_key,
+      "value" => %{"enabled" => enabled}
+    })
+    |> Repo.insert(
+      on_conflict: {:replace, [:value, :updated_at]},
+      conflict_target: :key,
+      returning: true
+    )
+    |> case do
+      {:ok, %AppSetting{value: %{"enabled" => stored}}} -> {:ok, stored}
       {:error, %Ecto.Changeset{} = changeset} -> {:error, changeset}
     end
   end

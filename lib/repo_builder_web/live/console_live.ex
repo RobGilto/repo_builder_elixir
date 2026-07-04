@@ -147,6 +147,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
         timezone: RepoBuilder.Timezones.default(),
         auto_follow?: true,
         show_thinking?: true,
+        # planf3 plan-image policy (spec planf3-html-plans-for-heavy-adw-planner):
+        # placeholders ON by default; connected mount reads the persisted setting +
+        # whether an OPENAI_API_KEY secret exists in either vault scope.
+        planf3_placeholders?: true,
+        planf3_key_present?: false,
         # Reveal logs/workflows soft-hidden by CLEAR (settings troubleshooting toggle).
         show_hidden?: false,
         # Transient "Released N rows" confirmation for the Release action (nil ⇒ none).
@@ -311,6 +316,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
         |> seed_lanes()
         |> Shared.seed_workflow_progress()
         |> Shared.seed_budget()
+        |> Shared.seed_planf3_image_policy()
         # assign_orchestrator must precede backfill_events: it reads the persisted
         # display timezone into assigns, which backfill_events uses to format row times.
         # It must also precede seed_cost/seed_orchestrator_cost, which read orchestrator_id.
@@ -2183,6 +2189,8 @@ defmodule RepoBuilderWeb.ConsoleLive do
         reasoning_efforts={Orchestrators.reasoning_efforts()}
         timezone={@timezone}
         timezones={RepoBuilder.Timezones.list()}
+        planf3_placeholders?={@planf3_placeholders?}
+        planf3_key_present?={@planf3_key_present?}
         template_rows={@template_rows}
         selected_template={@selected_template}
         template_versions={@template_versions}

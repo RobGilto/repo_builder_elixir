@@ -82,6 +82,27 @@ defmodule RepoBuilderWeb.ConsoleLive.Shared do
     )
   end
 
+  @doc """
+  Seed the planf3 plan-image policy assigns (spec planf3-html-plans-for-heavy-adw-planner,
+  Phase 5): the persisted placeholders toggle (default ON — zero image spend) and whether
+  an `OPENAI_API_KEY` secret exists in either vault scope (project or platform, masked
+  names only) so the General tab can warn when generation is enabled without a key.
+  """
+  @spec seed_planf3_image_policy(Socket.t()) :: Socket.t()
+  def seed_planf3_image_policy(socket) do
+    assign(socket,
+      planf3_placeholders?: Settings.planf3_image_placeholders?(),
+      planf3_key_present?: planf3_key_present?(socket.assigns[:active_project_id])
+    )
+  end
+
+  @doc "Whether an OPENAI_API_KEY secret exists at project or platform scope (names only)."
+  @spec planf3_key_present?(String.t() | nil) :: boolean()
+  def planf3_key_present?(project_id) do
+    (RepoBuilder.Secrets.list_names(project_id) ++ RepoBuilder.Secrets.list_names(nil))
+    |> Enum.any?(&(&1.name == "OPENAI_API_KEY"))
+  end
+
   # Merge the durable DB caps (authoritative + editable) with the live Guard snapshot
   # (spend/state), keyed by cap id. DB caps anchor the editable rows; snapshot-only caps
   # (a not-yet-reconciled memory cap) still surface so no cap is unreachable. A DB cap with

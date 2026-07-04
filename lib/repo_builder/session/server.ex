@@ -258,7 +258,52 @@ defmodule RepoBuilder.Session.Server do
     |> Map.merge(configured)
     |> Map.merge(tool_secrets(opts[:config] || %{}))
     |> Map.merge(api_secrets(opts))
+    |> Map.merge(planf3_env(opts))
     |> Map.merge(opts[:secrets] || %{})
+  end
+
+  # The planf3 plan-image policy for the child env (spec
+  # planf3-html-plans-for-heavy-adw-planner). Children get a REPLACED env (erlexec, §6),
+  # so the variable must ride this merge — never `System.put_env`. Placeholders ON (the
+  # default) ⇒ `PLANF3_IMAGES=placeholders` and no key exposure. OFF ⇒
+  # `PLANF3_IMAGES=generate` plus the vault `OPENAI_API_KEY` (project shadows platform);
+  # WORKERS ONLY for the key — the orchestrator brain never holds a token. A missing key
+  # ships `generate` alone: the /planf3 command degrades to placeholders rather than
+  # failing the run. The Settings read is wrapped so a DB hiccup can never stop a session
+  # from starting (fail-safe to placeholders — the zero-cost path).
+  @spec planf3_env(keyword()) :: %{optional(String.t()) => String.t()}
+  defp planf3_env(opts) do
+    placeholders? =
+      try do
+        RepoBuilder.Settings.planf3_image_placeholders?()
+      rescue
+        _error -> true
+      catch
+        _kind, _reason -> true
+      end
+
+    cond do
+      placeholders? ->
+        %{"PLANF3_IMAGES" => "placeholders"}
+
+      orchestrator_session?(opts) ->
+        %{"PLANF3_IMAGES" => "generate"}
+
+      true ->
+        vault =
+          Map.merge(
+            Secrets.resolve_platform_env(),
+            Secrets.resolve_env(opts[:project_id])
+          )
+
+        case Map.get(vault, "OPENAI_API_KEY") do
+          value when is_binary(value) ->
+            %{"PLANF3_IMAGES" => "generate", "OPENAI_API_KEY" => value}
+
+          _absent ->
+            %{"PLANF3_IMAGES" => "generate"}
+        end
+    end
   end
 
   # Fold in the encrypted-vault secrets for the dynamic external APIs provisioned to this
