@@ -464,7 +464,7 @@ defmodule RepoBuilderWeb.Console.AdwBuilderComponents do
             </div>
             <div class="flex flex-wrap gap-1">
               <button
-                :for={step <- ~w(plan patch build test review document ship)}
+                :for={step <- ~w(plan plan_f3 feature patch build test review document ship)}
                 type="button"
                 phx-click="adw_add_step"
                 phx-value-step={step}
@@ -834,13 +834,11 @@ defmodule RepoBuilderWeb.Console.AdwBuilderComponents do
     end)
   end
 
-  # The command / prompt-markdown a builder step actually invokes at run time (per
-  # adws/adw_modules/workflow_ops.py). Chip + step-row labels show THIS — the md that
-  # runs — so what the operator clicks names the real prompt. The canonical step id
-  # (plan/build/…) stays the pipeline vocabulary the Python dispatch and adw_new.py
-  # VALID_STEPS allowlist match on, so only the DISPLAY label changes here.
+  # Step display label. The chip and step-row both render this. The canonical step id
+  # (the atom in @step_atoms) is what gets sent on phx-value-step and what Python
+  # VALID_STEPS allowlists. The only optional aliases left are operator-friendly
+  # shortenings for non-planning steps (build→implement, ship→commit + pr).
   @spec adw_step_command(String.t()) :: String.t()
-  defp adw_step_command("plan"), do: "feature"
   defp adw_step_command("build"), do: "implement"
   defp adw_step_command("ship"), do: "commit + pr"
   defp adw_step_command(other), do: other

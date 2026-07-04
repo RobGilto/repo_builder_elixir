@@ -25,7 +25,7 @@ import argparse
 import os
 import sys
 
-VALID_STEPS = ["plan", "patch", "build", "test", "review", "document", "ship"]
+VALID_STEPS = ["plan", "plan_f3", "feature", "patch", "build", "test", "review", "document", "ship"]
 
 
 def make_script(name: str, steps: list[str], local: bool) -> str:
@@ -44,6 +44,22 @@ def make_script(name: str, steps: list[str], local: bool) -> str:
         f'        print("  {i + 1}. {step.title()}")'
         for i, step in enumerate(steps)
     )
+
+    # plan_f3: HTML-first planning into specs/ via /plan_f3 (no classify_issue).
+    plan_f3_block = """    # Plan_f3: HTML-first planning into specs/ via /plan_f3 (no classify_issue).
+    print(f"\\n=== PLAN_F3 PHASE ===")
+    from adw_modules.workflow_ops import build_plan
+    plan_resp, plan_err = build_plan(issue, "/plan_f3", adw_id, logger, working_dir=script_dir)
+    if plan_err:
+        sys.exit(f"plan_f3 step failed: {plan_err}")"""
+
+    # feature: direct /feature planning (no classify_issue, no /bug-/chore rerouting).
+    feature_block = """    # Feature: direct /feature planning (no classify_issue, no /bug-/chore rerouting).
+    print(f"\\n=== FEATURE PHASE ===")
+    from adw_modules.workflow_ops import build_plan
+    plan_resp, plan_err = build_plan(issue, "/feature", adw_id, logger, working_dir=script_dir)
+    if plan_err:
+        sys.exit(f"feature step failed: {plan_err}")"""
 
     # Real-merge ship for _local_iso scripts: no adw_ship_local_iso.py exists,
     # so ship is inlined via the shared trunk-aware merge helper (merge_ops).
@@ -70,6 +86,12 @@ def make_script(name: str, steps: list[str], local: bool) -> str:
     for step in steps:
         if step == "ship" and local:
             step_blocks.append(local_ship_block)
+            continue
+        if step == "plan_f3":
+            step_blocks.append(plan_f3_block)
+            continue
+        if step == "feature":
+            step_blocks.append(feature_block)
             continue
         var = step.replace("-", "_")
         cmd_var = f"{var}_cmd"

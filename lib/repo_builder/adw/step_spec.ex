@@ -23,6 +23,8 @@ defmodule RepoBuilder.Adw.StepSpec do
   # Fixed string→atom map so untrusted wire strings never reach `String.to_atom/1`.
   @step_atoms %{
     "plan" => :plan,
+    "plan_f3" => :plan_f3,
+    "feature" => :feature,
     "patch" => :patch,
     "build" => :build,
     "test" => :test,

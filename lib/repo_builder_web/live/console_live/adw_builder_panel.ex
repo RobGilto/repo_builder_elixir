@@ -323,7 +323,8 @@ defmodule RepoBuilderWeb.ConsoleLive.AdwBuilderPanel do
 
   # --- public helpers (also exercised directly from tests) ---
 
-  @type step_atom :: :build | :document | :patch | :plan | :review | :ship | :test
+  @type step_atom ::
+          :build | :document | :feature | :patch | :plan | :plan_f3 | :review | :ship | :test
 
   @type step_resolution ::
           {:ok, [StepSpec.t()]}

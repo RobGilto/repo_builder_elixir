@@ -7,20 +7,21 @@ defmodule RepoBuilder.Adw.Scaffold do
 
   Three templates, one per flavor:
 
-    * `:iso` — reproduces `adws/adw_new.py:make_script(name, steps, local=false)`
+    * `:iso` - reproduces `adws/adw_new.py:make_script(name, steps, local=false)`
       BYTE-FOR-BYTE (the subprocess-chaining GitHub composite, twin of
       `adws/adw_plan_build_iso.py`). A golden fixture pins the parity.
-    * `:local_iso` — a thin MONOLITHIC script (single `<adw-id>` + `run.json` local
+    * `:local_iso` - a thin MONOLITHIC script (single `<adw-id>` + `run.json` local
       contract) that delegates step-threading to `adw_modules.workflow_ops.run_local_workflow`.
       It deliberately does NOT emit the broken chaining form `adw_new.py --local` would.
-    * `:direct` — like `:local_iso` but runs steps in the CURRENT CHECKOUT in place
-      (`isolated=False`) — no throwaway worktree, no new branch, ships via direct commit.
+    * `:direct` - like `:local_iso` but runs steps in the CURRENT CHECKOUT in place
+      (`isolated=False`) - no throwaway worktree, no new branch, ships via direct commit.
 
   This is Elixir-native and deterministic (no `uv` needed) so `mix test` covers it; the
   `@tag :external` parity test asserts it cannot drift from `adw_new.py` when `uv` is present.
   """
 
-  @type step :: :plan | :patch | :build | :test | :review | :document | :ship
+  @type step ::
+          :plan | :plan_f3 | :feature | :patch | :build | :test | :review | :document | :ship
   @type flavor :: :iso | :local_iso | :direct
   @type reason :: atom() | {atom(), term()}
 
@@ -36,7 +37,7 @@ defmodule RepoBuilder.Adw.Scaffold do
   @type generated :: %{path: String.t(), name: String.t(), script: String.t()}
 
   # Step allowlist parity with `adws/adw_new.py:VALID_STEPS`.
-  @valid_steps [:plan, :patch, :build, :test, :review, :document, :ship]
+  @valid_steps [:plan, :plan_f3, :feature, :patch, :build, :test, :review, :document, :ship]
 
   @doc """
   Pure render of the combo's Python script text for its flavor. Validates the name
@@ -62,7 +63,7 @@ defmodule RepoBuilder.Adw.Scaffold do
   @doc """
   Render + write the script under `<root>/adws/`, `chmod 0755`. Refuses to overwrite an
   existing file unless `overwrite: true` (`{:error, :exists}`). Returns the absolute path,
-  the filename stem, and the written text. Total — filesystem errors map to `{:error, _}`.
+  the filename stem, and the written text. Total - filesystem errors map to `{:error, _}`.
   """
   @spec generate(request()) :: {:ok, generated()} | {:error, reason()}
   def generate(request) when is_map(request) do
@@ -98,7 +99,10 @@ defmodule RepoBuilder.Adw.Scaffold do
   end
 
   @doc "The step allowlist (atoms), parity with `adw_new.py:VALID_STEPS`."
-  @spec valid_steps() :: [:build | :document | :patch | :plan | :review | :ship | :test, ...]
+  @spec valid_steps() :: [
+          :build | :document | :feature | :patch | :plan | :plan_f3 | :review | :ship | :test,
+          ...
+        ]
   def valid_steps, do: @valid_steps
 
   # --- internals ---
@@ -311,7 +315,7 @@ defmodule RepoBuilder.Adw.Scaffold do
         if len(sys.argv) < 2:
             print("Usage: uv run #{script_name} <adw-id>")
             print("\\nError: the run record agents/<adw-id>/run.json is the task")
-            print("context — create it first (local_ops.create_run or the")
+            print("context - create it first (local_ops.create_run or the")
             print("orchestrator app), then launch with its adw-id.")
             sys.exit(1)
 
@@ -322,7 +326,7 @@ defmodule RepoBuilder.Adw.Scaffold do
         # Validate environment (CLAUDE_CODE_PATH is the only hard requirement)
         check_env_vars(logger)
 
-        # Load and validate the run record — it IS the launch context
+        # Load and validate the run record - it IS the launch context
         run = local_ops.load_run(adw_id)
         if run is None:
             print(f"No run record at agents/{adw_id}/run.json")
@@ -367,7 +371,7 @@ defmodule RepoBuilder.Adw.Scaffold do
 
     This is a GENERATED combo (RepoBuilder.Adw.Scaffold). Step-threading is delegated to
     adw_modules.workflow_ops.run_local_workflow with isolated=False so every step runs
-    against the current checkout in place — no throwaway worktree, no branch, ships via a
+    against the current checkout in place - no throwaway worktree, no branch, ships via a
     direct commit on the current branch.
     \"\"\"
 
@@ -390,7 +394,7 @@ defmodule RepoBuilder.Adw.Scaffold do
         if len(sys.argv) < 2:
             print("Usage: uv run #{script_name} <adw-id>")
             print("\\nError: the run record agents/<adw-id>/run.json is the task")
-            print("context — create it first (local_ops.create_run or the")
+            print("context - create it first (local_ops.create_run or the")
             print("orchestrator app), then launch with its adw-id.")
             sys.exit(1)
 
@@ -401,7 +405,7 @@ defmodule RepoBuilder.Adw.Scaffold do
         # Validate environment (CLAUDE_CODE_PATH is the only hard requirement)
         check_env_vars(logger)
 
-        # Load and validate the run record — it IS the launch context
+        # Load and validate the run record - it IS the launch context
         run = local_ops.load_run(adw_id)
         if run is None:
             print(f"No run record at agents/{adw_id}/run.json")
