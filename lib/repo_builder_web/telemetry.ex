@@ -58,6 +58,23 @@ defmodule RepoBuilderWeb.Telemetry do
         unit: {:native, :millisecond}
       ),
 
+      # LiveView performance — visible in Phoenix LiveDashboard at /dev/dashboard
+      summary("phoenix.live_view.mount.stop.duration",
+        tags: [:view],
+        unit: {:native, :millisecond},
+        description: "Wall-clock time for a LiveView mount (connected phase) to complete"
+      ),
+      summary("phoenix.live_view.handle_event.stop.duration",
+        tags: [:view, :event],
+        unit: {:native, :millisecond},
+        description: "Wall-clock time for a LiveView handle_event callback to complete"
+      ),
+      summary("phoenix.live_view.handle_params.stop.duration",
+        tags: [:view],
+        unit: {:native, :millisecond},
+        description: "Wall-clock time for a LiveView handle_params callback to complete"
+      ),
+
       # Database Metrics
       summary("repo_builder.repo.query.total_time",
         unit: {:native, :millisecond},

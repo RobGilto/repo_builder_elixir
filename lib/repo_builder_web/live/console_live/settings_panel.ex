@@ -15,6 +15,7 @@ defmodule RepoBuilderWeb.ConsoleLive.SettingsPanel do
   alias RepoBuilder.{Definitions, Orchestrators, StackLayers}
   alias RepoBuilder.FileBrowser
   alias RepoBuilder.StackLayers.StackLayer
+  alias RepoBuilderWeb.ConsoleLive.ExternalApisPanel
   alias RepoBuilderWeb.ConsoleLive.Shared
 
   @events ~w(save_system_prompt set_system_prompt_mode reset_system_prompt save_working_dir
@@ -162,16 +163,23 @@ defmodule RepoBuilderWeb.ConsoleLive.SettingsPanel do
     end
   end
 
+  # Each data-backed tab loads its rows on OPEN — none of these are seeded during
+  # ConsoleLive's connected mount anymore (navigation-perf fix), so opening the tab
+  # is the single load point.
   def handle_event("select_settings_tab", %{"tab" => tab}, socket) do
     selected = settings_tab(tab)
     socket = assign(socket, :settings_tab, selected)
-    socket = if selected == :cost_center, do: Shared.load_cost_center(socket), else: socket
-    socket = if selected == :stack_layers, do: load_stack_layers(socket), else: socket
 
     socket =
-      if selected == :default_models,
-        do: assign(socket, :default_model_rows, Shared.default_model_rows()),
-        else: socket
+      case selected do
+        :cost_center -> Shared.load_cost_center(socket)
+        :stack_layers -> load_stack_layers(socket)
+        :default_models -> assign(socket, :default_model_rows, Shared.default_model_rows())
+        :logs -> Shared.seed_log_manager(socket)
+        :templates -> Shared.assign_template_rows(socket)
+        :external_apis -> ExternalApisPanel.load_external_apis(socket)
+        _other -> socket
+      end
 
     {:noreply, socket}
   end

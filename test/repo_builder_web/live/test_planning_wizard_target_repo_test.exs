@@ -50,7 +50,7 @@ defmodule RepoBuilderWeb.TestPlanningWizardTargetRepoTest do
 
   defp walk_to_preview(view, project, goal) do
     render_submit(element(view, "#wizard-project"), %{"project_id" => project.id})
-    render_submit(element(view, "#wizard-goal"), %{"goal" => goal})
+    render_submit(element(view, "#wizard-goal-freestyle"), %{"goal" => goal})
 
     render_submit(element(view, "#wizard-workflow"), %{
       "workflow_type" => "plan_build",

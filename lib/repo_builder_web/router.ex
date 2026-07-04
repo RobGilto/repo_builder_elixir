@@ -17,24 +17,30 @@ defmodule RepoBuilderWeb.Router do
   scope "/", RepoBuilderWeb do
     pipe_through :browser
 
-    live "/", ConsoleLive
+    # One live_session group for every browser-facing LiveView so `navigate=` between
+    # these routes reuses the existing WebSocket transport (a process swap) instead of
+    # a full dead-render + new connection + cold remount on every cross-page click.
+    # No on_mount: there is no auth guard or session-scoped data to inject.
+    live_session :app do
+      live "/", ConsoleLive
 
-    live "/dashboard", DashboardLive
-    live "/agents/:id", AgentLive
-    live "/workflows/:id", WorkflowLive
-    live "/system-logs", SystemLogsLive
+      live "/dashboard", DashboardLive
+      live "/agents/:id", AgentLive
+      live "/workflows/:id", WorkflowLive
+      live "/system-logs", SystemLogsLive
 
-    # Agentic-layer adaptor: target-repo management + the planning-mode wizard.
-    live "/projects", ProjectsLive, :index
-    live "/projects/:id", ProjectsLive, :show
-    live "/plan", PlanningLive, :new
-    live "/plans/:id", PlanningLive, :show
+      # Agentic-layer adaptor: target-repo management + the planning-mode wizard.
+      live "/projects", ProjectsLive, :index
+      live "/projects/:id", ProjectsLive, :show
+      live "/plan", PlanningLive, :new
+      live "/plans/:id", PlanningLive, :show
 
-    # Agentic plugin system: the plugin store / management UI.
-    live "/plugins", PluginsLive
+      # Agentic plugin system: the plugin store / management UI.
+      live "/plugins", PluginsLive
 
-    # The Forge: author project-specific tooling (forge-meta-artifact-generation).
-    live "/forge", ForgeLive
+      # The Forge: author project-specific tooling (forge-meta-artifact-generation).
+      live "/forge", ForgeLive
+    end
   end
 
   scope "/webhooks", RepoBuilderWeb do

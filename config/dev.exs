@@ -74,6 +74,10 @@ config :repo_builder, RepoBuilderWeb.Endpoint,
 # Enable dev routes for dashboard and mailbox
 config :repo_builder, dev_routes: true
 
+# Attach the LiveView perf telemetry handler in dev so mount/handle_event timing
+# lines ([lv_perf] …) land in the server log (RepoBuilder.Telemetry.LiveViewPerf).
+config :repo_builder, :lv_perf_handler, attach: true
+
 # Do not include metadata nor timestamps in development logs
 config :logger, :default_formatter, format: "[$level] $message\n"
 

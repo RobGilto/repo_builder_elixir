@@ -4,6 +4,7 @@ defmodule RepoBuilder.SecretRedactionE2ETest do
   import Mox
 
   alias RepoBuilder.{Agents, Logs}
+  alias RepoBuilder.Logs.Writer
 
   @mock RepoBuilder.Harness.Mock
   @secret "sk-super-secret-key-1234567890"
@@ -54,6 +55,10 @@ defmodule RepoBuilder.SecretRedactionE2ETest do
     assert_receive {:harness_event, %Event.TextDelta{raw: raw}}, 2_000
     assert raw["authorization"] == @secret
     assert_receive {:DOWN, ^ref, :process, _, _}, 2_000
+
+    # Persistence is async (Logs.Writer cast) — drain the writers so every in-flight
+    # insert lands before we read, instead of racing the cast (order-dependent flake).
+    :ok = Writer.drain()
 
     # No persisted agent_logs payload contains the secret anywhere.
     logs = Logs.list_recent(agent.id)

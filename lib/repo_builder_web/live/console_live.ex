@@ -331,9 +331,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
         |> seed_cost()
         |> seed_orchestrator_cost()
         |> Shared.backfill_events()
-        |> Shared.seed_log_manager()
-        |> Shared.assign_template_rows()
-        |> ExternalApisPanel.load_external_apis()
+        # seed_log_manager / assign_template_rows / load_external_apis are NOT called
+        # here: those tabs are closed on mount, so their data is lazy-loaded on tab
+        # open (SettingsPanel "select_settings_tab") instead of taxing every mount.
         |> Shared.seed_definitions()
         |> subscribe_feeds()
         |> tap(fn _ -> PiModels.refresh_async() end)
@@ -488,7 +488,12 @@ defmodule RepoBuilderWeb.ConsoleLive do
 
   @spec seed_agent_costs(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp seed_agent_costs(socket) do
-    costs = Map.new(socket.assigns.agents, &{&1.id, nilify_zero(Logs.cost_rollup!(&1.id))})
+    agent_ids = Enum.map(socket.assigns.agents, & &1.id)
+    rollups = Logs.cost_rollup_for_agents!(agent_ids)
+
+    costs =
+      Map.new(agent_ids, fn id -> {id, nilify_zero(Map.get(rollups, id, Decimal.new(0)))} end)
+
     assign(socket, :agent_costs, costs)
   end
 
@@ -1808,7 +1813,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
         />
         <.link navigate={~p"/projects"} class="text-xs text-cyan-400">manage</.link>
         <.link
-          navigate={if @active_project_id, do: ~p"/plan?project_id=#{@active_project_id}", else: ~p"/plan"}
+          navigate={
+            if @active_project_id, do: ~p"/plan?project_id=#{@active_project_id}", else: ~p"/plan"
+          }
           class="text-xs text-cyan-400"
         >plan a run</.link>
       </div>

@@ -47,6 +47,10 @@ defmodule RepoBuilderWeb.TestOrchestratorEventsInScopedLogTest do
 
     {:ok, view, _html} = live(conn, ~p"/")
 
+    # Error events are `:system`-category rows, hidden by default in the center stream
+    # (issue filter-sys-logs). Opt into the SYS chip so the marker rows are visible.
+    view |> element("#filter-system") |> render_click()
+
     # The mounted (active) project is the default/home project; resolve its bound brain.
     assert home.id == Projects.default_project().id
     assert {:ok, orch} = Orchestrators.get_or_create_for_project(home.id)

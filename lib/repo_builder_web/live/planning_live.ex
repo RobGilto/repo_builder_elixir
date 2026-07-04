@@ -124,29 +124,7 @@ defmodule RepoBuilderWeb.PlanningLive do
         end
 
       :spec ->
-        spec_path = Map.get(params, "spec_path", "") |> String.trim()
-
-        if spec_path == "" do
-          {:noreply, assign(socket, error: "Enter a spec path")}
-        else
-          abs_path = Path.join(socket.assigns.selected_project.root_path, spec_path)
-
-          if File.exists?(abs_path) do
-            goal = "build the plan at #{spec_path}"
-
-            {:noreply,
-             assign(socket,
-               spec_path: spec_path,
-               goal: goal,
-               intent: "spec_implementation",
-               error: nil,
-               step: 3
-             )}
-          else
-            {:noreply,
-             assign(socket, spec_path: spec_path, error: "Spec not found: #{abs_path}")}
-          end
-        end
+        set_spec_goal(socket, Map.get(params, "spec_path", "") |> String.trim())
     end
   end
 
@@ -193,6 +171,29 @@ defmodule RepoBuilderWeb.PlanningLive do
 
       {:error, _other} ->
         {:noreply, assign(socket, error: "Launch failed")}
+    end
+  end
+
+  # Step-2 spec mode: validate the project-relative spec path exists, then derive
+  # the goal from it. Extracted from "set_goal" to keep nesting shallow.
+  @spec set_spec_goal(Phoenix.LiveView.Socket.t(), String.t()) ::
+          {:noreply, Phoenix.LiveView.Socket.t()}
+  defp set_spec_goal(socket, ""), do: {:noreply, assign(socket, error: "Enter a spec path")}
+
+  defp set_spec_goal(socket, spec_path) do
+    abs_path = Path.join(socket.assigns.selected_project.root_path, spec_path)
+
+    if File.exists?(abs_path) do
+      {:noreply,
+       assign(socket,
+         spec_path: spec_path,
+         goal: "build the plan at #{spec_path}",
+         intent: "spec_implementation",
+         error: nil,
+         step: 3
+       )}
+    else
+      {:noreply, assign(socket, spec_path: spec_path, error: "Spec not found: #{abs_path}")}
     end
   end
 
@@ -445,7 +446,9 @@ defmodule RepoBuilderWeb.PlanningLive do
           <h2 class="font-semibold">
             3 · Workflow &amp; budget
             <span class="font-normal text-zinc-400 text-sm">
-              (<span :if={@plan_mode == :spec}>spec: <code>{@spec_path}</code></span><span :if={@plan_mode == :freestyle}>intent: {@intent}</span>)
+              (<span :if={@plan_mode == :spec}>spec: <code>{@spec_path}</code></span><span :if={
+                @plan_mode == :freestyle
+              }>intent: {@intent}</span>)
             </span>
           </h2>
           <form id="wizard-workflow" phx-submit="set_workflow" class="space-y-2">

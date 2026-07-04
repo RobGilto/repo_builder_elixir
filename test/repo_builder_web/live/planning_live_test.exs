@@ -55,7 +55,7 @@ defmodule RepoBuilderWeb.PlanningLiveTest do
     {:ok, view, _html} = live(conn, ~p"/plan")
 
     render_submit(element(view, "#wizard-project"), %{"project_id" => project.id})
-    render_submit(element(view, "#wizard-goal"), %{"goal" => "add a feature"})
+    render_submit(element(view, "#wizard-goal-freestyle"), %{"goal" => "add a feature"})
 
     render_submit(element(view, "#wizard-workflow"), %{
       "workflow_type" => "plan_build",
@@ -83,7 +83,7 @@ defmodule RepoBuilderWeb.PlanningLiveTest do
     {:ok, view, _html} = live(conn, ~p"/plan")
 
     render_submit(element(view, "#wizard-project"), %{"project_id" => project.id})
-    render_submit(element(view, "#wizard-goal"), %{"goal" => "add a feature"})
+    render_submit(element(view, "#wizard-goal-freestyle"), %{"goal" => "add a feature"})
 
     # A microscopic cap is guaranteed below any non-zero estimate.
     render_submit(element(view, "#wizard-workflow"), %{

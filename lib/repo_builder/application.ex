@@ -6,12 +6,18 @@ defmodule RepoBuilder.Application do
   use Application
 
   alias RepoBuilder.Telemetry.Alerting
+  alias RepoBuilder.Telemetry.LiveViewPerf
 
   @impl true
   def start(_type, _args) do
     # Attach Oban's telemetry logger + cost/error alerting before events fire (§13).
     _ = Oban.Telemetry.attach_default_logger(level: :info)
     :ok = Alerting.attach()
+
+    # Dev-only LiveView mount/event timing lines (config/dev.exs sets the flag).
+    if Application.get_env(:repo_builder, :lv_perf_handler)[:attach] do
+      :ok = LiveViewPerf.attach()
+    end
 
     children = [
       RepoBuilderWeb.Telemetry,

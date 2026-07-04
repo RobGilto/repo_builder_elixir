@@ -7,7 +7,8 @@ defmodule RepoBuilder.Logs do
   maps the variant to an `event_type`, rolls usage into the embedded `Usage` value
   object (float→Decimal boundary), and inserts one `agent_logs` row.
   """
-  import Ecto.Query, only: [from: 2, where: 3, order_by: 3, limit: 2, offset: 2]
+  import Ecto.Query,
+    only: [from: 2, where: 3, order_by: 3, limit: 2, offset: 2, group_by: 3, select: 3]
 
   alias RepoBuilder.Harness.{Event, Redact}
   alias RepoBuilder.Logs.{AgentLog, SystemLog, Usage}
@@ -487,6 +488,28 @@ defmodule RepoBuilder.Logs do
     |> where([l], l.agent_id == ^agent_id)
     |> Repo.all()
     |> Enum.reduce(Decimal.new(0), fn log, acc -> add_cost(acc, log.usage) end)
+  end
+
+  @doc """
+  Cost rollup for a set of agent ids in a single grouped query (one `GROUP BY`
+  scan instead of N per-agent scans). Returns `%{agent_id => Decimal.t()}` for
+  every id in `agent_ids` that has logs; absent ids are simply not in the map
+  (caller treats them as unpriced/zero). Unpriced rows (NULL `cost_usd`)
+  contribute nothing, matching `cost_rollup!/1`'s `add_cost/2` semantics.
+  """
+  @spec cost_rollup_for_agents!([Ecto.UUID.t()]) :: %{Ecto.UUID.t() => Decimal.t()}
+  def cost_rollup_for_agents!([]), do: %{}
+
+  def cost_rollup_for_agents!(agent_ids) do
+    AgentLog
+    |> where([l], l.agent_id in ^agent_ids)
+    |> group_by([l], l.agent_id)
+    |> select(
+      [l],
+      {l.agent_id, sum(fragment("COALESCE((usage->>'cost_usd')::numeric, 0)"))}
+    )
+    |> Repo.all()
+    |> Map.new(fn {id, sum} -> {id, Decimal.new(to_string(sum))} end)
   end
 
   @doc """
