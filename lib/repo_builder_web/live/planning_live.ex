@@ -30,6 +30,8 @@ defmodule RepoBuilderWeb.PlanningLive do
        selected_project: nil,
        goal: "",
        intent: nil,
+       plan_mode: :freestyle,
+       spec_path: "",
        workflow_type: Catalog.default_type(),
        harness: "fake",
        model: "",
@@ -79,12 +81,46 @@ defmodule RepoBuilderWeb.PlanningLive do
     end
   end
 
-  def handle_event("set_goal", %{"goal" => goal}, socket) do
-    if String.trim(goal) == "" do
-      {:noreply, assign(socket, error: "State a goal")}
-    else
-      {:noreply,
-       assign(socket, goal: goal, intent: Planner.classify_intent(goal), error: nil, step: 3)}
+  def handle_event("toggle_plan_mode", %{"mode" => mode}, socket) do
+    {:noreply, assign(socket, plan_mode: String.to_existing_atom(mode), error: nil)}
+  end
+
+  def handle_event("set_goal", params, socket) do
+    case socket.assigns.plan_mode do
+      :freestyle ->
+        goal = Map.get(params, "goal", "") |> String.trim()
+
+        if goal == "" do
+          {:noreply, assign(socket, error: "State a goal")}
+        else
+          {:noreply,
+           assign(socket, goal: goal, intent: Planner.classify_intent(goal), error: nil, step: 3)}
+        end
+
+      :spec ->
+        spec_path = Map.get(params, "spec_path", "") |> String.trim()
+
+        if spec_path == "" do
+          {:noreply, assign(socket, error: "Enter a spec path")}
+        else
+          abs_path = Path.join(socket.assigns.selected_project.root_path, spec_path)
+
+          if File.exists?(abs_path) do
+            goal = "build the plan at #{spec_path}"
+
+            {:noreply,
+             assign(socket,
+               spec_path: spec_path,
+               goal: goal,
+               intent: "spec_implementation",
+               error: nil,
+               step: 3
+             )}
+          else
+            {:noreply,
+             assign(socket, spec_path: spec_path, error: "Spec not found: #{abs_path}")}
+          end
+        end
     end
   end
 
@@ -289,13 +325,79 @@ defmodule RepoBuilderWeb.PlanningLive do
         </section>
 
         <section :if={@step == 2} class="space-y-3">
-          <h2 class="font-semibold">2 · State the goal ({@selected_project.name})</h2>
-          <form id="wizard-goal" phx-submit="set_goal" class="space-y-2">
+          <h2 class="font-semibold">2 · Goal ({@selected_project.name})</h2>
+
+          <div class="flex gap-1 rounded bg-zinc-800 p-1 w-fit">
+            <button
+              type="button"
+              phx-click="toggle_plan_mode"
+              phx-value-mode="freestyle"
+              class={[
+                "rounded px-3 py-1 text-xs transition-colors",
+                if(@plan_mode == :freestyle,
+                  do: "bg-cyan-700 text-white",
+                  else: "text-zinc-400 hover:text-white"
+                )
+              ]}
+            >
+              Write a goal
+            </button>
+            <button
+              type="button"
+              phx-click="toggle_plan_mode"
+              phx-value-mode="spec"
+              class={[
+                "rounded px-3 py-1 text-xs transition-colors",
+                if(@plan_mode == :spec,
+                  do: "bg-cyan-700 text-white",
+                  else: "text-zinc-400 hover:text-white"
+                )
+              ]}
+            >
+              Use a plan spec
+            </button>
+          </div>
+
+          <form
+            :if={@plan_mode == :freestyle}
+            id="wizard-goal-freestyle"
+            phx-submit="set_goal"
+            class="space-y-2"
+          >
             <textarea
               name="goal"
               rows="3"
+              placeholder="Describe what you want to build or fix…"
               class="w-full rounded border border-zinc-600 bg-zinc-800 px-2 py-1 text-sm"
             >{@goal}</textarea>
+            <div class="flex gap-2">
+              <button type="button" phx-click="back" class="rounded bg-zinc-700 px-3 py-1 text-sm">
+                Back
+              </button>
+              <button class="rounded bg-cyan-700 px-3 py-1 text-sm" type="submit">Next</button>
+            </div>
+          </form>
+
+          <form
+            :if={@plan_mode == :spec}
+            id="wizard-goal-spec"
+            phx-submit="set_goal"
+            class="space-y-2"
+          >
+            <label class="flex flex-col text-sm gap-1">
+              <span class="text-xs text-zinc-400">Plan spec path (relative to project root)</span>
+              <input
+                name="spec_path"
+                value={@spec_path}
+                placeholder="specs/my-feature-plan.html"
+                class="rounded border border-zinc-600 bg-zinc-800 px-2 py-1 font-mono text-sm"
+              />
+            </label>
+            <p class="text-xs text-zinc-500">
+              Don't have a spec yet? Run
+              <code class="rounded bg-zinc-700 px-1 text-zinc-300">/plan_f3 &lt;description&gt;</code>
+              in Claude Code first, then paste the path here.
+            </p>
             <div class="flex gap-2">
               <button type="button" phx-click="back" class="rounded bg-zinc-700 px-3 py-1 text-sm">
                 Back
@@ -306,7 +408,12 @@ defmodule RepoBuilderWeb.PlanningLive do
         </section>
 
         <section :if={@step == 3} class="space-y-3">
-          <h2 class="font-semibold">3 · Workflow &amp; budget (intent: {@intent})</h2>
+          <h2 class="font-semibold">
+            3 · Workflow &amp; budget
+            <span class="font-normal text-zinc-400 text-sm">
+              (<span :if={@plan_mode == :spec}>spec: <code>{@spec_path}</code></span><span :if={@plan_mode == :freestyle}>intent: {@intent}</span>)
+            </span>
+          </h2>
           <form id="wizard-workflow" phx-submit="set_workflow" class="space-y-2">
             <label class="flex flex-col text-sm">
               <span class="text-xs text-zinc-400">Workflow type</span>
