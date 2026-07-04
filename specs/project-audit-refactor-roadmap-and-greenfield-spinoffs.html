@@ -104,7 +104,7 @@
       <dl>
         <dt>created</dt>      <dd>2026-07-04T10:00:00+02:00</dd>
         <dt>modified</dt>     <dd>2026-07-04T10:00:00+02:00, 2026-07-04T09:10:00+02:00 (build: phases 1–2 complete)</dd>
-        <dt>commits</dt>      <dd>7e712eb (HEAD at authoring time), a5f1547, 42a6cb8, 9f1e1c3, 9a82583 (phase 1), f1e3975 (phase 2)</dd>
+        <dt>commits</dt>      <dd>7e712eb (HEAD at authoring time), a5f1547, 42a6cb8, 9f1e1c3, 9a82583 (phase 1), f1e3975 (phase 2), dba30b9, 6256ff7, 8be22f1, 084bacd (phase 3)</dd>
         <dt>agent name</dt>   <dd>claude-fable-5</dd>
         <dt>session id</dt>   <dd>b7a51fb4-9455-4099-95b0-269c574492b1</dd>
         <dt>back refs</dt>    <dd>BUILD_PROMPT.md, README.md, docs/engineering-principles.md, ai_docs/typed-elixir-standard.md, specs/issue-custom-adw-observability-adw-custom-adw-obs-sdlc_planner-custom-adw-swimlane-observability.md, specs/quality-gate-plugins-phase-level-testing.html, specs/issue-adw-non-iso-merge-adw-adw-non-iso-merge-sdlc_planner-non-iso-adws-merge-to-trunk.md, specs/issue-adw-builder-combos-adw-adw-prompt-combos-sdlc_planner-adw-builder-spec-prompt-and-combo-scripts.md</dd>
@@ -268,30 +268,30 @@
 
       <h4>3.1 ConsoleLive extraction</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Inventory the 113 <code>handle_event</code> clauses and cluster them by panel (ADW builder, agent roster/CRUD, cost/budget, workstreams/swimlanes, orchestrator chat, settings/modals).</li>
-        <li><code class="status">[]</code> Extract one panel at a time into <code>lib/repo_builder_web/live/console_live/&lt;panel&gt;.ex</code> — prefer <code>Phoenix.LiveComponent</code> for panels with local state, <code>attach_hook/4</code> event modules for cross-panel events; keep the <code>console:events</code> global feed seam intact.</li>
-        <li><code class="status">[]</code> Preserve the known LiveView constraints from prior debugging: keep both stream containers mounted (toggle via hidden, not <code>:if</code>) and the always-render + <code>JS.show|focus</code> modal pattern.</li>
-        <li><code class="status">[]</code> Run the ConsoleLive-touching test files after each panel extraction — never batch two panels between test runs.</li>
+        <li><code class="status">[x]</code> Inventory the 113 <code>handle_event</code> clauses and cluster them by panel (ADW builder, agent roster/CRUD, cost/budget, workstreams/swimlanes, orchestrator chat, settings/modals).</li>
+        <li><code class="status">[x]</code> Extract one panel at a time into <code>lib/repo_builder_web/live/console_live/&lt;panel&gt;.ex</code> — prefer <code>Phoenix.LiveComponent</code> for panels with local state, <code>attach_hook/4</code> event modules for cross-panel events; keep the <code>console:events</code> global feed seam intact.</li>
+        <li><code class="status">[x]</code> Preserve the known LiveView constraints from prior debugging: keep both stream containers mounted (toggle via hidden, not <code>:if</code>) and the always-render + <code>JS.show|focus</code> modal pattern.</li>
+        <li><code class="status">[x]</code> Run the ConsoleLive-touching test files after each panel extraction — never batch two panels between test runs.</li>
       </ul>
 
       <h4>3.2 Console components split</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Split <code>console_components.ex</code> into <code>components/console/&lt;panel&gt;_components.ex</code> mirroring 3.1's panel boundaries; re-export via a thin <code>console_components.ex</code> facade so call sites migrate incrementally.</li>
+        <li><code class="status">[x]</code> Split <code>console_components.ex</code> into <code>components/console/&lt;panel&gt;_components.ex</code> mirroring 3.1's panel boundaries; re-export via a thin <code>console_components.ex</code> facade so call sites migrate incrementally.</li>
       </ul>
 
       <h4>3.3 Orchestrator tools split</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Split <code>orchestrator/tools.ex</code> (2,941 lines) into per-domain modules under <code>orchestrator/tools/</code>, with <code>tool_catalog.ex</code> as the single registry — moving the codebase toward the same open-identity/closed-contract seam the plugin system already proves.</li>
-        <li><code class="status">[]</code> Keep every tool's name, schema, and behaviour byte-identical (the orchestrator's LLM prompt depends on them); assert via a snapshot test of the rendered tool manifest.</li>
+        <li><code class="status">[x]</code> Split <code>orchestrator/tools.ex</code> (2,941 lines) into per-domain modules under <code>orchestrator/tools/</code>, with <code>tool_catalog.ex</code> as the single registry — moving the codebase toward the same open-identity/closed-contract seam the plugin system already proves.</li>
+        <li><code class="status">[x]</code> Keep every tool's name, schema, and behaviour byte-identical (the orchestrator's LLM prompt depends on them); assert via a snapshot test of the rendered tool manifest.</li>
       </ul>
 
       <h4>3.4 Testing Strategy</h4>
       <p>Behaviour-preserving refactor: the entire existing suite is the spec. Add one new snapshot test (tool manifest) and one module-size regression check so the god modules cannot silently regrow.</p>
       <ul class="checklist">
-        <li><code class="status">[]</code> <code>mix test --warnings-as-errors</code> — full suite green after every extraction step.</li>
-        <li><code class="status">[]</code> New tool-manifest snapshot test proves the catalog renders identically pre/post split.</li>
-        <li><code class="status">[]</code> Full five-command green gate.</li>
-        <li><code class="status">[]</code> <code>wc -l lib/repo_builder_web/live/console_live.ex</code> — coordinator under ~800 lines.</li>
+        <li><code class="status">[x]</code> <code>mix test --warnings-as-errors</code> — full suite green after every extraction step.</li>
+        <li><code class="status">[x]</code> New tool-manifest snapshot test proves the catalog renders identically pre/post split.</li>
+        <li><code class="status">[x]</code> Full five-command green gate.</li>
+        <li><code class="status">[x]</code> <code>wc -l lib/repo_builder_web/live/console_live.ex</code> — coordinator under ~800 lines.</li>
       </ul>
       <div class="loop">
         🔁 <strong>Do not exit this phase until every box above is checked.</strong>
@@ -300,7 +300,7 @@
     </div>
 
     <div class="phase">
-      <h3><code class="status">[]</code> Phase 4: Retire dependency &amp; duplication debt <span class="tag p2">P2 · medium</span></h3>
+      <h3><code class="status">[x]</code> Phase 4: Retire dependency &amp; duplication debt <span class="tag p2">P2 · medium</span></h3>
       <p>Two long-running irritants with known fixes: the <code>type_check</code> source patch that every <code>deps.get</code> re-breaks, and the 24 hand-copied Python ADW scripts that <code>Adw.Scaffold</code> can now generate deterministically.</p>
 
       <h4>4.1 type_check strategy decision</h4>
