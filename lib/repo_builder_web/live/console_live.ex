@@ -1807,7 +1807,10 @@ defmodule RepoBuilderWeb.ConsoleLive do
           orchestrator_context={@orchestrator_context}
         />
         <.link navigate={~p"/projects"} class="text-xs text-cyan-400">manage</.link>
-        <.link navigate={~p"/plan"} class="text-xs text-cyan-400">plan a run</.link>
+        <.link
+          navigate={if @active_project_id, do: ~p"/plan?project_id=#{@active_project_id}", else: ~p"/plan"}
+          class="text-xs text-cyan-400"
+        >plan a run</.link>
       </div>
 
       <.budget_banner state={@budget_state} />

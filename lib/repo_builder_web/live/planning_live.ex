@@ -46,6 +46,23 @@ defmodule RepoBuilderWeb.PlanningLive do
     {:noreply, apply_action(socket, socket.assigns.live_action, params)}
   end
 
+  defp apply_action(socket, :new, %{"project_id" => id}) do
+    socket = assign(socket, page_title: "Plan a run")
+
+    case Projects.fetch_project(id) do
+      {:ok, project} ->
+        assign(socket,
+          selected_project: project,
+          harness: project.default_harness || "fake",
+          budget_cap: cap_string(project.budget_cap_usd),
+          step: 2
+        )
+
+      {:error, :not_found} ->
+        socket
+    end
+  end
+
   defp apply_action(socket, :new, _params), do: assign(socket, page_title: "Plan a run")
 
   defp apply_action(socket, :show, %{"id" => id}) do
