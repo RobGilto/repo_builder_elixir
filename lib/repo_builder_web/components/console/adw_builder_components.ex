@@ -32,10 +32,11 @@ defmodule RepoBuilderWeb.Console.AdwBuilderComponents do
   attr :adw_builder?, :boolean, default: false
   attr :adw_steps, :list, default: []
   attr :adw_name, :string, default: ""
-  attr :adw_local?, :boolean, default: false
+  attr :adw_flavor, :atom, default: :iso, values: [:iso, :local_iso, :direct]
   attr :adw_spec, :string, default: ""
   attr :adw_prompt, :string, default: ""
   attr :adw_combos, :list, default: []
+  attr :adw_loadable, :list, default: []
   attr :adw_selected_combo, :string, default: ""
   attr :adw_harness, :string, default: ""
   attr :harness_names, :list, default: []
@@ -271,26 +272,62 @@ defmodule RepoBuilderWeb.Console.AdwBuilderComponents do
         </div>
 
         <%!-- ADW BUILDER MODE --%>
-        <div :if={@adw_builder?} class="flex flex-col gap-3">
+        <%!-- A real <form> is required: LiveView refuses phx-change on inputs that are
+             not inside a form ("form events require the input to be inside a form"),
+             which otherwise swallows every keystroke silently. phx-submit is a no-op so
+             pressing Enter in the name field doesn't trigger a native page reload. --%>
+        <form :if={@adw_builder?} phx-submit="adw_noop" class="flex flex-col gap-3">
           <%!-- Workflow name + local toggle + harness picker --%>
           <div class="flex items-center gap-2">
-            <input
-              type="text"
-              placeholder="Workflow name (optional)"
-              value={@adw_name}
-              phx-change="adw_set_name"
-              name="name"
-              class="cns-cmd-textarea"
-              style="padding: 0.25rem 0.5rem; height: auto"
-            />
-            <button
-              type="button"
-              phx-click="adw_toggle_local"
-              class={["cns-chip", @adw_local? && "cns-chip--active"]}
-              title="Local mode — no GitHub issue required"
-            >
-              local
-            </button>
+            <div class="flex flex-col gap-1">
+              <label
+                for="adw-combo-name"
+                class="text-[0.625rem] font-semibold"
+                style="color: var(--cns-text-2)"
+              >
+                WORKFLOW NAME
+              </label>
+              <input
+                id="adw-combo-name"
+                type="text"
+                placeholder="Combo name"
+                aria-label="Workflow name"
+                value={@adw_name}
+                phx-change="adw_set_name"
+                name="name"
+                class="cns-cmd-textarea"
+                style="padding: 0.25rem 0.5rem; height: auto"
+              />
+            </div>
+            <div class="flex items-center gap-1">
+              <button
+                type="button"
+                phx-click="adw_set_flavor"
+                phx-value-flavor="iso"
+                class={["cns-chip", @adw_flavor == :iso && "cns-chip--active"]}
+                title="Isolated worktree — GitHub issue required"
+              >
+                Iso
+              </button>
+              <button
+                type="button"
+                phx-click="adw_set_flavor"
+                phx-value-flavor="local_iso"
+                class={["cns-chip", @adw_flavor == :local_iso && "cns-chip--active"]}
+                title="Isolated worktree — no GitHub issue"
+              >
+                Local iso
+              </button>
+              <button
+                type="button"
+                phx-click="adw_set_flavor"
+                phx-value-flavor="direct"
+                class={["cns-chip", @adw_flavor == :direct && "cns-chip--active"]}
+                title="In-place (no worktree) — runs in the current checkout"
+              >
+                Direct
+              </button>
+            </div>
             <select
               :if={@harness_names != []}
               name="harness"
@@ -306,12 +343,12 @@ defmodule RepoBuilderWeb.Console.AdwBuilderComponents do
             </select>
           </div>
 
-          <%!-- Load combo: repopulate the builder (steps + flavor + spec + prompt) from a
-               saved combo. The value is the combo's slug name; a blank first option is the
-               "no selection" state. The ✕ deletes the selected combo's sidecar. --%>
-          <div :if={@adw_combos != []} class="flex items-center gap-2">
+          <%!-- Load ADW: grouped picker showing saved combos + discovered ADWs from
+               platform and project roots. Option value encodes "combo:<name>" or "adw:<path>".
+               The ✕ deletes the selected combo's sidecar (combos only). --%>
+          <div :if={@adw_loadable != []} class="flex items-center gap-2">
             <label class="text-[0.625rem] font-semibold" style="color: var(--cns-text-2)">
-              LOAD COMBO
+              LOAD
             </label>
             <select
               name="combo"
@@ -319,20 +356,71 @@ defmodule RepoBuilderWeb.Console.AdwBuilderComponents do
               class="cns-cmd-textarea"
               style="padding: 0.25rem 0.5rem; height: auto"
             >
-              <option value="" selected={@adw_selected_combo == ""}>— pick a saved combo —</option>
-              <option
-                :for={combo <- @adw_combos}
-                value={combo.name}
-                selected={combo.name == @adw_selected_combo}
+              <option value="" selected={@adw_selected_combo == ""}>— pick an ADW —</option>
+              <optgroup
+                :if={Enum.any?(@adw_loadable, &(&1.kind == :combo and &1.source == :platform))}
+                label="Saved combos (platform)"
               >
-                {combo.name} ({combo.flavor})
-              </option>
+                <option
+                  :for={
+                    entry <-
+                      Enum.filter(@adw_loadable, &(&1.kind == :combo and &1.source == :platform))
+                  }
+                  value={"combo:#{entry.ref}"}
+                  selected={"combo:#{entry.ref}" == @adw_selected_combo}
+                >
+                  {entry.name} ({entry.flavor})
+                </option>
+              </optgroup>
+              <optgroup
+                :if={Enum.any?(@adw_loadable, &(&1.kind == :combo and &1.source == :project))}
+                label="Saved combos (project)"
+              >
+                <option
+                  :for={
+                    entry <-
+                      Enum.filter(@adw_loadable, &(&1.kind == :combo and &1.source == :project))
+                  }
+                  value={"combo:#{entry.ref}"}
+                  selected={"combo:#{entry.ref}" == @adw_selected_combo}
+                >
+                  {entry.name} ({entry.flavor})
+                </option>
+              </optgroup>
+              <optgroup
+                :if={Enum.any?(@adw_loadable, &(&1.kind == :adw and &1.source == :platform))}
+                label="Platform ADWs"
+              >
+                <option
+                  :for={
+                    entry <- Enum.filter(@adw_loadable, &(&1.kind == :adw and &1.source == :platform))
+                  }
+                  value={"adw:#{entry.ref}"}
+                  selected={"adw:#{entry.ref}" == @adw_selected_combo}
+                >
+                  {entry.name}
+                </option>
+              </optgroup>
+              <optgroup
+                :if={Enum.any?(@adw_loadable, &(&1.kind == :adw and &1.source == :project))}
+                label="Project ADWs"
+              >
+                <option
+                  :for={
+                    entry <- Enum.filter(@adw_loadable, &(&1.kind == :adw and &1.source == :project))
+                  }
+                  value={"adw:#{entry.ref}"}
+                  selected={"adw:#{entry.ref}" == @adw_selected_combo}
+                >
+                  {entry.name}
+                </option>
+              </optgroup>
             </select>
             <button
-              :if={@adw_selected_combo != ""}
+              :if={String.starts_with?(@adw_selected_combo, "combo:")}
               type="button"
               phx-click="adw_delete_combo"
-              phx-value-combo={@adw_selected_combo}
+              phx-value-combo={String.replace_leading(@adw_selected_combo, "combo:", "")}
               class="cns-chip"
               style="color: var(--cns-red, #f87171)"
               title="Delete the selected combo's sidecar"
@@ -465,6 +553,63 @@ defmodule RepoBuilderWeb.Console.AdwBuilderComponents do
                   style="font-size: 0.65rem"
                   placeholder={adw_step_hint(step.name)}
                 >{step[:prompt] || ""}</textarea>
+
+                <%!-- Per-step model overrides: harness → provider → model (cascade) --%>
+                <div class="mt-1 flex flex-wrap gap-2 items-center">
+                  <div class="flex items-center gap-1">
+                    <label class="text-[0.55rem] font-semibold" style="color: var(--cns-text-3)">
+                      HARNESS
+                    </label>
+                    <select
+                      name={"step-harness-#{step.id}"}
+                      phx-change="adw_set_step_harness"
+                      phx-value-id={step.id}
+                      class="cns-cmd-textarea"
+                      style="padding: 1px 4px; height: auto; font-size: 0.6rem"
+                    >
+                      <option value="" selected={step[:harness] in [nil, ""]}>inherit</option>
+                      <option
+                        :for={h <- @harness_names}
+                        value={h}
+                        selected={step[:harness] == h}
+                      >
+                        {h}
+                      </option>
+                    </select>
+                  </div>
+
+                  <div class="flex items-center gap-1">
+                    <label class="text-[0.55rem] font-semibold" style="color: var(--cns-text-3)">
+                      PROVIDER
+                    </label>
+                    <input
+                      type="text"
+                      name={"step-provider-#{step.id}"}
+                      phx-change="adw_set_step_provider"
+                      phx-value-id={step.id}
+                      value={step[:provider] || ""}
+                      class="cns-cmd-textarea"
+                      style="padding: 1px 4px; height: auto; font-size: 0.6rem; width: 8rem"
+                      placeholder="inherit"
+                    />
+                  </div>
+
+                  <div class="flex items-center gap-1">
+                    <label class="text-[0.55rem] font-semibold" style="color: var(--cns-text-3)">
+                      MODEL
+                    </label>
+                    <input
+                      type="text"
+                      name={"step-model-#{step.id}"}
+                      phx-change="adw_set_step_model"
+                      phx-value-id={step.id}
+                      value={step[:model] || ""}
+                      class="cns-cmd-textarea"
+                      style="padding: 1px 4px; height: auto; font-size: 0.6rem; width: 12rem"
+                      placeholder="inherit"
+                    />
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -478,7 +623,7 @@ defmodule RepoBuilderWeb.Console.AdwBuilderComponents do
               phx-click="adw_save_combo"
               class="cns-chip"
               style="color: var(--cns-green, #4ade80)"
-              disabled={@adw_steps == [] or @adw_name == ""}
+              disabled={@adw_steps == []}
               title="Save this build as a named combo + generate its ADW script"
             >
               ⭑ Save combo
@@ -493,7 +638,7 @@ defmodule RepoBuilderWeb.Console.AdwBuilderComponents do
               ▶ Launch ADW
             </button>
           </div>
-        </div>
+        </form>
       </div>
     </div>
     """

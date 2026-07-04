@@ -8,34 +8,22 @@ defmodule RepoBuilder.Adw.Combo do
 
   ## Wire vs domain (typed-elixir-standard rule 6)
   The on-disk sidecar is an untrusted string-keyed JSON object (steps + flavor as
-  strings). `from_json/1` normalizes it into this strict struct (steps as the
-  `Scaffold.step()` atom allowlist, flavor as `:iso | :local_iso`); `to_json/1`
+  strings). `from_json/1` normalizes it into this strict struct (steps as
+  `StepSpec.t()` values, flavor as `:iso | :local_iso | :direct`); `to_json/1`
   renders back to the stringly wire map. Neither raises.
   """
   use TypedStruct
 
-  alias RepoBuilder.Adw.Scaffold
+  alias RepoBuilder.Adw.StepSpec
 
   @type reason :: atom() | String.t()
-  @type flavor :: :iso | :local_iso
+  @type flavor :: :iso | :local_iso | :direct
 
-  # Step allowlist parity with `adws/adw_new.py:VALID_STEPS` (as atoms). Kept as a
-  # fixed string→atom map so untrusted wire strings never reach `String.to_atom/1`.
-  @step_atoms %{
-    "plan" => :plan,
-    "patch" => :patch,
-    "build" => :build,
-    "test" => :test,
-    "review" => :review,
-    "document" => :document,
-    "ship" => :ship
-  }
-
-  @flavors %{"iso" => :iso, "local_iso" => :local_iso}
+  @flavors %{"iso" => :iso, "local_iso" => :local_iso, "direct" => :direct}
 
   typedstruct enforce: true do
     field :name, String.t()
-    field :steps, [{atom(), String.t() | nil}]
+    field :steps, [StepSpec.t()]
     field :flavor, flavor()
     field :spec, String.t() | nil, default: nil
     field :initial_prompt, String.t() | nil, default: nil
@@ -47,7 +35,7 @@ defmodule RepoBuilder.Adw.Combo do
   @doc """
   Validate a combo attrs map (atom OR string keys): `name` must slugify to a
   non-empty filename stem, `steps` must be a non-empty list drawn from the
-  allowlist, and `flavor` (when present) must be `:iso`/`:local_iso`. Total.
+  allowlist, and `flavor` (when present) must be `:iso | :local_iso | :direct`. Total.
   """
   @spec validate(map()) :: :ok | {:error, reason()}
   def validate(attrs) when is_map(attrs) do
@@ -65,10 +53,7 @@ defmodule RepoBuilder.Adw.Combo do
   def to_json(%__MODULE__{} = combo) do
     %{
       "name" => combo.name,
-      "steps" =>
-        Enum.map(combo.steps, fn {name, prompt} ->
-          %{"name" => Atom.to_string(name), "prompt" => prompt}
-        end),
+      "steps" => Enum.map(combo.steps, &StepSpec.to_json/1),
       "flavor" => Atom.to_string(combo.flavor),
       "spec" => combo.spec,
       "initial_prompt" => combo.initial_prompt,
@@ -122,16 +107,17 @@ defmodule RepoBuilder.Adw.Combo do
   def slugify_name(_name), do: {:error, :missing_name}
 
   @doc """
-  Normalize a steps list into `[{step_atom, prompt_or_nil}]`. Accepts:
-  - Old wire format: plain strings or atoms → `{atom, nil}`
-  - New wire format: `%{"name" => "plan", "prompt" => "..."}` maps → `{atom, prompt}`
-  - In-memory tuples: `{:plan, "custom"}` or `{:plan, nil}` → passed through
+  Normalize a steps list into `[StepSpec.t()]`. Accepts all legacy shapes:
+  - Old wire: plain strings/atoms, `{atom, prompt}` tuples, `%{"name","prompt"}` maps
+  - New wire: `%{"name","prompt","harness","provider","model"}` maps
+  - In-memory: `StepSpec` structs passed through unchanged
+  Delegates each entry to `StepSpec.from_json/1` for backward-compatible parsing.
   """
-  @spec parse_steps(term()) :: {:ok, [{Scaffold.step(), String.t() | nil}]} | {:error, reason()}
+  @spec parse_steps(term()) :: {:ok, [StepSpec.t()]} | {:error, reason()}
   def parse_steps(steps) when is_list(steps) and steps != [] do
     Enum.reduce_while(steps, {:ok, []}, fn step, {:ok, acc} ->
       case parse_step(step) do
-        {:ok, pair} -> {:cont, {:ok, [pair | acc]}}
+        {:ok, spec} -> {:cont, {:ok, [spec | acc]}}
         {:error, _reason} = err -> {:halt, err}
       end
     end)
@@ -144,33 +130,21 @@ defmodule RepoBuilder.Adw.Combo do
   def parse_steps([]), do: {:error, :no_steps}
   def parse_steps(_other), do: {:error, :invalid_steps}
 
-  @spec parse_step(term()) :: {:ok, {Scaffold.step(), String.t() | nil}} | {:error, reason()}
+  @spec parse_step(term()) :: {:ok, StepSpec.t()} | {:error, reason()}
+  defp parse_step(%StepSpec{} = spec), do: {:ok, spec}
+
   defp parse_step({step, prompt}) when is_atom(step) and not is_nil(step) do
-    case parse_step(Atom.to_string(step)) do
-      {:ok, {atom, _}} -> {:ok, {atom, prompt_or_nil(prompt)}}
+    case StepSpec.from_json(Atom.to_string(step)) do
+      {:ok, spec} -> {:ok, %{spec | prompt: prompt_or_nil(prompt)}}
       err -> err
     end
   end
 
   defp parse_step(step) when is_atom(step) and not is_nil(step) do
-    parse_step(Atom.to_string(step))
+    StepSpec.from_json(Atom.to_string(step))
   end
 
-  defp parse_step(step) when is_binary(step) do
-    case Map.fetch(@step_atoms, step) do
-      {:ok, atom} -> {:ok, {atom, nil}}
-      :error -> {:error, {:invalid_step, step}}
-    end
-  end
-
-  defp parse_step(%{"name" => name} = map) when is_binary(name) do
-    case Map.fetch(@step_atoms, name) do
-      {:ok, atom} -> {:ok, {atom, prompt_or_nil(Map.get(map, "prompt"))}}
-      :error -> {:error, {:invalid_step, name}}
-    end
-  end
-
-  defp parse_step(_step), do: {:error, :invalid_step}
+  defp parse_step(other), do: StepSpec.from_json(other)
 
   @spec prompt_or_nil(term()) :: String.t() | nil
   defp prompt_or_nil(value) when is_binary(value) do
@@ -181,7 +155,7 @@ defmodule RepoBuilder.Adw.Combo do
 
   @spec parse_flavor(term()) :: {:ok, flavor()} | {:error, reason()}
   defp parse_flavor(nil), do: {:ok, :iso}
-  defp parse_flavor(flavor) when flavor in [:iso, :local_iso], do: {:ok, flavor}
+  defp parse_flavor(flavor) when flavor in [:iso, :local_iso, :direct], do: {:ok, flavor}
 
   defp parse_flavor(flavor) when is_binary(flavor) do
     case Map.fetch(@flavors, flavor) do

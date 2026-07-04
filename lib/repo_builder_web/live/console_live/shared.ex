@@ -334,8 +334,10 @@ defmodule RepoBuilderWeb.ConsoleLive.Shared do
 
   # --- small cross-panel utilities ---
 
-  @doc "Trim a string to nil when blank, else the trimmed value."
-  @spec nilify_blank(String.t()) :: String.t() | nil
+  @doc "Trim a string to nil when blank, else the trimmed value. A nil in is a nil out."
+  @spec nilify_blank(String.t() | nil) :: String.t() | nil
+  def nilify_blank(nil), do: nil
+
   def nilify_blank(value) when is_binary(value) do
     case String.trim(value) do
       "" -> nil
@@ -408,7 +410,8 @@ defmodule RepoBuilderWeb.ConsoleLive.Shared do
       slash_commands: slash,
       agent_defs: agents,
       adws: adws,
-      adw_combos: Combos.list(working_dir)
+      adw_combos: Combos.list(working_dir),
+      adw_loadable: Combos.loadable(working_dir)
     )
   end
 

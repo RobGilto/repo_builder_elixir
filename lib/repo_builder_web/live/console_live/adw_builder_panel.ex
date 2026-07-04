@@ -10,16 +10,18 @@ defmodule RepoBuilderWeb.ConsoleLive.AdwBuilderPanel do
   import Phoenix.LiveView, only: [put_flash: 3]
 
   alias Phoenix.LiveView.Socket
-  alias RepoBuilder.Adw.Combos
+  alias RepoBuilder.Adw.{Combos, StepSpec}
   alias RepoBuilder.{WorkflowEngine, Workflows}
   alias RepoBuilder.WorkflowEngine.Catalog
   alias RepoBuilder.Workflows.TitleHumanizer
   alias RepoBuilderWeb.ConsoleLive.Shared
 
   @events ~w(toggle_adw_builder set_palette_tab adw_add_step adw_remove_step adw_move_step
-             adw_toggle_step adw_set_name adw_set_spec adw_set_prompt adw_toggle_local
-             adw_set_harness adw_set_step_prompt run_adw_builder adw_save_combo
-             adw_load_combo adw_delete_combo)
+             adw_toggle_step adw_set_name adw_set_spec adw_set_prompt
+             adw_set_flavor adw_set_harness adw_set_step_prompt
+             adw_set_step_harness adw_set_step_provider adw_set_step_model
+             run_adw_builder adw_save_combo
+             adw_load_combo adw_delete_combo adw_noop)
 
   @doc "The event names this panel owns (ConsoleLive's dispatch guard)."
   @spec events() :: [String.t()]
@@ -39,7 +41,17 @@ defmodule RepoBuilderWeb.ConsoleLive.AdwBuilderPanel do
   def handle_event("adw_add_step", %{"step" => step}, socket) do
     steps = socket.assigns.adw_steps
     id = if steps == [], do: 1, else: Enum.max_by(steps, & &1.id).id + 1
-    new_step = %{id: id, name: step, expanded: false, prompt: nil}
+
+    new_step = %{
+      id: id,
+      name: step,
+      expanded: false,
+      prompt: nil,
+      harness: nil,
+      provider: nil,
+      model: nil
+    }
+
     {:noreply, assign(socket, adw_steps: steps ++ [new_step])}
   end
 
@@ -73,6 +85,10 @@ defmodule RepoBuilderWeb.ConsoleLive.AdwBuilderPanel do
     {:noreply, assign(socket, adw_steps: steps)}
   end
 
+  # No-op submit: the builder <form> exists only to satisfy LiveView's
+  # "inputs must be inside a form" rule for phx-change; there is no form submit.
+  def handle_event("adw_noop", _params, socket), do: {:noreply, socket}
+
   def handle_event("adw_set_name", %{"name" => name}, socket) do
     {:noreply, assign(socket, adw_name: name)}
   end
@@ -85,21 +101,63 @@ defmodule RepoBuilderWeb.ConsoleLive.AdwBuilderPanel do
     {:noreply, assign(socket, adw_prompt: prompt)}
   end
 
-  def handle_event("adw_toggle_local", _params, socket) do
-    {:noreply, assign(socket, adw_local?: !socket.assigns.adw_local?)}
+  @flavor_map %{"iso" => :iso, "local_iso" => :local_iso, "direct" => :direct}
+
+  def handle_event("adw_set_flavor", %{"flavor" => f}, socket) do
+    flavor = Map.get(@flavor_map, f, :iso)
+    {:noreply, assign(socket, adw_flavor: flavor)}
   end
 
   def handle_event("adw_set_harness", %{"harness" => h}, socket) do
     {:noreply, assign(socket, adw_harness: Shared.nilify_blank(h))}
   end
 
-  def handle_event("adw_set_step_prompt", %{"id" => id, "value" => v}, socket) do
+  def handle_event("adw_set_step_prompt", %{"id" => id} = params, socket) do
     id = String.to_integer(id)
+    # Inside a <form>, the changed textarea's value arrives keyed by its name
+    # ("prompt-<id>"). Fall back to "value" for tests that pass params directly.
+    v = Map.get(params, "prompt-#{id}") || Map.get(params, "value", "")
     prompt = if String.trim(v) == "", do: nil, else: v
 
     steps =
       Enum.map(socket.assigns.adw_steps, fn s ->
         if s.id == id, do: %{s | prompt: prompt}, else: s
+      end)
+
+    {:noreply, assign(socket, adw_steps: steps)}
+  end
+
+  def handle_event("adw_set_step_harness", %{"id" => id, "harness" => h}, socket) do
+    id = String.to_integer(id)
+    harness = if h == "", do: nil, else: h
+
+    steps =
+      Enum.map(socket.assigns.adw_steps, fn s ->
+        if s.id == id, do: %{s | harness: harness, provider: nil, model: nil}, else: s
+      end)
+
+    {:noreply, assign(socket, adw_steps: steps)}
+  end
+
+  def handle_event("adw_set_step_provider", %{"id" => id, "provider" => p}, socket) do
+    id = String.to_integer(id)
+    provider = if p == "", do: nil, else: p
+
+    steps =
+      Enum.map(socket.assigns.adw_steps, fn s ->
+        if s.id == id, do: %{s | provider: provider, model: nil}, else: s
+      end)
+
+    {:noreply, assign(socket, adw_steps: steps)}
+  end
+
+  def handle_event("adw_set_step_model", %{"id" => id, "model" => m}, socket) do
+    id = String.to_integer(id)
+    model = if m == "", do: nil, else: m
+
+    steps =
+      Enum.map(socket.assigns.adw_steps, fn s ->
+        if s.id == id, do: %{s | model: model}, else: s
       end)
 
     {:noreply, assign(socket, adw_steps: steps)}
@@ -126,7 +184,7 @@ defmodule RepoBuilderWeb.ConsoleLive.AdwBuilderPanel do
   # materializes adws/adw_<name>_iso.py (or _local_iso.py) via Combos.save/2, then
   # re-seeds the combo list so a Load-combo dropdown stays current.
   def handle_event("adw_save_combo", _params, socket) do
-    %{adw_name: name, adw_steps: steps, adw_local?: local?} = socket.assigns
+    %{adw_name: name, adw_steps: steps, adw_flavor: flavor} = socket.assigns
 
     cond do
       String.trim(name) == "" ->
@@ -138,70 +196,105 @@ defmodule RepoBuilderWeb.ConsoleLive.AdwBuilderPanel do
       true ->
         working_dir = Shared.nilify_blank(socket.assigns.orchestrator_working_dir)
 
-        attrs = %{
-          name: name,
-          steps: Enum.map(steps, fn s -> {String.to_existing_atom(s.name), s[:prompt]} end),
-          flavor: if(local?, do: :local_iso, else: :iso),
-          spec: socket.assigns.adw_spec,
-          initial_prompt: socket.assigns.adw_prompt,
-          harness: Shared.nilify_blank(socket.assigns.adw_harness || "")
-        }
+        case resolve_steps(steps) do
+          {:ok, step_pairs} ->
+            attrs = %{
+              name: name,
+              steps: step_pairs,
+              flavor: flavor,
+              spec: socket.assigns.adw_spec,
+              initial_prompt: socket.assigns.adw_prompt,
+              harness: Shared.nilify_blank(socket.assigns.adw_harness || "")
+            }
 
-        case Combos.save(attrs, working_dir) do
-          {:ok, combo} ->
-            socket =
-              socket
-              |> assign(adw_combos: Combos.list(working_dir))
-              |> put_flash(:info, "Saved combo + generated #{Path.basename(combo.script_path)}")
+            {:noreply, persist_combo(socket, attrs, working_dir)}
 
-            {:noreply, socket}
-
-          {:error, :exists} ->
-            {:noreply,
-             put_flash(socket, :error, "A script for that name already exists — pick a new name")}
-
-          {:error, reason} ->
-            {:noreply, put_flash(socket, :error, "Could not save combo: #{inspect(reason)}")}
+          {:error, {:unknown_step, bad_name}} ->
+            {:noreply, put_flash(socket, :error, "Unknown step: #{bad_name}")}
         end
     end
   end
 
   # Load-combo reuse: repopulate the builder (steps + flavor + spec + prompt + name)
-  # from a saved combo. A blank selection is a no-op that just clears the highlight.
+  # from a saved combo or a discovered ADW. A blank selection clears the highlight.
+  # Values are encoded as "combo:<stem>" or "adw:<abs-path>".
   def handle_event("adw_load_combo", %{"combo" => ""}, socket) do
     {:noreply, assign(socket, adw_selected_combo: "")}
   end
 
-  def handle_event("adw_load_combo", %{"combo" => name}, socket) do
+  def handle_event("adw_load_combo", %{"combo" => "combo:" <> stem}, socket) do
     working_dir = Shared.nilify_blank(socket.assigns.orchestrator_working_dir)
 
-    case Combos.fetch(name, working_dir) do
+    case Combos.fetch(stem, working_dir) do
       {:ok, combo} ->
         steps =
           combo.steps
           |> Enum.with_index(1)
-          |> Enum.map(fn {{step_name, custom_prompt}, id} ->
-            %{id: id, name: Atom.to_string(step_name), expanded: false, prompt: custom_prompt}
+          |> Enum.map(fn {spec, id} ->
+            %{
+              id: id,
+              name: Atom.to_string(spec.name),
+              expanded: false,
+              prompt: spec.prompt,
+              harness: spec.harness,
+              provider: spec.provider,
+              model: spec.model
+            }
           end)
 
         socket =
           assign(socket,
             adw_steps: steps,
             adw_name: combo.name,
-            adw_local?: combo.flavor == :local_iso,
+            adw_flavor: combo.flavor,
             adw_spec: combo.spec || "",
             adw_prompt: combo.initial_prompt || "",
             adw_harness: combo.harness || "",
-            adw_selected_combo: combo.name
+            adw_selected_combo: "combo:#{stem}"
           )
 
         {:noreply, socket}
 
       {:error, :not_found} ->
-        {:noreply, put_flash(socket, :error, "Combo not found: #{name}")}
+        {:noreply, put_flash(socket, :error, "Combo not found: #{stem}")}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Could not load combo: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("adw_load_combo", %{"combo" => "adw:" <> path}, socket) do
+    working_dir = Shared.nilify_blank(socket.assigns.orchestrator_working_dir)
+    loadable = socket.assigns[:adw_loadable] || Combos.loadable(working_dir)
+
+    case Enum.find(loadable, &(&1.kind == :adw and &1.ref == path)) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "ADW not found: #{Path.basename(path)}")}
+
+      entry ->
+        steps =
+          entry.steps
+          |> Enum.with_index(1)
+          |> Enum.map(fn {step_atom, id} ->
+            %{
+              id: id,
+              name: Atom.to_string(step_atom),
+              expanded: false,
+              prompt: nil,
+              harness: nil,
+              provider: nil,
+              model: nil
+            }
+          end)
+
+        socket =
+          assign(socket,
+            adw_steps: steps,
+            adw_flavor: entry.flavor,
+            adw_selected_combo: "adw:#{path}"
+          )
+
+        {:noreply, socket}
     end
   end
 
@@ -214,7 +307,11 @@ defmodule RepoBuilderWeb.ConsoleLive.AdwBuilderPanel do
       :ok ->
         socket =
           socket
-          |> assign(adw_combos: Combos.list(working_dir), adw_selected_combo: "")
+          |> assign(
+            adw_combos: Combos.list(working_dir),
+            adw_loadable: Combos.loadable(working_dir),
+            adw_selected_combo: ""
+          )
           |> put_flash(:info, "Deleted combo #{name}")
 
         {:noreply, socket}
@@ -224,7 +321,78 @@ defmodule RepoBuilderWeb.ConsoleLive.AdwBuilderPanel do
     end
   end
 
+  # --- public helpers (also exercised directly from tests) ---
+
+  @type step_atom :: :build | :document | :patch | :plan | :review | :ship | :test
+
+  @type step_resolution ::
+          {:ok, [StepSpec.t()]}
+          | {:error, {:unknown_step, String.t()}}
+
+  @doc """
+  Resolve the builder's in-memory step list into `[StepSpec.t()]` ready for
+  `Combos.save/2`. Total — an unknown step name yields `{:error, {:unknown_step, name}}`
+  (no raise) so the caller can surface a flash instead of crashing the LiveView.
+  """
+  @spec resolve_steps([map()]) :: step_resolution()
+  def resolve_steps(steps) when is_list(steps) do
+    Enum.reduce_while(steps, {:ok, []}, fn step, {:ok, acc} ->
+      case StepSpec.from_builder_map(step) do
+        {:ok, spec} ->
+          {:cont, {:ok, [spec | acc]}}
+
+        {:error, {:unknown_step, name}} ->
+          {:halt, {:error, {:unknown_step, name}}}
+
+        {:error, _} ->
+          {:halt, {:error, {:unknown_step, "<invalid>"}}}
+      end
+    end)
+    |> case do
+      {:ok, list} -> {:ok, Enum.reverse(list)}
+      {:error, _reason} = err -> err
+    end
+  end
+
+  @doc """
+  Safe total mapper: a known canonical step name ⇒ its atom; an unknown name (or any
+  non-string) ⇒ `{:error, {:unknown_step, name}}`. Never raises.
+  """
+  @spec to_step_atom(String.t()) ::
+          {:ok, step_atom()} | {:error, {:unknown_step, String.t()}}
+  def to_step_atom(name) when is_binary(name) do
+    case StepSpec.from_json(name) do
+      {:ok, %StepSpec{name: atom}} -> {:ok, atom}
+      {:error, _} -> {:error, {:unknown_step, name}}
+    end
+  end
+
+  def to_step_atom(_other), do: {:error, {:unknown_step, "<non-string>"}}
+
   # --- private ---
+
+  # Persist the combo via `Combos.save/2`; on success refresh the combo list and
+  # pre-select the new combo in the Load-combo dropdown. Extracted from the handler
+  # so the LiveView clause stays shallow (credo max-depth).
+  @spec persist_combo(Socket.t(), map(), String.t() | nil) :: Socket.t()
+  defp persist_combo(socket, attrs, working_dir) do
+    case Combos.save(attrs, working_dir) do
+      {:ok, combo} ->
+        socket
+        |> assign(
+          adw_combos: Combos.list(working_dir),
+          adw_loadable: Combos.loadable(working_dir),
+          adw_selected_combo: "combo:#{combo.name}"
+        )
+        |> put_flash(:info, "Saved combo + generated #{Path.basename(combo.script_path)}")
+
+      {:error, :exists} ->
+        put_flash(socket, :error, "A script for that name already exists — pick a new name")
+
+      {:error, reason} ->
+        put_flash(socket, :error, "Could not save combo: #{inspect(reason)}")
+    end
+  end
 
   defp launch_adw_builder(steps, name, harness, socket) do
     spec = socket.assigns.adw_spec
@@ -238,7 +406,9 @@ defmodule RepoBuilderWeb.ConsoleLive.AdwBuilderPanel do
       |> Enum.map(fn s ->
         %{
           "name" => s.name,
-          "harness" => harness,
+          "harness" => s[:harness] || harness,
+          "provider" => s[:provider],
+          "model" => s[:model],
           "prompt_template" => s[:prompt] || Catalog.default_prompt_template(s.name),
           "on_success" => "done",
           "on_failure" => "abort"

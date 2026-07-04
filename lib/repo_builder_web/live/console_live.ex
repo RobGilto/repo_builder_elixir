@@ -273,11 +273,12 @@ defmodule RepoBuilderWeb.ConsoleLive do
         adw_steps: [],
         adw_name: "",
         adw_harness: nil,
-        adw_local?: false,
+        adw_flavor: :iso,
         harness_names: HarnessRegistry.known(),
         adw_spec: "",
         adw_prompt: "",
         adw_combos: [],
+        adw_loadable: [],
         adw_selected_combo: "",
         # Log Database manager (issue-log-db-manager): a paginated, filterable DB browser
         # over `agent_logs`. Selection is a MapSet of `id` UUID STRINGS (distinct from the
@@ -2119,10 +2120,11 @@ defmodule RepoBuilderWeb.ConsoleLive do
         adw_builder?={@adw_builder?}
         adw_steps={@adw_steps}
         adw_name={@adw_name}
-        adw_local?={@adw_local?}
+        adw_flavor={@adw_flavor}
         adw_spec={@adw_spec}
         adw_prompt={@adw_prompt}
         adw_combos={@adw_combos}
+        adw_loadable={@adw_loadable}
         adw_selected_combo={@adw_selected_combo}
         adw_harness={@adw_harness || ""}
         harness_names={@harness_names}

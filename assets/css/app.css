@@ -210,6 +210,14 @@
   transition: all 120ms;
 }
 .cns-chip--active { color: var(--cns-bg-0); border-color: transparent; }
+/* disabled chips render as visibly unclickable (no JS, no color flicker) */
+.cns-chip:disabled,
+.cns-chip[disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background-color: var(--cns-bg-2);
+  color: var(--cns-text-3);
+}
 .cns-chip--response.cns-chip--active { background-color: var(--cns-success); }
 .cns-chip--tool.cns-chip--active { background-color: var(--cns-warning); }
 .cns-chip--thinking.cns-chip--active { background-color: var(--cns-thinking); }

@@ -153,10 +153,10 @@ defmodule RepoBuilderWeb.TestAdwBuilderCustomAdwTest do
     # Verify the sidecar persisted harness + step prompts.
     assert {:ok, saved} = Combos.fetch("custom_wf")
     assert saved.harness == "fake"
-    assert Enum.any?(saved.steps, fn {_name, p} -> p == @custom_prompt end)
+    assert Enum.any?(saved.steps, fn spec -> spec.prompt == @custom_prompt end)
 
     # Load the combo; verify harness + step prompts repopulate.
-    loaded = render_change(view, "adw_load_combo", %{"combo" => "custom_wf"})
+    loaded = render_change(view, "adw_load_combo", %{"combo" => "combo:custom_wf"})
 
     # Harness should be reflected in the select.
     assert loaded =~ "fake"

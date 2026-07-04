@@ -9,7 +9,10 @@ defmodule RepoBuilder.Adw.CombosTest do
   """
   use ExUnit.Case, async: false
 
-  alias RepoBuilder.Adw.{Combo, Combos}
+  alias RepoBuilder.Adw.{Combo, Combos, StepSpec}
+
+  defp step(name, prompt \\ nil),
+    do: %StepSpec{name: name, prompt: prompt, harness: nil, provider: nil, model: nil}
 
   setup do
     original = Application.get_env(:repo_builder, Combos)
@@ -46,7 +49,7 @@ defmodule RepoBuilder.Adw.CombosTest do
       assert {:ok, %Combo{} = combo} = Combos.save(valid())
 
       assert combo.name == "plan_build_review"
-      assert combo.steps == [plan: nil, build: nil, review: nil]
+      assert combo.steps == [step(:plan), step(:build), step(:review)]
       assert combo.flavor == :iso
       assert combo.spec == "the spec"
       assert combo.initial_prompt == "do the thing"
@@ -62,7 +65,7 @@ defmodule RepoBuilder.Adw.CombosTest do
 
       assert {:ok, fetched} = Combos.fetch("Plan Build Review")
       assert fetched.name == "plan_build_review"
-      assert fetched.steps == [plan: nil, build: nil, review: nil]
+      assert fetched.steps == [step(:plan), step(:build), step(:review)]
       assert fetched.spec == "the spec"
     end
 
@@ -80,6 +83,20 @@ defmodule RepoBuilder.Adw.CombosTest do
       assert {:ok, combo} = Combos.save(valid(%{spec: "   ", initial_prompt: ""}))
       assert combo.spec == nil
       assert combo.initial_prompt == nil
+    end
+
+    test "the direct flavor generates the monolithic _direct script", %{tmp: tmp} do
+      assert {:ok, combo} = Combos.save(valid(%{name: "direct demo", flavor: :direct}))
+
+      assert combo.flavor == :direct
+      assert Path.basename(combo.script_path) == "adw_direct_demo_direct.py"
+
+      script_text = File.read!(Path.join([tmp, "adws", "adw_direct_demo_direct.py"]))
+      assert script_text =~ "run_local_workflow(adw_id, STEPS, logger, isolated=False)"
+
+      # Sidecar round-trips through fetch with flavor: :direct.
+      assert {:ok, fetched} = Combos.fetch("direct_demo")
+      assert fetched.flavor == :direct
     end
 
     test "a name collision returns {:error, :exists} unless overwrite" do
@@ -108,14 +125,14 @@ defmodule RepoBuilder.Adw.CombosTest do
 
       assert {:ok, combo} = Combos.save(attrs)
       assert combo.harness == "pi"
-      assert combo.steps == [{:plan, nil}, {:build, "Build with Elixir conventions"}]
+      assert combo.steps == [step(:plan), step(:build, "Build with Elixir conventions")]
 
       sidecar = Path.join([tmp, "adws", ".combos", "custom_build.json"])
       assert File.exists?(sidecar)
 
       assert {:ok, fetched} = Combos.fetch("Custom Build")
       assert fetched.harness == "pi"
-      assert fetched.steps == [{:plan, nil}, {:build, "Build with Elixir conventions"}]
+      assert fetched.steps == [step(:plan), step(:build, "Build with Elixir conventions")]
     end
 
     test "backward compatibility: old plain-string sidecar decodes without crashing", %{tmp: tmp} do
@@ -136,7 +153,7 @@ defmodule RepoBuilder.Adw.CombosTest do
       File.write!(Path.join(sidecar_dir, "old_combo.json"), old_json)
 
       assert {:ok, combo} = Combos.fetch("old_combo")
-      assert combo.steps == [plan: nil, build: nil]
+      assert combo.steps == [step(:plan), step(:build)]
       assert combo.harness == nil
     end
   end

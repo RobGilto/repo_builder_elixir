@@ -20,6 +20,7 @@ defmodule RepoBuilder.Adw.Combos do
 
   alias RepoBuilder.Adw.{Combo, Scaffold}
   alias RepoBuilder.Definitions
+  alias RepoBuilder.Definitions.Adw, as: AdwDef
 
   @type reason :: atom() | {atom(), term()}
 
@@ -134,6 +135,98 @@ defmodule RepoBuilder.Adw.Combos do
 
   def delete(_name, _root), do: {:error, :invalid_name}
 
+  @doc """
+  A merged, de-duplicated, grouped list of loadable ADW entries from both the platform
+  root and the operator's `working_dir`, suitable for the LOAD COMBO grouped picker.
+
+  Returns `[%{kind, name, source, ref, steps, flavor}]` where:
+  - `kind: :combo` — a saved combo with a JSON sidecar (loadable via `fetch/2`).
+  - `kind: :adw` — a discovered `adws/adw_*.py` without a sidecar.
+  - `source: :platform | :project` — where the entry comes from.
+  - `ref` — the stem name for combos, the full path for discovered ADWs.
+  - `steps` — the reconstructed step-atom list (from the filename stem for ADWs; the
+    actual steps for combos). May be `[]` for ADWs with unmappable stems.
+  - `flavor` — the reconstructed flavor atom (from the filename suffix for ADWs).
+  """
+  @type loadable_entry :: %{
+          kind: :combo | :adw,
+          name: String.t(),
+          source: :platform | :project,
+          ref: String.t(),
+          steps: [atom()],
+          flavor: Combo.flavor()
+        }
+
+  @spec loadable(String.t() | nil) :: [loadable_entry()]
+  def loadable(working_dir) do
+    platform_root = definitions_root()
+    project_root = working_dir && working_dir != "" && working_dir
+
+    combo_entries = load_combo_entries(platform_root, project_root)
+    adw_entries = load_adw_entries(platform_root, project_root, combo_entries)
+
+    (combo_entries ++ adw_entries)
+    |> Enum.uniq_by(& &1.ref)
+  end
+
+  @doc """
+  Parse the step atoms from an ADW script filename stem (without the `adw_` prefix).
+  E.g. `"plan_build_review_iso"` → `[:plan, :build, :review]`.
+  Returns `[]` for stems whose parts don't all map to the step allowlist.
+  """
+  @spec steps_from_stem(String.t()) :: [atom()]
+  def steps_from_stem(stem) when is_binary(stem) do
+    valid = Scaffold.valid_steps() |> MapSet.new()
+
+    step_atoms = %{
+      "plan" => :plan,
+      "patch" => :patch,
+      "build" => :build,
+      "test" => :test,
+      "review" => :review,
+      "document" => :document,
+      "ship" => :ship
+    }
+
+    # Strip known suffixes first, then split the remaining stem by "_".
+    base =
+      cond do
+        String.ends_with?(stem, "_local_iso") ->
+          String.slice(stem, 0, byte_size(stem) - byte_size("_local_iso"))
+
+        String.ends_with?(stem, "_direct") ->
+          String.slice(stem, 0, byte_size(stem) - byte_size("_direct"))
+
+        String.ends_with?(stem, "_iso") ->
+          String.slice(stem, 0, byte_size(stem) - byte_size("_iso"))
+
+        true ->
+          stem
+      end
+
+    parts = String.split(base, "_") |> Enum.reject(&(&1 == ""))
+
+    atoms = Enum.map(parts, &Map.get(step_atoms, &1))
+
+    if Enum.all?(atoms, &(&1 != nil and &1 in valid)),
+      do: atoms,
+      else: []
+  end
+
+  def steps_from_stem(_other), do: []
+
+  @doc "Parse the flavor atom from an ADW script filename stem. Defaults to `:iso`."
+  @spec flavor_from_stem(String.t()) :: Combo.flavor()
+  def flavor_from_stem(stem) when is_binary(stem) do
+    cond do
+      String.ends_with?(stem, "_local_iso") -> :local_iso
+      String.ends_with?(stem, "_direct") -> :direct
+      true -> :iso
+    end
+  end
+
+  def flavor_from_stem(_other), do: :iso
+
   # --- internals ---
 
   @spec rm(binary()) :: :ok | {:error, atom()}
@@ -208,6 +301,8 @@ defmodule RepoBuilder.Adw.Combos do
   @spec flavor_of(map()) :: Combo.flavor()
   defp flavor_of(attrs) do
     case get(attrs, :flavor) do
+      :direct -> :direct
+      "direct" -> :direct
       :local_iso -> :local_iso
       "local_iso" -> :local_iso
       _other -> if get(attrs, :local) == true, do: :local_iso, else: :iso
@@ -226,4 +321,88 @@ defmodule RepoBuilder.Adw.Combos do
   end
 
   defp blank(_other), do: nil
+
+  @spec load_combo_entries(String.t(), String.t() | false | nil) :: [loadable_entry()]
+  defp load_combo_entries(platform_root, project_root) do
+    platform_combos =
+      list(platform_root)
+      |> Enum.map(fn combo ->
+        %{
+          kind: :combo,
+          name: combo.name,
+          source: :platform,
+          ref: combo.name,
+          steps: Enum.map(combo.steps, & &1.name),
+          flavor: combo.flavor
+        }
+      end)
+
+    if project_root && project_root != platform_root do
+      project_combos =
+        list(project_root)
+        |> Enum.map(fn combo ->
+          %{
+            kind: :combo,
+            name: combo.name,
+            source: :project,
+            ref: combo.name,
+            steps: Enum.map(combo.steps, & &1.name),
+            flavor: combo.flavor
+          }
+        end)
+
+      seen = MapSet.new(platform_combos, & &1.name)
+      fresh_project = Enum.reject(project_combos, &MapSet.member?(seen, &1.name))
+      platform_combos ++ fresh_project
+    else
+      platform_combos
+    end
+  end
+
+  @spec load_adw_entries(String.t(), String.t() | false | nil, [loadable_entry()]) ::
+          [loadable_entry()]
+  defp load_adw_entries(platform_root, project_root, combo_entries) do
+    combo_refs = MapSet.new(combo_entries, & &1.ref)
+    working_dir = if project_root && project_root != platform_root, do: project_root, else: nil
+
+    platform_adws =
+      AdwDef.scan(platform_root, :app)
+      |> Enum.map(fn adw ->
+        %{
+          kind: :adw,
+          name: adw.name,
+          source: :platform,
+          ref: adw.path,
+          steps: steps_from_stem(adw.name),
+          flavor: flavor_from_stem(adw.name)
+        }
+      end)
+
+    project_adws =
+      if working_dir do
+        AdwDef.scan(working_dir, :working_dir)
+        |> Enum.map(fn adw ->
+          %{
+            kind: :adw,
+            name: adw.name,
+            source: :project,
+            ref: adw.path,
+            steps: steps_from_stem(adw.name),
+            flavor: flavor_from_stem(adw.name)
+          }
+        end)
+      else
+        []
+      end
+
+    seen_adw_names = MapSet.new()
+
+    (platform_adws ++ project_adws)
+    |> Enum.reject(fn adw ->
+      MapSet.member?(combo_refs, adw.ref) or
+        String.contains?(adw.ref, @combos_subdir)
+    end)
+    |> Enum.uniq_by(& &1.name)
+    |> tap(fn _ -> seen_adw_names end)
+  end
 end

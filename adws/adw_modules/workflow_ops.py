@@ -830,18 +830,24 @@ def _local_setup_worktree(adw_id, issue, state, logger):
     return worktree_path, branch_name, backend_port, frontend_port
 
 
-def run_local_workflow(adw_id: str, steps: list, logger) -> None:
+def run_local_workflow(adw_id: str, steps: list, logger, isolated: bool = True) -> None:
     """Run an ordered `steps` list against the single-`<adw-id>` + run.json local
-    contract, in ONE isolated worktree, narrating progress via emit_event.
+    contract, narrating progress via emit_event.
+
+    When isolated=True (default): runs in a throwaway git worktree (original behavior,
+    used by _local_iso scripts).
+    When isolated=False: runs in place against the current checkout — no worktree, no
+    new branch, ships via a direct commit on the current branch (used by _direct scripts).
 
     Generalized from `adw_plan_build_local_iso.py`: it loads + validates the run
-    record, synthesizes a local issue, sets up the worktree/branch/ports once,
-    then iterates the steps running the correct inline op per step:
+    record, synthesizes a local issue, sets up the worktree/branch/ports once (or
+    resolves the repo root in direct mode), then iterates the steps running the
+    correct inline op per step:
 
         plan     -> build_plan (/feature)      test     -> run_tests (/test)
         build    -> implement_plan (/implement) review   -> run_review (/review)
         patch    -> create_and_implement_patch  document -> generate_documentation
-        ship     -> commit + merge into the detected trunk (merge_ops)
+        ship     -> commit + merge into trunk (isolated) / direct commit (direct)
 
     The worktree is committed once after the implementing steps (mirroring the
     shipped plan+build composite). Faithful to the existing local composites so
@@ -863,7 +869,17 @@ def run_local_workflow(adw_id: str, steps: list, logger) -> None:
     if not prompt or not str(prompt).strip():
         _local_fail(adw_id, None, "Run record has no input_data.prompt", logger)
 
-    normalized = [str(s).strip().lower() for s in steps if str(s).strip()]
+    # Normalize each STEPS entry: a plain string stays as (step, None); a dict
+    # {"step": "plan", "model": "opus"} becomes (step, model). Default path (all
+    # plain strings) is byte-behavior-unchanged for shipped _local_iso scripts.
+    def _parse_step_entry(entry):
+        if isinstance(entry, dict):
+            return (str(entry.get("step", "")).strip().lower(), entry.get("model"))
+        return (str(entry).strip().lower(), None)
+
+    step_entries = [_parse_step_entry(s) for s in steps if str(s).strip()]
+    step_entries = [(name, m) for name, m in step_entries if name]
+    normalized = [name for name, _ in step_entries]
     first_step = normalized[0] if normalized else None
 
     local_ops.update_run(
@@ -880,21 +896,32 @@ def run_local_workflow(adw_id: str, steps: list, logger) -> None:
         adw_id=adw_id, issue_number=str(issue.number), issue_class=LOCAL_ISSUE_CLASS
     )
     model = run.get("input_data", {}).get("model")
-    state.update(model_set="heavy" if model in ("heavy", "opus") else "base")
+    global_model_set = "heavy" if model in ("heavy", "opus") else "base"
+    state.update(model_set=global_model_set)
     state.append_adw_id(adw_id)
     state.save(adw_id)
 
-    worktree_path, branch_name, backend_port, frontend_port = _local_setup_worktree(
-        adw_id, issue, state, logger
-    )
-    local_ops.update_run(
-        adw_id, output={"branch": branch_name, "worktree": worktree_path}
-    )
-    _local_narrate(
-        adw_id,
-        f"✅ Worktree ready: {worktree_path} (branch {branch_name}, "
-        f"ports {backend_port}/{frontend_port})",
-    )
+    if isolated:
+        worktree_path, branch_name, backend_port, frontend_port = _local_setup_worktree(
+            adw_id, issue, state, logger
+        )
+        local_ops.update_run(
+            adw_id, output={"branch": branch_name, "worktree": worktree_path}
+        )
+        _local_narrate(
+            adw_id,
+            f"✅ Worktree ready: {worktree_path} (branch {branch_name}, "
+            f"ports {backend_port}/{frontend_port})",
+        )
+    else:
+        # Direct mode: run against the current checkout in place.
+        worktree_path = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
+        branch_name = None
+        backend_port, frontend_port = None, None
+        local_ops.update_run(adw_id, output={"worktree": worktree_path})
+        _local_narrate(adw_id, f"✅ Running in place (no worktree): {worktree_path}")
 
     spec_file = None
     completed = 0
@@ -931,7 +958,12 @@ def run_local_workflow(adw_id: str, steps: list, logger) -> None:
             commit_sha = rev.stdout.strip()
         did_change = False
 
-    for step in normalized:
+    for step, step_model in step_entries:
+        # Apply per-step model override for the duration of this step, then restore.
+        if step_model:
+            per_step_model_set = "heavy" if step_model in ("heavy", "opus") else "base"
+            state.update(model_set=per_step_model_set)
+            state.save(adw_id)
         local_ops.step_start(adw_id, step, summary=f"running {step}")
         step_t0 = time.monotonic()
 
@@ -1031,32 +1063,36 @@ def run_local_workflow(adw_id: str, steps: list, logger) -> None:
             _local_narrate(adw_id, "✅ Documentation complete")
 
         elif step == "ship":
-            # Real ship: commit whatever is pending, then merge the worktree
-            # branch into the repo's detected trunk (local merge; push only
-            # when an origin remote exists — see adw_modules/merge_ops.py).
-            from adw_modules import merge_ops
+            if isolated:
+                # Isolated ship: commit the worktree branch then merge into trunk.
+                from adw_modules import merge_ops
 
-            _commit_pending()
-            repo_root = os.path.dirname(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            )
-            ok, merged_sha, merge_error = merge_ops.merge_branch_into_trunk(
-                branch_name, cwd=repo_root, logger=logger
-            )
-            if not ok:
+                _commit_pending()
+                repo_root = os.path.dirname(
+                    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                )
+                ok, merged_sha, merge_error = merge_ops.merge_branch_into_trunk(
+                    branch_name, cwd=repo_root, logger=logger
+                )
+                if not ok:
+                    local_ops.update_merge_result(
+                        adw_id, local_ops.MERGE_FAILED, merge_error=merge_error
+                    )
+                    local_ops.step_end(adw_id, step, "failed")
+                    _local_fail(
+                        adw_id, step, f"Merge to trunk failed: {merge_error}", logger
+                    )
                 local_ops.update_merge_result(
-                    adw_id, local_ops.MERGE_FAILED, merge_error=merge_error
+                    adw_id, local_ops.MERGE_MERGED, merged_sha=merged_sha
                 )
-                local_ops.step_end(adw_id, step, "failed")
-                _local_fail(
-                    adw_id, step, f"Merge to trunk failed: {merge_error}", logger
+                _local_narrate(
+                    adw_id, f"✅ Ship: merged {branch_name} into trunk @ {merged_sha}"
                 )
-            local_ops.update_merge_result(
-                adw_id, local_ops.MERGE_MERGED, merged_sha=merged_sha
-            )
-            _local_narrate(
-                adw_id, f"✅ Ship: merged {branch_name} into trunk @ {merged_sha}"
-            )
+            else:
+                # Direct ship: commit pending changes in place on the current branch
+                # (no worktree merge — we are already on the target branch).
+                _commit_pending()
+                _local_narrate(adw_id, "✅ Ship: committed in place on current branch")
 
         else:
             local_ops.step_end(adw_id, step, "failed")
@@ -1070,6 +1106,10 @@ def run_local_workflow(adw_id: str, steps: list, logger) -> None:
             duration_ms=int((time.monotonic() - step_t0) * 1000),
         )
         local_ops.update_run(adw_id, completed_steps=completed)
+        # Restore global model after a per-step override.
+        if step_model:
+            state.update(model_set=global_model_set)
+            state.save(adw_id)
 
     # Commit once in the worktree if any step changed files (no push — offline).
     # A ship step already committed via _commit_pending(); this is a no-op then.

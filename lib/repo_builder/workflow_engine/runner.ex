@@ -141,6 +141,8 @@ defmodule RepoBuilder.WorkflowEngine.Runner do
     case Session.Supervisor.start_session(
            agent_id: agent_id,
            harness: step.harness,
+           provider: step.provider,
+           model: step.model,
            prompt: prompt,
            workflow_run_id: run.id,
            workflow_run_db_id: run.id,

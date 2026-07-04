@@ -24,5 +24,9 @@
   # runtime value is a fixed-key map `%{harness: _, provider: _, model: _, session_id: _}`
   # that callers (e.g. `apply_harness_defaults/2`) always access via pattern matching,
   # so the relaxed spec is a deliberate internal design choice, not a safety concern.
-  {"lib/repo_builder/orchestrator.ex", :contract_supertype, 218}
+  {"lib/repo_builder/orchestrator.ex", :contract_supertype, 218},
+  # maybe_put/3 key is typed as String.t() (the public contract); Dialyzer narrows it to
+  # the literal constant strings used at the two call sites. Keeping the broader spec is
+  # safer since new fields can be added without widening the type declaration.
+  {"lib/repo_builder/adw/step_spec.ex", :contract_supertype}
 ]

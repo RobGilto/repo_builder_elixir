@@ -168,5 +168,57 @@ defmodule RepoBuilder.Adw.ScaffoldTest do
 
       assert Path.basename(gen.path) == "adw_loc_local_iso.py"
     end
+
+    test "the direct flavor writes the _direct filename at 0755", %{root: root} do
+      assert {:ok, gen} =
+               Scaffold.generate(%{
+                 name: "dir",
+                 steps: [:plan, :build],
+                 flavor: :direct,
+                 root: root
+               })
+
+      assert Path.basename(gen.path) == "adw_dir_direct.py"
+      %File.Stat{mode: mode} = File.stat!(gen.path)
+      assert Bitwise.band(mode, 0o777) == 0o755
+    end
+  end
+
+  describe "render/1 :direct" do
+    test "emits the monolithic in-place contract with isolated=False" do
+      assert {:ok, script} =
+               Scaffold.render(%{
+                 name: "plan_build",
+                 steps: [:plan, :build],
+                 flavor: :direct
+               })
+
+      assert script =~ "Usage: uv run adw_plan_build_direct.py <adw-id>"
+      assert script =~ "from adw_modules.workflow_ops import run_local_workflow"
+      assert script =~ "run_local_workflow(adw_id, STEPS, logger, isolated=False)"
+      assert script =~ ~s(STEPS = ["plan", "build"])
+
+      # Monolithic: must NOT emit subprocess chaining or GitHub issue arg.
+      refute script =~ "issue_number"
+      refute script =~ "subprocess.run"
+    end
+
+    test "generates the same :direct script with or without custom prompts" do
+      assert {:ok, with_prompts} =
+               Scaffold.render(%{
+                 name: "combo",
+                 steps: [{:plan, "custom plan"}, {:build, nil}],
+                 flavor: :direct
+               })
+
+      assert {:ok, without_prompts} =
+               Scaffold.render(%{
+                 name: "combo",
+                 steps: [:plan, :build],
+                 flavor: :direct
+               })
+
+      assert with_prompts == without_prompts
+    end
   end
 end

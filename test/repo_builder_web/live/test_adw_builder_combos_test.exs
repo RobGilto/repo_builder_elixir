@@ -160,13 +160,44 @@ defmodule RepoBuilderWeb.TestAdwBuilderCombosTest do
 
     # 4. Loading the combo repopulates the builder step rows + textareas.
     render_click(view, "toggle_adw_builder")
-    loaded = render_change(view, "adw_load_combo", %{"combo" => "demo_pbr"})
+    loaded = render_change(view, "adw_load_combo", %{"combo" => "combo:demo_pbr"})
     # Step rows now label the COMMAND/md each step runs (plan→feature, build→implement).
     assert loaded =~ "feature"
     assert loaded =~ "implement"
     assert loaded =~ "review"
     assert loaded =~ @spec_text
     assert loaded =~ @initial_prompt
+  end
+
+  test "the builder inputs live inside a <form> so phx-change fires (regression)", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/")
+    render_click(view, "toggle_adw_builder")
+
+    # LiveView refuses phx-change on an input that is not inside a form ("form events
+    # require the input to be inside a form"), which silently swallowed every keystroke
+    # in the real browser. Assert the name input actually has a <form> ancestor.
+    assert has_element?(view, "form input#adw-combo-name[phx-change=\"adw_set_name\"]")
+  end
+
+  test "adw_set_step_prompt reads the form-keyed value (prompt-<id>), not \"value\"", %{
+    conn: conn
+  } do
+    {:ok, view, _html} = live(conn, ~p"/")
+    render_click(view, "toggle_adw_builder")
+
+    # Add a step (id 1) and expand it so its prompt textarea (name="prompt-1") renders.
+    render_click(view, "adw_add_step", %{"step" => "plan"})
+    render_click(view, "adw_toggle_step", %{"id" => "1"})
+
+    # Inside a form, the changed textarea's value arrives keyed by its name, not "value".
+    html =
+      render_change(view, "adw_set_step_prompt", %{
+        "id" => "1",
+        "prompt-1" => "a bespoke plan prompt"
+      })
+
+    # The custom prompt persisted and re-renders into the textarea.
+    assert html =~ "a bespoke plan prompt"
   end
 
   # Mirrors `Runner.render/2`'s documented `{{key}}` substitution contract (not internals):
