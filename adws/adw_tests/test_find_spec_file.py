@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from adw_modules.workflow_ops import (
     PLAN_CAPABLE_COMMANDS,
+    _extract_spec_path,
     _local_find_spec_fallback,
     resolve_plan_command,
 )
@@ -124,6 +125,31 @@ def test_find_spec_file_diff_filter_accepts_both_formats():
         "specs/issue-1-adw-x-sdlc_planner-a.md",
         "specs/issue-1-adw-x-sdlc_planner-b.html",
     ]
+
+
+def test_extract_spec_path_salvages_chatty_reply():
+    """Regression: run 0d9c026a — planner replied 'Plan saved to `specs/...html`.' plus
+    a long summary; the strict parse and glob fallback both missed the plan."""
+    with tempfile.TemporaryDirectory() as root:
+        os.makedirs(os.path.join(root, "specs"))
+        with open(os.path.join(root, "specs", "pg-sh-version-flag.html"), "w") as f:
+            f.write("<html></html>")
+        chatty = "Plan saved to `specs/pg-sh-version-flag.html`.\n\n## Summary\nblah"
+        assert _extract_spec_path(chatty, root) == "specs/pg-sh-version-flag.html"
+
+
+def test_extract_spec_path_leaves_clean_reply_alone():
+    with tempfile.TemporaryDirectory() as root:
+        os.makedirs(os.path.join(root, "specs"))
+        with open(os.path.join(root, "specs", "a.html"), "w") as f:
+            f.write("x")
+        assert _extract_spec_path("specs/a.html", root) is None
+
+
+def test_extract_spec_path_ignores_nonexistent_mentions():
+    with tempfile.TemporaryDirectory() as root:
+        os.makedirs(os.path.join(root, "specs"))
+        assert _extract_spec_path("see specs/ghost.html maybe", root) is None
 
 
 if __name__ == "__main__":

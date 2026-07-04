@@ -222,7 +222,41 @@ def build_plan(
         f"issue_plan_response: {issue_plan_response.model_dump_json(indent=2, by_alias=True)}"
     )
 
+    # Output-contract salvage: planners must reply with ONLY the spec path, but a
+    # chatty reply ("Plan saved to `specs/...html` ...summary...") otherwise fails the
+    # run even though the plan exists on disk. If the reply isn't already a clean
+    # existing path, extract the first specs/*.{html,md} it mentions that exists.
+    if issue_plan_response.success:
+        salvaged = _extract_spec_path(issue_plan_response.output, working_dir)
+        if salvaged:
+            logger.warning(
+                f"Planner reply was not a bare spec path; salvaged {salvaged!r} "
+                f"from its output"
+            )
+            issue_plan_response = issue_plan_response.model_copy(
+                update={"output": salvaged}
+            )
+
     return issue_plan_response
+
+
+def _extract_spec_path(output: str, working_dir: Optional[str]) -> Optional[str]:
+    """The first existing specs/*.{html,md} mentioned in a chatty planner reply, or
+    None when the reply is already a clean existing path (leave it untouched) or no
+    mentioned path exists on disk."""
+    root = working_dir or os.getcwd()
+    stripped = (output or "").strip().strip("`")
+    stripped_abs = (
+        stripped if os.path.isabs(stripped) else os.path.join(root, stripped)
+    )
+    if stripped and "\n" not in stripped and os.path.exists(stripped_abs):
+        return None
+
+    for match in re.findall(r"specs/[\w.\-/]+\.(?:html|md)", output or ""):
+        candidate = match if os.path.isabs(match) else os.path.join(root, match)
+        if os.path.exists(candidate):
+            return match
+    return None
 
 
 def implement_plan(

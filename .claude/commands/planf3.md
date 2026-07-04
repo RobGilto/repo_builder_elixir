@@ -27,11 +27,16 @@ REQUEST: $ARGUMENTS
 
 Derive the plan variables from `REQUEST`:
 
-- If `REQUEST` parses as JSON, use its `number` → `issue_number`, its `title`/`body` as the
-  request, and any `adw_id` it carries (else synthesize a short one).
+- **ADW harness form (most common):** the harness invokes
+  `/planf3 <issue_number> <adw_id> <issue_json>`, so `REQUEST` arrives as two bare tokens
+  followed by a JSON object (e.g. `9891906 0d9c026a {"number": 9891906, "title": …}`).
+  Bind them exactly: first token → `issue_number`, second token → `adw_id`, and the JSON's
+  `title`/`body` are the request. These are REAL identifiers — you MUST use them verbatim
+  in `PLAN_FILE` below; do not invent substitutes.
+- If `REQUEST` is a single JSON object, use its `number` → `issue_number`, its
+  `title`/`body` as the request, and any `adw_id` it carries (else synthesize a short one).
 - Otherwise treat the full `REQUEST` string as the freeform request; set `issue_number` and
   `adw_id` to a short descriptive placeholder derived from the request.
-- NEVER bind individual whitespace-separated words to `issue_number`/`adw_id`/`issue_json`.
 - If `REQUEST` is empty or is only a few stray words (garbled positional fragments), STOP and
   report that the caller should re-invoke with the full request (or the issue JSON) as a
   single argument — do not fabricate a request.
@@ -39,6 +44,11 @@ Derive the plan variables from `REQUEST`:
 PLAN_FILE: `specs/issue-{issue_number}-adw-{adw_id}-sdlc_planner-{descriptive-name}.html`
 (replace `{descriptive-name}` with a short kebab-case name derived from the request, e.g.
 "add-auth-system"). The images directory, if ever needed, is the same path without `.html`.
+
+> **The filename is LOAD-BEARING.** The ADW engine locates your plan by globbing
+> `specs/issue-{issue_number}-adw-{adw_id}*` when parsing your reply fails. A plan saved
+> under any other name is invisible to the pipeline and FAILS the whole run. Never
+> shorten, rename, or "improve" this convention.
 
 ## Instructions
 
@@ -74,8 +84,11 @@ PLAN_FILE: `specs/issue-{issue_number}-adw-{adw_id}-sdlc_planner-{descriptive-na
 
 Read the `PLANF3_IMAGES` environment variable:
 
-- **`placeholders` (or unset — the default):** fill every image slot with a stock image from
-  the repo library `specs/.planf3-assets/placeholders/`, mapping slot kind → file:
+- **`placeholders` (or unset — the default):** you MUST fill every image slot with a stock
+  image from the repo library `specs/.planf3-assets/placeholders/`. This is a zero-cost
+  `<img src>` file reference to a PNG already committed in the repo — it is NOT image
+  generation, costs nothing, and requires no API or network. Do NOT leave slots as HTML
+  comments in this mode. Map slot kind → file:
   hero → `hero.png`, problem → `problem.png`, solution → `solution.png`, any phase image →
   `phase.png`, notes/questionables → `notes.png`. Embed as
   `<img class="placeholder" src=".planf3-assets/placeholders/<file>.png" alt="<intended bespoke subject>">`
@@ -301,4 +314,13 @@ Focus research on: `BUILD_PROMPT.md`, `README.md`, `AGENTS.md` (if present), `mi
 
 ## Report
 
-- IMPORTANT: Return exclusively the path to the plan file created and nothing else.
+- **HARD OUTPUT CONTRACT — the ADW engine parses your ENTIRE final message as a file
+  path.** Your final reply must be exactly the relative plan path and NOTHING else:
+
+  ```
+  specs/issue-9891906-adw-0d9c026a-sdlc_planner-pg-sh-version-flag.html
+  ```
+
+- No prose, no summary, no headings, no backticks, no "Plan saved to…", no trailing
+  notes. Any extra text makes the path unparseable and fails the run. Put any summary
+  INSIDE the plan document (Notes section), never in the reply.
