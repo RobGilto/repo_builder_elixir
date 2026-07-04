@@ -26,7 +26,8 @@ defmodule RepoBuilderWeb.PlanningLive do
     {:ok,
      assign(socket,
        step: 1,
-       projects: Projects.list_projects(),
+       projects: [],
+       projects_loaded: false,
        selected_project: nil,
        goal: "",
        intent: nil,
@@ -63,7 +64,10 @@ defmodule RepoBuilderWeb.PlanningLive do
     end
   end
 
-  defp apply_action(socket, :new, _params), do: assign(socket, page_title: "Plan a run")
+  defp apply_action(socket, :new, _params) do
+    if connected?(socket), do: send(self(), :load_projects)
+    assign(socket, page_title: "Plan a run")
+  end
 
   defp apply_action(socket, :show, %{"id" => id}) do
     case Plans.fetch_plan(id) do
@@ -77,6 +81,11 @@ defmodule RepoBuilderWeb.PlanningLive do
       {:error, :not_found} ->
         socket |> put_flash(:error, "Plan not found") |> push_navigate(to: ~p"/plan")
     end
+  end
+
+  @impl true
+  def handle_info(:load_projects, socket) do
+    {:noreply, assign(socket, projects: Projects.list_projects(), projects_loaded: true)}
   end
 
   # --- wizard events ---
@@ -330,13 +339,21 @@ defmodule RepoBuilderWeb.PlanningLive do
 
         <section :if={@step == 1} class="space-y-3">
           <h2 class="font-semibold">1 · Pick a project</h2>
-          <form id="wizard-project" phx-submit="pick_project" class="flex items-center gap-2">
+          <p :if={not @projects_loaded} class="text-sm text-zinc-400 animate-pulse">
+            Loading projects…
+          </p>
+          <form
+            :if={@projects_loaded and @projects != []}
+            id="wizard-project"
+            phx-submit="pick_project"
+            class="flex items-center gap-2"
+          >
             <select name="project_id" class="rounded border border-zinc-600 bg-zinc-800 px-2 py-1">
               <option :for={p <- @projects} value={p.id}>{p.name}</option>
             </select>
             <button class="rounded bg-cyan-700 px-3 py-1 text-sm" type="submit">Next</button>
           </form>
-          <p :if={@projects == []} class="text-sm text-zinc-400">
+          <p :if={@projects_loaded and @projects == []} class="text-sm text-zinc-400">
             No projects — <.link navigate={~p"/projects"} class="text-cyan-400">register one</.link>.
           </p>
         </section>
