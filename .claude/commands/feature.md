@@ -60,7 +60,7 @@ Focus on the following files:
 - `config/**` - `config.exs`/`dev.exs`/`test.exs`/`runtime.exs`, including the harness registry and Oban config.
 - `priv/repo/migrations/**` - Ecto migrations (binary_id PKs, JSONB, Oban tables).
 - `test/**` - ExUnit tests, `test/support/` cases, Mox setup.
-- `scripts/**` - Helper scripts (e.g. `scripts/patch_deps.sh`).
+- `scripts/**` - Helper scripts (e.g. `scripts/pg.sh`).
 - `adws/**` - AI Developer Workflow (ADW) Python `uv` scripts.
 
 - If `.claude/commands/conditional_docs.md` exists, read it to check if your task requires additional documentation, and include any matching docs in the `Plan Format: Relevant Files` section of your plan.

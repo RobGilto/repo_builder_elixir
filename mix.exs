@@ -104,6 +104,10 @@ defmodule RepoBuilder.MixProject do
       # Typed structs — saleyn fork, package name :typedstruct (§3).
       {:typedstruct, "~> 0.5", runtime: false},
       # Runtime conformance of untrusted harness JSON at the boundary (§4).
+      # NOTE (audit F4): 0.13.7 is upstream's final release (repo dormant since
+      # 2024-10) and references the `Regex.re_version` struct field removed in Elixir
+      # 1.20. The `deps.get` alias below auto-applies the one-line fix after every
+      # fetch, so a fresh checkout is self-healing — no manual patch step.
       {:type_check, "~> 0.13.7"},
       # YAML frontmatter parsing for subagent template files (.claude/agents/*.md).
       {:yaml_elixir, "~> 2.11"},
@@ -130,6 +134,9 @@ defmodule RepoBuilder.MixProject do
   # See the documentation for `Mix` for more info on aliases.
   defp aliases do
     [
+      # Self-healing dependency fetch (audit F4): pristine type_check 0.13.7 does not
+      # compile on Elixir 1.20, so every fetch immediately re-applies the one-line fix.
+      "deps.get": [&Mix.Tasks.Deps.Get.run/1, &patch_type_check/1],
       setup: ["deps.get", "ecto.setup", "assets.setup", "assets.build"],
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
@@ -143,5 +150,28 @@ defmodule RepoBuilder.MixProject do
       ],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
+  end
+
+  # type_check 0.13.7 / Elixir 1.20 compat (audit F4): upstream is dormant, so the
+  # `deps.get` alias deletes the `Regex.re_version` reference (removed in Elixir 1.20)
+  # from the pristine dep source right after every fetch. Idempotent; a no-op once
+  # patched or if the file moves in a future release.
+  defp patch_type_check(_args) do
+    path = Path.join(File.cwd!(), "deps/type_check/lib/type_check/default_overrides/regex.ex")
+
+    with true <- File.exists?(path),
+         contents = File.read!(path),
+         true <- String.contains?(contents, "re_version: term(),") do
+      patched =
+        contents
+        |> String.split("\n")
+        |> Enum.reject(&String.contains?(&1, "re_version: term(),"))
+        |> Enum.join("\n")
+
+      File.write!(path, patched)
+      Mix.shell().info("type_check: removed Regex.re_version line (Elixir 1.20 compat)")
+    else
+      _ -> :ok
+    end
   end
 end

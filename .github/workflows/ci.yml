@@ -1,12 +1,12 @@
 # CI for repo_builder_elixir — the typed green gate (BUILD_PROMPT.md §3, §12 M0).
 #
 # Step order is LOAD-BEARING:
-#   deps.get -> patch_deps.sh -> compile (warnings-as-errors) -> format -> credo
+#   deps.get -> compile (warnings-as-errors) -> format -> credo
 #   -> test (warnings-as-errors) -> dialyzer
 #
-# `scripts/patch_deps.sh` MUST run before any compile: type_check 0.13.7 does not
-# compile on Elixir 1.20 until that patch removes the dropped `Regex.re_version`
-# reference (see project memory `native-dep-space-path`).
+# The `deps.get` alias auto-patches type_check 0.13.7 for Elixir 1.20 (the
+# `Regex.re_version` fix — upstream is dormant) right after every fetch, so no
+# separate patch step exists anymore (audit F4).
 #
 # Toolchain pins come straight from mise.toml and must never be substituted:
 #   OTP 28.4 / Elixir 1.20.1.
@@ -82,10 +82,6 @@ jobs:
 
       - name: Fetch dependencies
         run: mix deps.get
-
-      # MUST run before compile (Elixir 1.20 / type_check compat patch).
-      - name: Apply dependency patches
-        run: bash scripts/patch_deps.sh
 
       - name: Compile (warnings as errors)
         run: mix compile --warnings-as-errors

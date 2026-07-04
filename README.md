@@ -122,17 +122,13 @@ PostgreSQL must be running **before** the database steps. The dev and test datab
    mix deps.get
    ```
 
-3. **Patch `type_check` (required before compiling).** `type_check 0.13.7` references a `Regex` struct field that does not exist on Elixir 1.20; this idempotent script removes the offending line so the project compiles under the pinned Elixir. It only edits the dependency's source — it does **not** compile anything — and must run **after** `mix deps.get` (or `mix deps.clean`) and **before** compilation:
+3. **Compile:**
    ```bash
-   scripts/patch_deps.sh
+   mix compile
    ```
+   > `type_check 0.13.7` (upstream's final release) does not compile on Elixir 1.20; the project's `deps.get` alias auto-applies the one-line fix after every fetch, so there is no manual patch step.
 
-4. **Compile** (recompile the patched `type_check` first, then the project):
-   ```bash
-   mix deps.compile type_check && mix compile
-   ```
-
-5. **Initialize and start the local PostgreSQL cluster** (one-time `init`, then `start`):
+4. **Initialize and start the local PostgreSQL cluster** (one-time `init`, then `start`):
    ```bash
    scripts/pg.sh init
    scripts/pg.sh start
@@ -191,13 +187,9 @@ mix deps.get
 
 Add the export to `~/.zshrc` to make it permanent.
 
-**`sed` compatibility (`scripts/patch_deps.sh`)**
-
-macOS `sed` requires an explicit backup extension with `-i`. If you see `sed: -I or -i may not be used with stdin`, the script needs `sed -i ''` instead of `sed -i`. The repo version is already patched for this, but note it if you maintain a fork.
-
 **Upgrading to the latest from GitHub**
 
-Pulling a new revision can land new dependencies and new migrations, so a clean upgrade is more than `git pull`. On a Mac checkout the README/`mise.toml`/`scripts/patch_deps.sh` carry local setup tweaks (Homebrew Postgres, the `sed -i ''` fix); stash them first so the fast-forward stays clean, then restore:
+Pulling a new revision can land new dependencies and new migrations, so a clean upgrade is more than `git pull`. On a Mac checkout the README/`mise.toml` carry local setup tweaks (Homebrew Postgres); stash them first so the fast-forward stays clean, then restore:
 
 ```bash
 # 1. Protect local setup tweaks and fast-forward to the remote tip
@@ -209,8 +201,7 @@ git stash pop                             # re-applies the tweaks (resolve READM
 # 2. Re-sync deps, re-patch type_check, recompile
 export HEX_CACERTS_PATH="/path/to/your/combined-ca.pem"   # only on corporate TLS networks
 mix deps.get
-scripts/patch_deps.sh
-mix deps.compile type_check && mix compile
+mix compile
 
 # 3. Apply any new migrations (Homebrew Postgres must be running)
 brew services start postgresql@16         # no-op if already up
@@ -227,8 +218,6 @@ The `setup` alias chains `deps.get`, `ecto.setup`, `assets.setup`, and `assets.b
 ```bash
 mix setup
 ```
-
-> Note: `mix setup` does **not** run `scripts/patch_deps.sh`. On a fresh checkout, run steps 2–4 first (`mix deps.get` → `scripts/patch_deps.sh` → `mix deps.compile type_check && mix compile`) so `type_check` compiles, then `mix setup` is safe.
 
 Database management aliases:
 
@@ -458,7 +447,7 @@ The included `RepoBuilder.Harness.Cursor` is the proof — a real `command/1` an
 ├── mise.toml                       # project-scoped toolchain pins (erlang/elixir/postgres)
 ├── mix.exs                         # :repo_builder app, deps, aliases
 ├── config/                         # harness registry, session limits, plugins, Oban, alerting
-├── scripts/                        # pg.sh (user-space Postgres) + patch_deps.sh (type_check fix)
+├── scripts/                        # pg.sh (user-space Postgres cluster)
 ├── lib/
 │   ├── repo_builder/
 │   │   ├── harness.ex, harness/    # contract, Event, Wire, Redact, Registry, adapters, Pricing
@@ -487,5 +476,5 @@ This is a substantial single-author project. I would rather state its edges than
 - **Live acceptance against the real `claude` and `pi` CLIs is a manual step**, because those tools are external and may not be installed everywhere.
 - **It is not deployed.** It runs locally (`mix phx.server`). There is no hosted instance or production release behind it.
 - **I built it human-directs-AI** (see [How I built this](#how-i-built-this)) under the green gate. That is the point, not a caveat.
-- Operational reminders: run `scripts/pg.sh start` once per session, and `scripts/patch_deps.sh` (followed by `mix deps.compile type_check && mix compile`) after any `mix deps.get` or `mix deps.clean`.
+- Operational reminder: run `scripts/pg.sh start` once per session. (`mix deps.get` self-patches `type_check`, so fetching/cleaning deps needs no follow-up step.)
 </content>

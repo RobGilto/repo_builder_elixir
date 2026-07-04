@@ -34,8 +34,8 @@ PATH_TO_PLAN: $ARGUMENTS
 
 - Toolchain is mise-pinned (Erlang/Elixir/Postgres). If `mix` can't resolve deps or
   `deps/` is absent, set the worktree up before compiling, in order:
-  `mix deps.get` → `scripts/patch_deps.sh` (patches `type_check` for Elixir 1.20 — REQUIRED
-  before compiling) → `mix deps.compile type_check && mix compile`.
+  `mix deps.get` → `mix compile` (the `deps.get` alias auto-patches `type_check` for
+  Elixir 1.20 — no manual step).
 - Postgres for the test step is a separate running cluster on `localhost:5432`
   (postgres/trust); `mix test` will create the test DB. Do NOT start/stop the cluster.
 
