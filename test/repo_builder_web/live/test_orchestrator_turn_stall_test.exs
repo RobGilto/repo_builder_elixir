@@ -52,6 +52,11 @@ defmodule RepoBuilderWeb.TestOrchestratorTurnStallTest do
     |> form("#command-form", command: "stall please")
     |> render_submit()
 
+    # The idle-timeout error is a `:system`-category row, which is hidden by default in
+    # the center stream (issue filter-sys-logs). Opt into the SYS chip first so the row
+    # renders and the substring below finds it in the rendered DOM.
+    view |> element("#filter-system") |> render_click()
+
     # The short idle watchdog fires and the `idle timeout` error row reaches the feed,
     # instead of the turn hanging silently for the worker-grade 5 minutes.
     assert eventually(fn -> render(view) =~ "idle timeout" end)
