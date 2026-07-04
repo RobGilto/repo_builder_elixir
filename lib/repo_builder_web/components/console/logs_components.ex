@@ -31,6 +31,10 @@ defmodule RepoBuilderWeb.Console.LogsComponents do
 
   attr :project_active?, :boolean, default: false, doc: "whether a project is active (chip shown)"
 
+  attr :show_system?, :boolean,
+    default: false,
+    doc: "toggle for `:system`-category rows in the center event stream (issue filter-sys-logs)"
+
   @doc "The center filter bar: category chips, agent-name pills, regex search, auto-follow, clear-all."
   @spec filter_bar(map()) :: Phoenix.LiveView.Rendered.t()
   def filter_bar(assigns) do
@@ -52,6 +56,13 @@ defmodule RepoBuilderWeb.Console.LogsComponents do
         active?={MapSet.member?(@active_categories, :thinking)}
       />
       <.filter_chip cat={:hook} label="HOOK" active?={MapSet.member?(@active_categories, :hook)} />
+
+      <.filter_chip
+        cat={:system}
+        label="SYS"
+        active?={@show_system?}
+        event="toggle_system"
+      />
 
       <span :for={id <- @active_agents} class="cns-namepill">
         {Map.get(@agent_names, id, id)}
@@ -123,6 +134,11 @@ defmodule RepoBuilderWeb.Console.LogsComponents do
   attr :label, :string, required: true
   attr :active?, :boolean, default: false
 
+  attr :event, :string,
+    default: "toggle_category",
+    doc:
+      "phx-click event name — override for chips with a non-toggle_category handler (e.g. SYS ⇒ toggle_system)"
+
   @doc "A single category filter chip (colored when active)."
   @spec filter_chip(map()) :: Phoenix.LiveView.Rendered.t()
   def filter_chip(assigns) do
@@ -130,7 +146,7 @@ defmodule RepoBuilderWeb.Console.LogsComponents do
     <button
       id={"filter-#{@cat}"}
       type="button"
-      phx-click="toggle_category"
+      phx-click={@event}
       phx-value-cat={@cat}
       class={["cns-chip", "cns-chip--#{@cat}", @active? && "cns-chip--active"]}
     >

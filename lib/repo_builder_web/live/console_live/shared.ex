@@ -481,6 +481,13 @@ defmodule RepoBuilderWeb.ConsoleLive.Shared do
 
     rows = Enum.take(rows, -@buffer_limit)
 
+    # Filter the buffered rows through the active filter chain BEFORE pushing to the
+    # stream so the on-mount view honors every LiveView assign (including the new
+    # `@show_system?` toggle, issue filter-sys-logs). The full `event_buffer` keeps
+    # every row so a future toggle ON reveals them without a DB round-trip; only the
+    # rendered stream is narrowed here, mirroring `restream/1`.
+    stream_rows = Enum.filter(rows, &passes?(&1, socket.assigns))
+
     # Seed the chat pane from a dedicated orchestrator-scoped query rather than the
     # worker-dominated global slice above (issue-chat-history-backfill): orchestrator
     # rows fall out of the global most-recent-200 window once workers dominate, so the
@@ -499,7 +506,7 @@ defmodule RepoBuilderWeb.ConsoleLive.Shared do
     # restores them alongside the re-streamed history (issue-per-agent token/context).
     |> seed_context_tokens()
     |> seed_counters()
-    |> stream(:events, rows, reset: true)
+    |> stream(:events, stream_rows, reset: true)
   end
 
   # Build the chat pane's `@messages` from the ACTIVE orchestrator's scoped backfill
@@ -647,7 +654,7 @@ defmodule RepoBuilderWeb.ConsoleLive.Shared do
   @doc "Whether a buffered row passes the active category/agent/project/search filters."
   @spec passes?(map(), map()) :: boolean()
   def passes?(row, assigns) do
-    category_pass?(row, assigns.active_categories) and
+    category_pass?(row, assigns.active_categories, assigns.show_system?) and
       agent_pass?(row, assigns.active_agents) and
       project_pass?(row, assigns) and
       search_pass?(row.body, assigns.search, assigns.regex?)
@@ -690,10 +697,18 @@ defmodule RepoBuilderWeb.ConsoleLive.Shared do
   defp orchestrator_owned?(key, orchestrator_id),
     do: String.starts_with?(key, "orch-#{orchestrator_id}")
 
-  @doc "Category filter predicate — `:system` rows always pass."
-  @spec category_pass?(map(), MapSet.t()) :: boolean()
-  def category_pass?(%{category: :system}, _active), do: true
-  def category_pass?(%{category: category}, active), do: MapSet.member?(active, category)
+  # Category filter predicate. The `:system` clause short-circuits on `show_system?` —
+  # the only categories field-toggled by the operator remain the four
+  # `:response | :tool | :thinking | :hook` entries in `active_categories`. Keeping the
+  # system predicate as a fail-fast FIRST conjunct of `passes?/2` means an off-toggle
+  # never re-surfaces system rows via the agent / project / search predicates
+  # (issue filter-sys-logs).
+  @spec category_pass?(map(), MapSet.t(), boolean()) :: boolean()
+  def category_pass?(%{category: :system}, _active, false), do: false
+  def category_pass?(%{category: :system}, _active, true), do: true
+
+  def category_pass?(%{category: category}, active, _show_system?),
+    do: MapSet.member?(active, category)
 
   @spec agent_pass?(map(), [String.t()]) :: boolean()
   defp agent_pass?(_row, []), do: true

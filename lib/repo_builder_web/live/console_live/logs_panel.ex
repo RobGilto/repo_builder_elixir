@@ -20,10 +20,10 @@ defmodule RepoBuilderWeb.ConsoleLive.LogsPanel do
   @finished_workflow_statuses [:succeeded, :failed, :cancelled]
 
   @events ~w(toggle_category toggle_agent_filter set_search toggle_regex toggle_project_scope
-             toggle_auto_follow toggle_thinking toggle_show_hidden release_hidden clear_filters
-             clear_workflows toggle_event open_event close_event open_file toggle_select
-             select_drag clear_selection open_log_manager select_log_filter log_page_next
-             log_page_prev log_toggle_select log_select_drag clear_log_selection
+             toggle_auto_follow toggle_thinking toggle_system toggle_show_hidden release_hidden
+             clear_filters clear_workflows toggle_event open_event close_event open_file
+             toggle_select select_drag clear_selection open_log_manager select_log_filter
+             log_page_next log_page_prev log_toggle_select log_select_drag clear_log_selection
              log_make_visible log_make_invisible log_purge_selected purge_all_logs
              explain_selected hide_selected close_explain)
 
@@ -75,6 +75,18 @@ defmodule RepoBuilderWeb.ConsoleLive.LogsPanel do
 
   def handle_event("toggle_thinking", _params, socket),
     do: {:noreply, assign(socket, :show_thinking?, not socket.assigns.show_thinking?)}
+
+  # Flip the `@show_system?` toggle (issue filter-sys-logs) and re-filter the buffered
+  # rows through the updated `passes?/2` chain so already-buffered `:system` rows become
+  # visible (or hidden) without a DB round-trip. Mirror-symmetric with `toggle_project_scope`
+  # above. The toggle is INDEPENDENT of the four `active_categories` toggles so CLEAR does
+  # not flip it (a deliberate asymmetry — see `clear_filters/2` below).
+  def handle_event("toggle_system", _params, socket),
+    do:
+      {:noreply,
+       socket
+       |> assign(:show_system?, not socket.assigns.show_system?)
+       |> Shared.restream()}
 
   # Troubleshooting: reveal (or re-hide) rows soft-hidden by CLEAR. Flip the flag, then
   # re-seed the log stream + workflow swimlanes from the DB honoring the new flag.

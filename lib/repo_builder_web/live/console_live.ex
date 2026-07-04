@@ -195,6 +195,13 @@ defmodule RepoBuilderWeb.ConsoleLive do
         regex?: false,
         search: "",
         active_categories: MapSet.new(@categories),
+        # Toggle for `:system`-category rows in the center event stream (issue
+        # filter-sys-logs). Default OFF: lifecycle events (`session_started`, `usage`,
+        # `done`, `error`) stay in `event_buffer` and `agent_logs` forever but are
+        # hidden from the view. Re-shown via the SYS chip in the filter bar / ADWS
+        # header. Independent of the four `active_categories` toggles so CLEAR does
+        # not flip it (logs_panel.ex `clear_filters` is intentionally asymmetric).
+        show_system?: false,
         active_agents: [],
         expanded_ids: MapSet.new(),
         counters: %{},
@@ -1891,6 +1898,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
               auto_follow?={@auto_follow?}
               project_scoped?={@project_scoped?}
               project_active?={@active_project_id != nil}
+              show_system?={@show_system?}
             />
             <.selection_bar
               selected_count={MapSet.size(@selected_ids)}
@@ -1965,6 +1973,19 @@ defmodule RepoBuilderWeb.ConsoleLive do
                 >
                   {label}
                 </button>
+                <button
+                  id="adw-cat-system"
+                  type="button"
+                  phx-click="toggle_system"
+                  class={[
+                    "cns-chip",
+                    "cns-chip--system",
+                    @show_system? && "cns-chip--active"
+                  ]}
+                  title="Toggle the system rows (lifecycle / usage / done / error) in the center stream — sys rows stay in agent_logs, only the view toggles"
+                >
+                  SYS
+                </button>
                 <span class="ml-auto text-[0.625rem]" style="color: var(--cns-text-2)">
                   {running_count(@statuses)} running
                 </span>
@@ -1993,7 +2014,14 @@ defmodule RepoBuilderWeb.ConsoleLive do
                   duration={view.duration}
                   current={view.current}
                   steps={view.steps}
-                  step_squares={workflow_step_squares(@event_buffer, view.run_id, @active_categories)}
+                  step_squares={
+                    workflow_step_squares(
+                      @event_buffer,
+                      view.run_id,
+                      @active_categories,
+                      @show_system?
+                    )
+                  }
                 />
               </div>
 
@@ -2257,17 +2285,20 @@ defmodule RepoBuilderWeb.ConsoleLive do
   # The run's buffered event rows grouped by `:step`, for the matching workflow card's step
   # boxes (squares live under the step that emitted them). Rows are matched to the run by the
   # `wf-<run_id>-<step>` agent-key prefix (WorkflowEngine.step_agent_id/2) or a bare run-id
-  # key, then filtered by the active category set.
-  @spec workflow_step_squares([map()], Ecto.UUID.t(), MapSet.t()) :: %{
+  # key, then filtered by the active category set + the `show_system?` toggle so the swimlane
+  # squares honor the same toggle as the center event stream (issue filter-sys-logs).
+  @spec workflow_step_squares([map()], Ecto.UUID.t(), MapSet.t(), boolean()) :: %{
           optional(String.t()) => [map()]
         }
-  defp workflow_step_squares(event_buffer, run_id, active) do
+  defp workflow_step_squares(event_buffer, run_id, active, show_system?) do
     prefix = "wf-#{run_id}"
 
     event_buffer
     |> Enum.filter(fn row ->
       key = to_string(row.agent_key)
-      (key == run_id or String.starts_with?(key, prefix)) and Shared.category_pass?(row, active)
+
+      (key == run_id or String.starts_with?(key, prefix)) and
+        Shared.category_pass?(row, active, show_system?)
     end)
     |> Enum.group_by(&step_key(to_string(&1.agent_key), run_id, &1.step))
   end

@@ -222,6 +222,11 @@
 .cns-chip--tool.cns-chip--active { background-color: var(--cns-warning); }
 .cns-chip--thinking.cns-chip--active { background-color: var(--cns-thinking); }
 .cns-chip--hook.cns-chip--active { background-color: var(--cns-info); }
+/* SYS chip (issue filter-sys-logs): muted gray on purpose — system rows are
+   intentionally background (lifecycle / usage / done / error), never the operator's
+   primary focus. Reuses --cns-text-3 so the active tint matches the existing
+   `.cns-cat--system` badge color for visual consistency. */
+.cns-chip--system.cns-chip--active { background-color: var(--cns-text-3); }
 
 /* agent-name filter pill */
 .cns-namepill {

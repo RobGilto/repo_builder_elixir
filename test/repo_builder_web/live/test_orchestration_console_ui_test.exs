@@ -210,4 +210,46 @@ defmodule RepoBuilderWeb.TestOrchestrationConsoleUiTest do
     view |> element("#close-event") |> render_click()
     refute has_element?(view, "#event-detail-panel")
   end
+
+  test "system-category rows are hidden by default, the SYS chip toggles them on, and DB rows are untouched",
+       %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/")
+    agent = create_agent(view, uniq_name())
+
+    # `Usage` is one of the four `:system`-category canonical events (per
+    # `Shared.category_for_type/1`); broadcast it through the LiveView pipeline so the
+    # row hits `record_event/4` ⇒ `maybe_stream_insert/2` ⇒ `Shared.passes?/2`.
+    Dashboard.broadcast_event(agent.id, %Event.Usage{
+      harness: :fake,
+      input_tokens: 100,
+      output_tokens: 50,
+      cost_usd: 0.01
+    })
+
+    _ = render(view)
+
+    # (a) Default-hidden assertion: with `@show_system?` initialized to `false`, a
+    # `:system` row must NOT make it to the rendered DOM. Scope the selector to the
+    # event-stream section so the agent card's `:idle` status badge (which also uses
+    # `.cns-cat--system` for non-running/non-terminal states) doesn't false-positive
+    # the assertion.
+    refute has_element?(view, "#event-stream .cns-cat--system")
+
+    # The new SYS chip itself is rendered (independent of category badge presence).
+    assert has_element?(view, "#filter-system")
+    refute has_element?(view, "#filter-system.cns-chip--active")
+
+    # (b) Toggle reveals: clicking the SYS chip flips `@show_system?` and re-streams
+    # the bounded buffer; the previously-buffered `:system` row now renders.
+    view |> element("#filter-system") |> render_click()
+    assert has_element?(view, "#event-stream .cns-cat--system")
+
+    # And the chip itself is now in the active state.
+    assert has_element?(view, "#filter-system.cns-chip--active")
+
+    # Click it back off; the row disappears again (no DB round-trip — view-only).
+    view |> element("#filter-system") |> render_click()
+    refute has_element?(view, "#event-stream .cns-cat--system")
+    refute has_element?(view, "#filter-system.cns-chip--active")
+  end
 end
