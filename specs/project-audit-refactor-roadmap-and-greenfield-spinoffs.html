@@ -336,26 +336,26 @@
 
       <h4>5.1 Quality-gate plugin tier</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Implement <code>specs/quality-gate-plugins-phase-level-testing.html</code>: new contribution kind, <code>run_quality_gate</code> orchestrator tool, per-stack gate definitions in <code>plugin_library/</code>.</li>
+        <li><code class="status">[x]</code> Implement <code>specs/quality-gate-plugins-phase-level-testing.html</code>: new contribution kind, <code>run_quality_gate</code> orchestrator tool, per-stack gate definitions in <code>plugin_library/</code>.</li>
       </ul>
 
       <h4>5.2 Test-suite conventions</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Normalize LiveView test naming (the tree mixes <code>test_*_test.exs</code> and <code>*_test.exs</code>) — pick one convention, rename, update any references.</li>
-        <li><code class="status">[]</code> Introduce a tagged <code>@tag :live_acceptance</code> tier (excluded by default) that drives the real <code>claude</code>/<code>pi</code> CLIs, converting the "manual live acceptance" limitation into an opt-in automated suite.</li>
+        <li><code class="status">[x]</code> Normalize LiveView test naming (the tree mixes <code>test_*_test.exs</code> and <code>*_test.exs</code>) — pick one convention, rename, update any references.</li>
+        <li><code class="status">[x]</code> Introduce a tagged <code>@tag :live_acceptance</code> tier (excluded by default) that drives the real <code>claude</code>/<code>pi</code> CLIs, converting the "manual live acceptance" limitation into an opt-in automated suite.</li>
       </ul>
 
       <h4>5.3 Subsystem documentation</h4>
       <ul class="checklist">
-        <li><code class="status">[]</code> Write <code>ai_docs/architecture-map.md</code> covering orchestrator, workstreams, cost centers, budget guard, and forge; link it from README's architecture section.</li>
+        <li><code class="status">[x]</code> Write <code>ai_docs/architecture-map.md</code> covering orchestrator, workstreams, cost centers, budget guard, and forge; link it from README's architecture section.</li>
       </ul>
 
       <h4>5.4 Testing Strategy</h4>
       <p>The quality-gate tier is validated by running it against this repo itself (Elixir stack definition) and one sample stack from <code>plugin_library/</code>; naming normalization is validated by the full suite still passing.</p>
       <ul class="checklist">
-        <li><code class="status">[]</code> <code>mix test</code> — full suite green post-rename, count unchanged or higher.</li>
-        <li><code class="status">[]</code> Quality-gate integration test: an Elixir workstream <code>:test</code> stage executes the five-stage gate and records per-stage results.</li>
-        <li><code class="status">[]</code> Full five-command green gate.</li>
+        <li><code class="status">[x]</code> <code>mix test</code> — full suite green post-rename, count unchanged or higher.</li>
+        <li><code class="status">[x]</code> Quality-gate integration test: an Elixir workstream <code>:test</code> stage executes the five-stage gate and records per-stage results.</li>
+        <li><code class="status">[x]</code> Full five-command green gate.</li>
       </ul>
       <div class="loop">
         🔁 <strong>Do not exit this phase until every box above is checked.</strong>
@@ -364,7 +364,7 @@
     </div>
 
     <div class="phase">
-      <h3><code class="status">[]</code> Phase 6: Deployment &amp; release story <span class="tag p3">P3 · valuable, not urgent</span></h3>
+      <h3><code class="status">[x]</code> Phase 6: Deployment &amp; release story <span class="tag p3">P3 · valuable, not urgent</span></h3>
       <p>The platform runs only via <code>mix phx.server</code> on a dev machine. A minimal but real release story raises the project's ceiling: a <code>mix release</code>, a single-node deploy target, and the auth needed to expose it beyond localhost.</p>
 
       <h4>6.1 Release &amp; deploy</h4>
