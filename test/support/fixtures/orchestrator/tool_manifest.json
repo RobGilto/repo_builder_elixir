@@ -1,0 +1,892 @@
+[
+  {
+    "name": "create_agent",
+    "description": "Create a new worker agent owned by this orchestrator. Prefer `category` (fast/main/heavy/leader) to spawn into the operator-configured harness/provider/model for that tier; that fails if no model is assigned to the category. Returns the worker's id and name. Names are unique within this orchestrator.",
+    "input_schema": {
+      "properties": {
+        "apis": {
+          "description": "Names of registered external APIs/MCP servers (see `list_apis`) to PROVISION to this worker. The worker gains the server in its `.mcp.json`, the vault secret in its env, and the API's usage instructions in its charter. You cannot call these tools yourself — only transfer them to a worker.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "category": {
+          "description": "Worker model tier to spawn into (resolves to the operator-assigned harness/provider/model). Preferred over an explicit harness/model.",
+          "enum": [
+            "fast",
+            "main",
+            "heavy",
+            "leader"
+          ],
+          "type": "string"
+        },
+        "harness": {
+          "description": "Registered harness the worker runs on (e.g. claude, pi). Ignored when `category` is given.",
+          "type": "string"
+        },
+        "model": {
+          "description": "Optional model override.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Unique worker name.",
+          "type": "string"
+        },
+        "subagent_template": {
+          "description": "Optional name of a saved subagent template (see `list_agent_templates`). Applies the template's current body as the worker's system prompt and its model/category. An explicit `system_prompt`/`model` overrides the template; the template's name+version are recorded on the worker.",
+          "type": "string"
+        },
+        "system_prompt": {
+          "description": "Optional worker system prompt.",
+          "type": "string"
+        },
+        "tools": {
+          "description": "Grant MCP research tools to this worker, e.g. firecrawl web scrape/search/crawl/map/extract. Grant only to workers that need live web access. Omit for none.",
+          "items": {
+            "enum": [
+              "firecrawl"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "command_agent",
+    "description": "Dispatch a task prompt to a worker by name. Starts (or resumes) the worker's session; returns immediately once dispatched.",
+    "input_schema": {
+      "properties": {
+        "apis": {
+          "description": "Names of registered external APIs/MCP servers (see `list_apis`) to PROVISION to this worker for this dispatch. Merges with any APIs already granted at create time.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "description": "Target worker name.",
+          "type": "string"
+        },
+        "prompt": {
+          "description": "The task to run.",
+          "type": "string"
+        },
+        "workstream": {
+          "description": "Optional workstream id or title this dispatch advances. Tags the worker so its return resumes the right workstream scratchpad (spec-driven phased orchestration).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "prompt"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_agents",
+    "description": "List all worker agents owned by this orchestrator and their status.",
+    "input_schema": {
+      "properties": {},
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_apis",
+    "description": "List the external APIs/MCP servers registered for this orchestrator (platform + project scope) that you may PROVISION to a worker. Returns each registration's name/scope/transport/description/instructions/doc_urls — never any secret. You CANNOT call these tools yourself — pass their names in `apis` to `create_agent`/`command_agent` to transfer them to a worker.",
+    "input_schema": {
+      "properties": {},
+      "type": "object"
+    }
+  },
+  {
+    "name": "check_agent_status",
+    "description": "Get a worker's current status, accumulated cost, and its findings: `final_message` carries the worker's latest result/summary text, and each `recent_events` entry includes a truncated `text` excerpt. This is how you read what a worker actually produced.",
+    "input_schema": {
+      "properties": {
+        "limit": {
+          "description": "How many recent events to tail (default 20).",
+          "type": "integer"
+        },
+        "name": {
+          "description": "Target worker name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "interrupt_agent",
+    "description": "Interrupt a worker's currently running session.",
+    "input_schema": {
+      "properties": {
+        "name": {
+          "description": "Target worker name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "start_adw",
+    "description": "Launch an AI Developer Workflow. Two modes by `harness`: with `harness:\"adw\"` it runs a REAL portable Python ADW (the full /plan→/build→/review→/fix slash-command logic, plus scout/parallel variants) — pass a `workflow_type` from the discovered ADWS list in your system prompt. With any other harness it runs the lightweight in-app catalog workflow (`plan_build_review_fix` by default). Pick by complexity: trivial→`plan_build`, standard→`plan_build_review_fix`, non-trivial→full SDLC, large/exploratory→a scout/parallel ADW; decompose a big project into several `start_adw` runs you track with `check_adw`. Returns the run id (use `check_adw` to watch per-step progress).",
+    "input_schema": {
+      "properties": {
+        "harness": {
+          "description": "Harness for the workflow. Use `adw` to run the real portable Python ADWs; omit to use the orchestrator's harness (in-app catalog workflow).",
+          "type": "string"
+        },
+        "input": {
+          "description": "The work item / task description.",
+          "type": "string"
+        },
+        "workflow_type": {
+          "description": "Which workflow to run. For `harness:\"adw\"` a discovered ADW slug (see your system prompt's ADWS list); otherwise an in-app catalog type (plan_build, plan_build_review, plan_build_review_fix, spec_implement_test_review, default plan_build_review_fix).",
+          "type": "string"
+        },
+        "working_dir": {
+          "description": "Absolute path to the repo the ADW should operate in. REQUIRED for cross-repo work (the ADW's slash commands resolve from this repo's `.claude/commands/`); defaults to the orchestrator's working directory. Must be an existing directory.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "update_agent",
+    "description": "Update a worker by name. At least one of `system_prompt`, `model`, or `harness` must be provided; `harness` is validated against the registry. `provider`/`category` are not updatable here — delete and re-create to change tier.",
+    "input_schema": {
+      "properties": {
+        "harness": {
+          "description": "New registered harness (e.g. claude, pi).",
+          "type": "string"
+        },
+        "model": {
+          "description": "New model.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Target worker name.",
+          "type": "string"
+        },
+        "system_prompt": {
+          "description": "New worker system prompt.",
+          "type": "string"
+        },
+        "tools": {
+          "description": "Replace the worker's granted MCP research tools (e.g. firecrawl). Pass an empty array to revoke all. Other config (provider/template) is preserved.",
+          "items": {
+            "enum": [
+              "firecrawl"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "delete_agent",
+    "description": "Delete a worker by name. Any live session is stopped first, then the row is removed and the console roster updates live.",
+    "input_schema": {
+      "properties": {
+        "name": {
+          "description": "Target worker name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "read_system_logs",
+    "description": "Page through recent system logs (newest first). Optional `level` and `message_contains` filters; `limit`/`offset` paginate.",
+    "input_schema": {
+      "properties": {
+        "level": {
+          "description": "Filter by log level.",
+          "enum": [
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ],
+          "type": "string"
+        },
+        "limit": {
+          "description": "Page size (default 50, max 200).",
+          "type": "integer"
+        },
+        "message_contains": {
+          "description": "Case-insensitive substring match on the message.",
+          "type": "string"
+        },
+        "offset": {
+          "description": "Rows to skip (default 0).",
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_logs",
+    "description": "Fetch the critical content of persisted console logs by their durable `log-<n>` number (the labels shown on every event in the console, e.g. `log-8219`). Resolve a reference in three shapes: a single `log` (`\"log-8219\"` or `8219`), an inclusive `from`..`to` range (the \"log-8219 to log-8228\" case), or an explicit `numbers` array. Each returned log carries its label, owner (worker/orchestrator), session, event type, harness/provider/model, a capped text excerpt, token/cost usage, and timestamp. Numbers with no row come back under `missing` (never an error); the resolved set is bounded to 100 numbers (`capped: true` when truncated). Distinct from `read_system_logs` (the separate system-log audit table) and `check_agent_status` (which tails a worker by name).",
+    "input_schema": {
+      "properties": {
+        "from": {
+          "description": "Inclusive range start, e.g. \"log-8219\" or \"8219\".",
+          "type": "string"
+        },
+        "include_hidden": {
+          "description": "Include soft-hidden (console-cleared) rows (default false).",
+          "type": "boolean"
+        },
+        "log": {
+          "description": "A single log number, e.g. \"log-8219\" or \"8219\".",
+          "type": "string"
+        },
+        "numbers": {
+          "description": "Explicit list of log numbers as strings (bare \"<n>\" or \"log-<n>\"), e.g. [\"8219\", \"log-8225\", \"8228\"]. Bare integers are also accepted.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "to": {
+          "description": "Inclusive range end, e.g. \"log-8228\" or \"8228\".",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    }
+  },
+  {
+    "name": "check_adw",
+    "description": "Inspect an ADW run by the id `start_adw` returned: status, cost, completed/total progress, a per-step status+cost list, and a recent activity tail. Works for both modes — in-app catalog runs and real portable `adw`-harness runs (whose per-step status/cost come from the canonical event log). Pairs with `start_adw`.",
+    "input_schema": {
+      "properties": {
+        "run_id": {
+          "description": "The workflow run id from start_adw.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_config",
+    "description": "Read this orchestrator's current configuration: its own harness/provider/model, the per-project worker-tier roster (fast/main/heavy/leader with each tier's effective harness/provider/model, plus `inherited?` — true when the tier inherits the operator's global default rather than being set on this project), the registered harnesses, and the available models per harness/provider. Use this first when a spawn fails with 'no model selected' to see what needs configuring.",
+    "input_schema": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    }
+  },
+  {
+    "name": "configure_tier",
+    "description": "Assign a harness/provider/model to a worker tier (fast/main/heavy/leader) for THIS project so `create_agent` with that `category` can spawn. The roster is per-project (scoped to this orchestrator's bound project); any tier left unset inherits the operator's global default, and the override you set here changes only this project. `model` is required; `harness` defaults to the orchestrator's harness; `provider` is optional (open identity). Use this to self-unblock when a tier is unassigned.",
+    "input_schema": {
+      "properties": {
+        "category": {
+          "description": "Worker tier to configure.",
+          "enum": [
+            "fast",
+            "main",
+            "heavy",
+            "leader"
+          ],
+          "type": "string"
+        },
+        "harness": {
+          "description": "Registered harness for the tier (default: orchestrator's harness).",
+          "type": "string"
+        },
+        "model": {
+          "description": "Model to assign to the tier.",
+          "type": "string"
+        },
+        "provider": {
+          "description": "Optional provider (open identity).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "category",
+        "model"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "set_orchestrator_config",
+    "description": "Update this orchestrator's own configuration. Provide any of `harness` (validated against the registry; switching resets provider/model to that harness's defaults), `provider` (resets model), and `model`. At least one is required.",
+    "input_schema": {
+      "properties": {
+        "harness": {
+          "description": "New registered harness (resets provider/model to its defaults).",
+          "type": "string"
+        },
+        "model": {
+          "description": "New model.",
+          "type": "string"
+        },
+        "provider": {
+          "description": "New provider (resets model).",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    }
+  },
+  {
+    "name": "report_cost",
+    "description": "Report this orchestrator's session id, status, running USD cost, cumulative input/output/total tokens, and context-window usage % (from the latest turn's occupancy). Includes a warning when usage is high — call it to watch your own spend and context pressure.",
+    "input_schema": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    }
+  },
+  {
+    "name": "compact_agent",
+    "description": "Compact a worker's context by dispatching `/compact` to it (sugar over command_agent). Use it on a worker approaching its context-window limit to free up room before its output degrades.",
+    "input_schema": {
+      "properties": {
+        "name": {
+          "description": "Target worker name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "clear_context",
+    "description": "Fully reset a worker's context window to blank — reaps its live session and drops its resumable session id so its next task starts a fresh harness session with zero prior history. Use this (not compact_agent) before handing a worker NEW, unrelated work, especially when its context usage is high. Use compact_agent instead when the next task continues prior work.",
+    "input_schema": {
+      "properties": {
+        "name": {
+          "description": "Target worker name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_agent_templates",
+    "description": "List the available subagent templates (name + description) — the reusable worker recipes you can apply with `create_agent`'s `subagent_template`. This is the on-demand form of the SUBAGENT MAP in your system prompt.",
+    "input_schema": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_agent_template",
+    "description": "Read one subagent template's current version: its description, system-prompt body, and optional model/category/harness.",
+    "input_schema": {
+      "properties": {
+        "name": {
+          "description": "Template name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "save_agent_template",
+    "description": "Create or refine a subagent template, writing a NEW version (history is preserved). `system_prompt` is the worker recipe's body. Use this to mint your own reusable specialists; the saved template is then applicable via `create_agent(subagent_template:)`.",
+    "input_schema": {
+      "properties": {
+        "category": {
+          "description": "Optional default worker tier.",
+          "enum": [
+            "fast",
+            "main",
+            "heavy",
+            "leader"
+          ],
+          "type": "string"
+        },
+        "description": {
+          "description": "One-line summary shown in the subagent map.",
+          "type": "string"
+        },
+        "model": {
+          "description": "Optional default model.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Template name (kebab-case, e.g. `test-writer`).",
+          "type": "string"
+        },
+        "system_prompt": {
+          "description": "The worker's system-prompt body (the recipe).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "system_prompt"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "set_goal",
+    "description": "Set (or refresh) the durable GOAL you are driving — your Task Ledger. `goal` is the objective; `definition_of_done` is how you VERIFY completion (be concrete and checkable). Optional `plan` is an ordered list of steps. This persists across turns and a restart, so you reconcile against it each turn instead of re-deriving intent. Required before the autonomous drive loop will keep advancing the work.",
+    "input_schema": {
+      "properties": {
+        "definition_of_done": {
+          "description": "Concrete, checkable criteria for completion.",
+          "type": "string"
+        },
+        "goal": {
+          "description": "The objective to drive to done.",
+          "type": "string"
+        },
+        "plan": {
+          "description": "Optional ordered step list.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "goal",
+        "definition_of_done"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "record_progress",
+    "description": "Record a Progress Ledger entry for THIS turn: whether the goal is `satisfied` (done), whether you are `looping` (repeating without advancing), whether you `made_progress`, and `next_agent`/`next_instruction` for the next step plus a one-line `summary`. Do this EVERY turn — the drive loop reads it to decide whether to keep driving, replan, or report complete; an unreported turn is treated as a stall.",
+    "input_schema": {
+      "properties": {
+        "looping": {
+          "description": "Are you repeating without progress?",
+          "type": "boolean"
+        },
+        "made_progress": {
+          "description": "Did this turn advance the goal?",
+          "type": "boolean"
+        },
+        "next_agent": {
+          "description": "Who acts next (a worker name).",
+          "type": "string"
+        },
+        "next_instruction": {
+          "description": "What the next step should do.",
+          "type": "string"
+        },
+        "satisfied": {
+          "description": "Is the goal complete?",
+          "type": "boolean"
+        },
+        "summary": {
+          "description": "One-line summary of this turn.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "made_progress"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_ledger",
+    "description": "Read your current Task Ledger + latest Progress entry: the goal, definition-of-done, step plan, lifecycle status, stall count, and the last recorded progress. Use it to re-orient at the start of a turn.",
+    "input_schema": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    }
+  },
+  {
+    "name": "set_focus",
+    "description": "Declare your FOCUS — the single concrete thing you are working on right now. Set it BEFORE commanding or spawning a worker: an unfocused scope is blocked from spending budget. Pass `workstream` (id or title) to focus a specific parallel workstream before commanding a worker on it; omit it to focus the orchestrator itself for untagged work. Exactly one focus per scope — calling this again replaces it.",
+    "input_schema": {
+      "properties": {
+        "focus": {
+          "description": "The single concrete thing you are working on right now.",
+          "type": "string"
+        },
+        "workstream": {
+          "description": "Workstream id or title to focus; omit to focus the orchestrator itself.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "focus"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "clear_focus",
+    "description": "Clear a focus once it is VERIFIED done against the tree, then set the next one. Pass `workstream` (id or title) to clear that stream's focus; omit it to clear the orchestrator's own focus.",
+    "input_schema": {
+      "properties": {
+        "workstream": {
+          "description": "Workstream id or title to clear; omit to clear the orchestrator's focus.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    }
+  },
+  {
+    "name": "report_complete",
+    "description": "Declare the GOAL complete: marks the Task Ledger done (the drive loop stops) and notifies the operator with your `summary` and any `recommendations`. Only call this once you have VERIFIED the definition-of-done against the actual tree (use `inspect_repo`), not just a worker's self-report.",
+    "input_schema": {
+      "properties": {
+        "recommendations": {
+          "description": "Optional follow-ups / caveats for the operator.",
+          "type": "string"
+        },
+        "summary": {
+          "description": "What was accomplished.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "inspect_repo",
+    "description": "Read-only inspection of your working directory so you can verify work against the ACTUAL tree (not a worker's self-report). `op`: `git_status` (short status + branch), `changed_files` (the porcelain change list), `read_file` (read one file by `path`), or `surfaces` (detect the app's front-end surface(s) — web/desktop/tui — to decide whether to append a UI/UX phase; an empty list means no front end). Path-jailed to the working dir and capped; makes NO edits.",
+    "input_schema": {
+      "properties": {
+        "op": {
+          "description": "Which inspection to run.",
+          "enum": [
+            "git_status",
+            "changed_files",
+            "read_file",
+            "surfaces"
+          ],
+          "type": "string"
+        },
+        "path": {
+          "description": "Relative path under the working dir (required for read_file).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "record_reflection",
+    "description": "Bank a durable verbal lesson you learned this run into your project memory so the NEXT run for this project starts ahead. Use it the moment you learn something generalizable (a wasted step, a non-obvious gotcha, a workflow that worked) — don't wait for `report_complete`. `lesson` is one or two sentences, imperative and concrete. Optional `goal` ties it to what you were driving (defaults to your active goal). Persisted, project-scoped, and injected into future runs' prompts.",
+    "input_schema": {
+      "properties": {
+        "goal": {
+          "description": "Optional goal this lesson came from (defaults to your active goal).",
+          "type": "string"
+        },
+        "lesson": {
+          "description": "The lesson to carry forward (imperative, concrete, 1–2 sentences).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "lesson"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "create_workstream",
+    "description": "Create a durable WORKSTREAM — an independent objective you deliver as right-sized phases (spec→implement→test→review). A workstream is your EXTERNAL MEMORY: its goal/definition-of-done and per-phase state persist across turns and a restart, so you can hold several in parallel and `compact_self` safely. Returns its `workstream_id`. Next: spawn the `work-decomposer` and call `plan_phases`.",
+    "input_schema": {
+      "properties": {
+        "definition_of_done": {
+          "description": "Concrete, checkable completion criteria.",
+          "type": "string"
+        },
+        "goal": {
+          "description": "The objective to deliver.",
+          "type": "string"
+        },
+        "title": {
+          "description": "Short workstream title.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "goal"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "plan_phases",
+    "description": "Persist the work-decomposer's right-sized PHASE breakdown for a workstream. Each phase is delivered spec→implement→test→review and sized so ONE worker can carry it without exhausting its context. Replaces any existing phases (a re-plan); phase 1 starts running at the spec stage. `workstream` selects by id or title.",
+    "input_schema": {
+      "properties": {
+        "phases": {
+          "description": "Ordered phases (by dependency).",
+          "items": {
+            "properties": {
+              "definition_of_done": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "kind": {
+                "description": "Phase kind — omit/`backend` for normal work; `ui_ux` for an iterative front-end polish phase (bounded review→fix loop to a decent MVP).",
+                "enum": [
+                  "backend",
+                  "ui_ux"
+                ],
+                "type": "string"
+              },
+              "surface": {
+                "description": "For a `ui_ux` phase, the front-end surface it polishes (from surface detection). Omit for a backend phase.",
+                "enum": [
+                  "web",
+                  "desktop",
+                  "tui"
+                ],
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "workstream": {
+          "description": "Workstream id or title.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workstream",
+        "phases"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "record_stage",
+    "description": "Record the CURRENT phase's stage outcome and ADVANCE the machine. VERIFY first with `inspect_repo` — do not trust a worker's self-report. On `passed` the stage advances (spec→implement→test→review→done); a passed review completes the phase and promotes the next one. A `failed` review enters the fix branch (re-review after the fix); `blocked` blocks the phase. Pass the spec stage's `spec_path` as `artifact` so `get_workstream` can always reconstruct what remains.",
+    "input_schema": {
+      "properties": {
+        "artifact": {
+          "description": "Stage artifact, e.g. the `specs/…md` path for the spec stage (becomes spec_path).",
+          "type": "string"
+        },
+        "gate": {
+          "description": "Optional quality-gate GateResult (from `run_quality_gate` result mode) for a `test` stage — persisted as stage evidence and rendered as the console gate strip.",
+          "type": "object"
+        },
+        "note": {
+          "description": "One-line note for this stage.",
+          "type": "string"
+        },
+        "outcome": {
+          "description": "The verified outcome.",
+          "enum": [
+            "passed",
+            "failed",
+            "blocked"
+          ],
+          "type": "string"
+        },
+        "stage": {
+          "description": "Which stage of the current phase this outcome is for.",
+          "enum": [
+            "spec",
+            "implement",
+            "test",
+            "review"
+          ],
+          "type": "string"
+        },
+        "worker": {
+          "description": "Worker that ran the stage.",
+          "type": "string"
+        },
+        "workstream": {
+          "description": "Workstream id or title.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workstream",
+        "stage",
+        "outcome"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_workstreams",
+    "description": "Read your durable MEMORY INDEX — one compact row per workstream (id, title, status, phase k/n, current stage, next_action, stall_count). Call this at the START of every turn to re-orient, then `get_workstream` the one you're about to advance.",
+    "input_schema": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_workstream",
+    "description": "Read the FULL rehydration record for one workstream: goal/definition-of-done, every phase with its `spec_path`, completed vs remaining stages, the current pointer, and the single `next_action`. This is how you reconstruct enough state to continue after compaction. `workstream` selects by id or title.",
+    "input_schema": {
+      "properties": {
+        "workstream": {
+          "description": "Workstream id or title.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workstream"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "close_workstream",
+    "description": "Close a workstream `done` (objective delivered + verified) or `abandoned` (dropped). `workstream` selects by id or title.",
+    "input_schema": {
+      "properties": {
+        "status": {
+          "description": "Closing status.",
+          "enum": [
+            "done",
+            "abandoned"
+          ],
+          "type": "string"
+        },
+        "workstream": {
+          "description": "Workstream id or title.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workstream",
+        "status"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "run_quality_gate",
+    "description": "Resolve and run this project's stack-aware QUALITY GATE for a workstream phase (quality-gate-plugins) — the ordered five-stage green gate (format · lint · type · test · mutation). Call it during a phase's `:test` stage. Two modes: with NO `outputs` it returns the ordered, token-filled COMMAND PLAN for the requested `cadence` (default `per_phase`) — dispatch a worker to run those commands in order in the repo. Once the worker reports each command's exit code + output, call it AGAIN with `outputs` to get the structured GateResult (green/red per stage + parsed file:line diagnostics + which stage failed). On any red stage, dispatch a fix worker with the diagnostics, re-run, and loop until green before recording the test stage passed. A `pre_merge` cadence runs the slow mutation/property stages once at workstream close.",
+    "input_schema": {
+      "properties": {
+        "cadence": {
+          "description": "Which stages to run: `per_phase` (fast: format/lint/type/test, default) or `pre_merge` (slow: mutation/property, run once at workstream close).",
+          "enum": [
+            "per_phase",
+            "pre_merge"
+          ],
+          "type": "string"
+        },
+        "outputs": {
+          "description": "The worker's captured results for each stage command, in order. When present, the gate is EVALUATED into a GateResult instead of returning the plan.",
+          "items": {
+            "properties": {
+              "exit_code": {
+                "description": "The command's exit code (0 = pass).",
+                "type": "integer"
+              },
+              "output": {
+                "description": "The command's combined stdout/stderr.",
+                "type": "string"
+              },
+              "stage_id": {
+                "description": "The stage this output is for.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "stage_id",
+              "exit_code"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "workstream": {
+          "description": "Optional workstream id or title this gate run belongs to.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    }
+  },
+  {
+    "name": "compact_self",
+    "description": "Compact your OWN context window. Your workstreams are durable external memory, so compacting is SAFE — the platform reseeds the next turn with your `list_workstreams` index (rehydrate-on-resume) and you wake re-oriented. Use it when `report_cost` shows high context usage instead of degrading or stalling. Returns once compaction is scheduled; in-flight workers keep running and return by workstream.",
+    "input_schema": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    }
+  }
+]
