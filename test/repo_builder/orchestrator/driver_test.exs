@@ -124,6 +124,60 @@ defmodule RepoBuilder.Orchestrator.DriverTest do
     assert_receive {:escalated, %{orchestrator_id: _}}, 1_000
   end
 
+  test "transient (rate-limit) turns are ladder-neutral and never escalate" do
+    orch = create_orch()
+    {:ok, _} = Ledgers.upsert_goal(orch.id, %{goal: "g", definition_of_done: "d"})
+    prompts = start_supervised!({Agent, fn -> [] end}, id: :prompts_transient)
+
+    # Every turn dies on a transient provider condition (the auto-record backstop's
+    # `:transient` entry). Mirrors the 2026-07-05 rate-limit incident.
+    turn_fn = fn oid, prompt ->
+      Agent.update(prompts, &[prompt | &1])
+
+      Ledgers.record_progress(oid, %{
+        "made_progress" => false,
+        "on_track" => false,
+        "transient" => true
+      })
+    end
+
+    queue = queue_with(orch.id, turn_fn)
+
+    # Four ticks — enough that non-transient no-progress turns would have escalated by now.
+    tick(queue)
+    tick(queue)
+    tick(queue)
+    tick(queue)
+
+    ledger = Ledgers.current(orch.id)
+    # The goal is NOT escalated: still active, stall budget untouched.
+    assert ledger != nil
+    assert ledger.status == :active
+    assert ledger.stall_count == 0
+    # The loop kept driving (no [REPLAN], no escalation) — normal drive prompts only.
+    assert prompts_seen = Agent.get(prompts, & &1)
+    refute Enum.any?(prompts_seen, &(&1 =~ "[REPLAN]"))
+  end
+
+  test "non-transient no-progress turns still escalate (regression guard)" do
+    orch = create_orch()
+    {:ok, _} = Ledgers.upsert_goal(orch.id, %{goal: "g", definition_of_done: "d"})
+
+    turn_fn = fn oid, _p ->
+      Ledgers.record_progress(oid, %{"made_progress" => false, "transient" => false})
+    end
+
+    queue = queue_with(orch.id, turn_fn)
+
+    tick(queue)
+    tick(queue)
+    tick(queue)
+    tick(queue)
+
+    # A genuine (non-transient) stall still climbs the ladder to escalation.
+    assert Ledgers.current(orch.id) == nil
+  end
+
   test "boot-resume drives an unfinished goal on Driver start" do
     orch = create_orch()
     {:ok, _} = Ledgers.upsert_goal(orch.id, %{goal: "g", definition_of_done: "d"})

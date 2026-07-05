@@ -235,6 +235,10 @@ defmodule RepoBuilder.WorkflowEngine.Catalog do
   def default_prompt_template("ship"),
     do: "Ship the work — finalize the branch and open a PR. Review: {{review}}"
 
+  def default_prompt_template("plan_f3"),
+    do:
+      "Author an HTML planf3 plan into specs/issue-{issue_number}-adw-{adw_id}-sdlc_planner-{descriptive-name}.html for: {{input}}\n\nSpec (optional): {{spec}}\n\nReturn ONLY the relative plan path on the final line (Output Contract)."
+
   def default_prompt_template(_other), do: "Work on: {{input}}\n\nSpec (optional): {{spec}}"
 
   @doc """

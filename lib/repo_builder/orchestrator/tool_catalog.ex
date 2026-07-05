@@ -68,6 +68,17 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
               "items" => %{"type" => "string"},
               "description" =>
                 "Names of registered external APIs/MCP servers (see `list_apis`) to PROVISION to this worker. The worker gains the server in its `.mcp.json`, the vault secret in its env, and the API's usage instructions in its charter. You cannot call these tools yourself — only transfer them to a worker."
+            },
+            "isolation" => %{
+              "type" => "string",
+              "enum" => ["direct", "worktree"],
+              "description" =>
+                "Working-tree isolation for this worker's sessions. Omit to inherit: the bound project's isolation_mode, else the platform default (worktree). `worktree` runs each session on its own adw/* branch in a git worktree (parallel-safe, reviewable); `direct` works in the shared tree. Non-git working dirs always run direct."
+            },
+            "worktree_run_id" => %{
+              "type" => "string",
+              "description" =>
+                "Continue an EXISTING adw/* worktree branch: pass the retired/prior worker's agent id (its worktree key). This worker's sessions run in that worktree on that branch, with all of the prior worker's commits intact — the supported takeover path after a worker was retired mid-task. Omit for a fresh branch. Only meaningful with worktree isolation."
             }
           },
           "required" => ["name"]

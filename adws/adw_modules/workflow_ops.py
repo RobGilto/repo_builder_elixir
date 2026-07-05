@@ -18,6 +18,7 @@ from adw_modules.agent import execute_template
 from adw_modules.github import get_repo_url, extract_repo_path, ADW_BOT_IDENTIFIER
 from adw_modules.state import ADWState
 from adw_modules.utils import parse_json
+from adw_modules import local_ops
 
 
 # Agent name constants
@@ -825,7 +826,6 @@ def _local_narrate(adw_id: str, message: str, agent_name: str = "ops") -> None:
 
 def _local_fail(adw_id: str, step: Optional[str], message: str, logger) -> None:
     """Record failure on the run + events, then exit 1."""
-    from adw_modules import local_ops
 
     if logger:
         logger.error(message)
@@ -897,6 +897,49 @@ def _local_setup_worktree(adw_id, issue, state, logger):
     return worktree_path, branch_name, backend_port, frontend_port
 
 
+def _run_plan_step(
+    adw_id: str,
+    issue: GitHubIssue,
+    logger: logging.Logger,
+    worktree_path: str,
+    command: str,
+) -> None:
+    """Shared plan-step logic used by step == 'plan' / 'plan_f3' / 'feature'.
+
+    Calls build_plan with the given slash command, applies the spec-path salvage and
+    fallback, persists state.plan_file, and records output.spec_file on the run record.
+    Exits via _local_fail on any error — callers do not need their own error handling.
+    """
+    resp = build_plan(issue, command, adw_id, logger, working_dir=worktree_path)
+    if not resp.success:
+        local_ops.step_end(adw_id, "plan", "failed")
+        _local_fail(adw_id, "plan", f"Error building plan: {resp.output}", logger)
+
+    spec_file = resp.output.strip().strip("`")
+    spec_abs = (
+        spec_file
+        if os.path.isabs(spec_file)
+        else os.path.join(worktree_path, spec_file)
+    )
+    if not spec_file or not os.path.exists(spec_abs):
+        fallback = _local_find_spec_fallback(worktree_path, issue.number, adw_id)
+        if not fallback:
+            local_ops.step_end(adw_id, "plan", "failed")
+            _local_fail(
+                adw_id,
+                "plan",
+                f"Planner returned no usable spec path ({spec_file!r})",
+                logger,
+            )
+        spec_file = os.path.relpath(fallback, worktree_path)
+
+    state = ADWState.load(adw_id, logger) or ADWState(adw_id)
+    state.update(plan_file=spec_file)
+    state.save(adw_id)
+    local_ops.update_run(adw_id, output={"spec_file": spec_file})
+    _local_narrate(adw_id, f"✅ Plan created: {spec_file}", AGENT_PLANNER)
+
+
 def run_local_workflow(adw_id: str, steps: list, logger, isolated: bool = True) -> None:
     """Run an ordered `steps` list against the single-`<adw-id>` + run.json local
     contract, narrating progress via emit_event.
@@ -921,7 +964,6 @@ def run_local_workflow(adw_id: str, steps: list, logger, isolated: bool = True) 
     already-shipping recipes behave identically.
     """
     import time
-    from adw_modules import local_ops
     from adw_modules.git_ops import commit_changes
 
     run = local_ops.load_run(adw_id)
@@ -1035,37 +1077,19 @@ def run_local_workflow(adw_id: str, steps: list, logger, isolated: bool = True) 
         step_t0 = time.monotonic()
 
         if step == "plan":
-            resp = build_plan(
-                issue, LOCAL_ISSUE_CLASS, adw_id, logger, working_dir=worktree_path
+            _run_plan_step(
+                adw_id, issue, logger, worktree_path,
+                resolve_plan_command(LOCAL_ISSUE_CLASS)
             )
-            if not resp.success:
-                local_ops.step_end(adw_id, step, "failed")
-                _local_fail(adw_id, step, f"Error building plan: {resp.output}", logger)
 
-            spec_file = resp.output.strip().strip("`")
-            spec_abs = (
-                spec_file
-                if os.path.isabs(spec_file)
-                else os.path.join(worktree_path, spec_file)
-            )
-            if not spec_file or not os.path.exists(spec_abs):
-                fallback = _local_find_spec_fallback(
-                    worktree_path, issue.number, adw_id
-                )
-                if not fallback:
-                    local_ops.step_end(adw_id, step, "failed")
-                    _local_fail(
-                        adw_id,
-                        step,
-                        f"Planner returned no usable spec path ({spec_file!r})",
-                        logger,
-                    )
-                spec_file = os.path.relpath(fallback, worktree_path)
+        elif step == "plan_f3":
+            # Hardcode /plan_f3 — the step name itself is the user's explicit selection;
+            # bypass resolve_plan_command so the env override cannot silently nullify it.
+            _run_plan_step(adw_id, issue, logger, worktree_path, "/plan_f3")
 
-            state.update(plan_file=spec_file)
-            state.save(adw_id)
-            local_ops.update_run(adw_id, output={"spec_file": spec_file})
-            _local_narrate(adw_id, f"✅ Plan created: {spec_file}", AGENT_PLANNER)
+        elif step == "feature":
+            # Same pattern as plan_f3: hardcode /feature for the feature step.
+            _run_plan_step(adw_id, issue, logger, worktree_path, "/feature")
 
         elif step == "build":
             if not spec_file:

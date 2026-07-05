@@ -95,4 +95,62 @@ defmodule RepoBuilder.Orchestrator.ServerTest do
       true -> false
     end
   end
+
+  describe "transient provider error threading (issue rate-limit-stall)" do
+    alias RepoBuilder.Orchestrator.Ledgers
+    alias RepoBuilder.Orchestrator.Server.State
+
+    # A minimal turn State bound to `orch`, with the turn clock set so the auto-record
+    # backstop is live (a nil `turn_started_at` no-ops it).
+    defp turn_state(orch) do
+      %State{
+        orchestrator_id: orch.id,
+        agent_id: "orch-#{uniq()}",
+        prompt: "p",
+        harness: "claude",
+        in_process?: false,
+        turn_started_at: DateTime.utc_now()
+      }
+    end
+
+    test "a rate_limit Status then a not-ok Done auto-records a transient entry" do
+      {:ok, orch} =
+        Orchestrators.create(%{name: "orch-#{uniq()}", harness: "fake", model: "fake-model"})
+
+      {:ok, _} = Ledgers.upsert_goal(orch.id, %{goal: "g", definition_of_done: "d"})
+
+      # The transient Status flags the turn...
+      assert {:noreply, %State{transient_error?: true} = flagged} =
+               Server.handle_info(
+                 {:harness_event, %Event.Status{harness: :claude, kind: :rate_limit}},
+                 turn_state(orch)
+               )
+
+      # ...so the not-ok terminal records :transient, not :error.
+      assert {:stop, :normal, _} =
+               Server.handle_info(
+                 {:harness_event, %Event.Done{harness: :claude, ok: false, reason: :success}},
+                 flagged
+               )
+
+      latest = Ledgers.latest_progress(orch.id)
+      assert latest.transient == true
+    end
+
+    test "a not-ok Done WITHOUT a prior rate_limit records a plain (non-transient) error" do
+      {:ok, orch} =
+        Orchestrators.create(%{name: "orch-#{uniq()}", harness: "fake", model: "fake-model"})
+
+      {:ok, _} = Ledgers.upsert_goal(orch.id, %{goal: "g", definition_of_done: "d"})
+
+      assert {:stop, :normal, _} =
+               Server.handle_info(
+                 {:harness_event, %Event.Done{harness: :claude, ok: false, reason: :success}},
+                 turn_state(orch)
+               )
+
+      latest = Ledgers.latest_progress(orch.id)
+      assert latest.transient == false
+    end
+  end
 end

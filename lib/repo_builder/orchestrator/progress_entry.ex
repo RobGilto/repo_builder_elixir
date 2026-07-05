@@ -21,6 +21,7 @@ defmodule RepoBuilder.Orchestrator.ProgressEntry do
           on_track: boolean(),
           looping: boolean(),
           made_progress: boolean(),
+          transient: boolean(),
           next_agent: String.t() | nil,
           next_instruction: String.t() | nil,
           summary: String.t() | nil,
@@ -36,6 +37,9 @@ defmodule RepoBuilder.Orchestrator.ProgressEntry do
     field :on_track, :boolean, default: true
     field :looping, :boolean, default: false
     field :made_progress, :boolean, default: false
+    # Transient provider failure (rate limit / overload): ladder-neutral in the drive loop
+    # (issue rate-limit-stall) — not counted toward the stall/replan budget.
+    field :transient, :boolean, default: false
     field :next_agent, :string
     field :next_instruction, :string
     field :summary, :string
@@ -53,6 +57,7 @@ defmodule RepoBuilder.Orchestrator.ProgressEntry do
       :on_track,
       :looping,
       :made_progress,
+      :transient,
       :next_agent,
       :next_instruction,
       :summary

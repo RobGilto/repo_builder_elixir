@@ -133,4 +133,36 @@ defmodule RepoBuilder.Harness.ClaudeNormalizeTest do
     assert {:ok, [%Event.Error{reason: :provider_error, message: "hit max turns", status: 500}]} =
              Claude.normalize(raw, @ctx)
   end
+
+  test "synthetic assistant rate_limit frame -> Status(:rate_limit) (issue rate-limit-stall)" do
+    raw = %{
+      "type" => "assistant",
+      "error" => "rate_limit",
+      "message" => %{"content" => [], "model" => "<synthetic>"}
+    }
+
+    assert {:ok, events} = Claude.normalize(raw, @ctx)
+    assert Enum.any?(events, &match?(%Event.Status{kind: :rate_limit}, &1))
+  end
+
+  test "synthetic assistant overloaded frame -> Status(:rate_limit)" do
+    raw = %{
+      "type" => "assistant",
+      "error" => "overloaded",
+      "message" => %{"content" => [], "model" => "<synthetic>"}
+    }
+
+    assert {:ok, events} = Claude.normalize(raw, @ctx)
+    assert Enum.any?(events, &match?(%Event.Status{kind: :rate_limit}, &1))
+  end
+
+  test "a normal assistant frame emits no rate_limit Status" do
+    raw = %{
+      "type" => "assistant",
+      "message" => %{"content" => [%{"type" => "text", "text" => "hi"}]}
+    }
+
+    assert {:ok, events} = Claude.normalize(raw, @ctx)
+    refute Enum.any?(events, &match?(%Event.Status{kind: :rate_limit}, &1))
+  end
 end

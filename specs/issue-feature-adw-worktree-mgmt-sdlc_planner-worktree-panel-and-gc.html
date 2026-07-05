@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan: Worktree Management Panel, Garbage Collection &amp; Worktree-by-Default Worker Isolation</title>
+<style>
+  /* Synced visual identity — professional, focused, minimal. */
+  :root {
+    --ink: #1c2733; --ink-soft: #44525f; --muted: #6f7b86;
+    --paper: #f7f5f1; --card: #ffffff;
+    --accent: #b45309; --accent-soft: #fdf1e3;
+    --new: #1d4ed8; --line: #e3ded6;
+    --mono: ui-monospace, Menlo, Consolas, monospace;
+    --sans: -apple-system, "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--sans); line-height: 1.6; }
+  main { max-width: 920px; margin: 0 auto; padding: 48px 32px 96px; }
+  h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 12px; }
+  h2 { font-size: 1.35rem; margin: 56px 0 12px; padding-bottom: 8px; border-bottom: 2px solid var(--line); }
+  h3 { font-size: 1.08rem; margin: 28px 0 8px; }
+  h4 { font-size: 0.98rem; margin: 22px 0 6px; color: var(--ink-soft); }
+  code { font-family: var(--mono); font-size: 0.86em; background: #eeeae2; padding: 1px 5px; border-radius: 4px; }
+  pre { background: #212833; color: #e8e4da; padding: 16px 18px; border-radius: 8px; overflow-x: auto; font-size: 0.82rem; }
+  pre code { background: none; padding: 0; color: inherit; }
+  figure { margin: 28px 0; text-align: center; }
+  figure img { max-width: 100%; border-radius: 10px; border: 1px solid var(--line); }
+  figcaption { font-size: 0.85rem; color: var(--muted); margin-top: 10px; }
+  details.meta { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 16px; margin: 18px 0; font-size: 0.88rem; }
+  details.meta dl { display: grid; grid-template-columns: 130px 1fr; gap: 4px 16px; margin: 12px 0 4px; }
+  details.meta dt { font-weight: 600; color: var(--muted); }
+  details.meta dd { margin: 0; font-family: var(--mono); font-size: 0.82rem; overflow-wrap: anywhere; }
+  .tag { display: inline-block; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; margin-right: 6px; }
+  .tag.existing { background: var(--accent-soft); color: var(--accent); }
+  .tag.new { background: #e5edff; color: var(--new); }
+  .files ul { list-style: none; padding-left: 0; }
+  .files li { padding: 7px 0; border-bottom: 1px dashed var(--line); font-size: 0.93rem; }
+  .phase { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 10px; padding: 22px 26px; margin: 26px 0; }
+  .status { color: var(--accent); font-weight: 700; }
+  ul.checklist { list-style: none; padding-left: 4px; }
+  ul.checklist li { padding: 4px 0; font-size: 0.93rem; }
+  .loop { background: var(--accent-soft); border: 1px solid #ecd3b4; border-radius: 8px; padding: 12px 16px; margin: 18px 0 4px; font-size: 0.9rem; }
+  #questionables details, #amendments details { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 16px; margin: 12px 0; }
+  .qa-answer { color: var(--ink-soft); font-size: 0.93rem; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 0.9rem; background: var(--card); }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: #efece5; }
+</style>
+</head>
+<body>
+<main>
+
+  <header>
+    <h1>Plan: Worktree Management Panel, Garbage Collection &amp; Worktree-by-Default Worker Isolation</h1>
+    <details class="meta">
+      <summary>Metadata</summary>
+      <dl>
+        <dt>created</dt>      <dd>2026-07-05T12:46:14Z</dd>
+        <dt>modified</dt>     <dd>2026-07-05T13:54:05Z</dd>
+        <dt>commits</dt>      <dd>—</dd>
+        <dt>agent name</dt>   <dd>sdlc_planner, claude-fable-5 (build)</dd>
+        <dt>session id</dt>   <dd>worktree-mgmt, 4541ce8d (build)</dd>
+        <dt>back refs</dt>    <dd>operator conversation (worktree visibility / merge / GC gap analysis), BUILD_PROMPT.md §7 §8 §9, ai_docs/agentic-layer-adaptor.md, ai_docs/typed-elixir-standard.md, .claude/commands/conditional_docs.md</dd>
+        <dt>forward refs</dt> <dd>—</dd>
+      </dl>
+    </details>
+  </header>
+
+  <figure>
+    <img class="placeholder" src=".planf3-assets/placeholders/hero.png" alt="A control-room panel showing a project's parallel git worktrees as reviewable branches flowing into a single trunk, with a garbage-collection sweeper reclaiming merged trees">
+    <figcaption>The Worktrees panel: every parallel agent branch visible, mergeable, and reclaimable from one place. (stock placeholder)</figcaption>
+  </figure>
+
+  <section id="purpose">
+    <h2>Purpose</h2>
+    <p>Give the operator full lifecycle control of git worktrees on a selected project: an inventory panel on <code>/projects/:id</code> that reconciles run records, <code>git worktree list</code>, and the scratch directory; on-demand merge of any run branch to the trunk (reusing <code>Projects.Worktree.merge/2</code>); per-worktree actions (merge, ahead/behind + diff stat, remove, remove-and-delete-branch); bulk garbage collection (clean merged, age-based sweep, <code>git worktree prune</code>) backed by an Oban cron worker. Additionally, make worktree isolation the <em>default</em> for orchestrator-spawned worker agents, so parallel agents never collide with the operator's working tree while the platform is being improved in parallel.</p>
+  </section>
+
+  <section id="problem">
+    <h2>Problem</h2>
+    <p>Worktree isolation exists (<code>Projects.Worktree</code>, run rows carry <code>worktree_path</code>/<code>worktree_branch</code>, a deterministic <code>:merge</code> step kind lands branches), but the operator has no management surface. Three concrete gaps: (1) <strong>no visibility</strong> — the UI shows only what <code>workflow_runs</code> rows say; nothing surfaces <code>git worktree list</code>, the scratch dir (<code>/tmp/rb_worktrees/&lt;run_id&gt;</code> by default), or worktrees orphaned by crashed runs, so DB and disk can silently disagree; (2) <strong>no on-demand merge</strong> — merging happens only when the workflow definition included a <code>:merge</code> step, so the normal review-first flow ends with an <code>unmerged</code> chip and no button, forcing a manual terminal merge of <code>adw/&lt;run_id&gt;</code>; (3) <strong>no garbage collection</strong> — <code>Worktree.cleanup/1</code> deliberately keeps the branch, nothing sweeps old worktrees, no prune schedule, no branch deletion for landed <code>adw/*</code> branches; each worktree is a full checkout (plus its own <code>_build</code> once compiled), so disk and branch lists grow forever. A fourth gap compounds the first three: worker agents CRUD'd by an orchestrator only get worktree isolation when their project's <code>isolation_mode</code> is <code>:worktree</code> — the schema default is <code>:direct</code>, and a nil-project (platform) worker gets <code>nil</code> isolation — so by default parallel workers stomp the operator's tree.</p>
+    <figure>
+      <img class="placeholder" src=".planf3-assets/placeholders/problem.png" alt="Diverging views of the same repository: database run rows, git's worktree registry, and a scratch directory drifting out of sync while unmerged branches and stale checkouts pile up">
+      <figcaption>Three unreconciled sources of truth and an ever-growing scratch dir: the operator flies blind. (stock placeholder)</figcaption>
+    </figure>
+  </section>
+
+  <section id="solution">
+    <h2>Solution</h2>
+    <p>Four layers, each building on the existing primitives. <strong>(a) Git plumbing:</strong> extend <code>RepoBuilder.Projects.Worktree</code> with pure, never-raising shell-outs — <code>list/1</code> (parse <code>git worktree list --porcelain</code>), <code>ahead_behind/3</code>, <code>diff_shortstat/3</code>, <code>delete_branch/2</code> (guarded to the <code>adw/</code> prefix), <code>prune/1</code>. <strong>(b) Inventory context:</strong> a new <code>RepoBuilder.Projects.WorktreeInventory</code> module reconciles run records (via a new <code>Workflows.list_worktree_runs/1</code>), git's registry, and the scratch dir into typed <code>Entry</code> structs, and exposes <code>merge/2</code> (wraps <code>Worktree.merge/2</code> + <code>Workflows.record_merge/2</code>), <code>remove/3</code>, and <code>gc/2</code>. <strong>(c) UI:</strong> a Worktrees card on <code>ProjectsLive :show</code>, loaded with <code>start_async</code> (mount stays fast, matching the recent perf work), with per-row actions and bulk GC/prune buttons, all behind <code>data-confirm</code> for destructive ops. <strong>(d) Lifecycle defaults:</strong> a <code>RepoBuilder.Workers.WorktreeGC</code> Oban cron worker sweeps merged, aged worktrees daily; and worker isolation defaults flip to <code>:worktree</code> — new projects default to <code>:worktree</code>, nil-project orchestrator workers resolve isolation from a new config default, and the spawn tool accepts an explicit per-agent override. The non-git fallthrough in <code>Worktree.checkout/2</code> (<code>{:direct, root}</code>) keeps the new default fail-safe everywhere.</p>
+    <figure>
+      <img class="placeholder" src=".planf3-assets/placeholders/solution.png" alt="A single reconciled worktree inventory feeding a LiveView panel with merge, remove, and GC actions, an Oban cron sweeper, and orchestrator workers spawning into isolated worktrees by default">
+      <figcaption>One reconciled inventory drives the panel, the GC worker, and worktree-by-default spawning. (stock placeholder)</figcaption>
+    </figure>
+  </section>
+
+  <section id="files" class="files">
+    <h2>Relevant Files</h2>
+    <h3>Existing Files</h3>
+    <ul>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/projects/worktree.ex</code> — the git primitive module; gains <code>list/1</code>, <code>ahead_behind/3</code>, <code>diff_shortstat/3</code>, <code>delete_branch/2</code>, <code>prune/1</code>; <code>merge/2</code>, <code>detect_trunk/1</code>, <code>cleanup/1</code>, and the private <code>scratch_base/1</code> are reused as-is.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/workflows.ex</code> — gains <code>list_worktree_runs/1</code>; <code>record_merge/2</code> is reused by on-demand merge.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/workflows/workflow_run.ex</code> — schema already carries <code>worktree_path</code>/<code>worktree_branch</code>/<code>merge_status</code>/<code>merged_sha</code>/<code>merge_error</code>; read-only here.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/live/projects_live.ex</code> — <code>:show</code> action gains the Worktrees card, <code>start_async</code> inventory load, six <code>handle_event</code> clauses, and an isolation-mode toggle.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/components/project_components.ex</code> — <code>repo_health</code> shows <code>isolation: mode</code> as static text today; the toggle lives next to it.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/tools/agent_ops.ex</code> — <code>worker_dispatch_location/2</code> (lines 561–571) is the isolation-resolution seam for orchestrator-spawned workers; <code>create_agent/2</code> gains the optional <code>"isolation"</code> arg.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/tools/adw.ex</code> — nil-project fallback (line ~257) picks up the configured isolation default.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/projects/project.ex</code> — <code>isolation_mode</code> Ecto.Enum default flips <code>:direct</code> → <code>:worktree</code> for new rows.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/session/server.ex</code> — already honours <code>opts[:isolation_mode]</code> with a safe non-git fallthrough (line ~1437); no change expected, verify only.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/workers/workflow_resume.ex</code> — the pattern to copy for the GC worker (Oban cron, <code>max_attempts: 1</code>, idempotent reconcile).</li>
+      <li><span class="tag existing">existing</span> <code>config/config.exs</code> — gains the <code>config :repo_builder, :worktree, ...</code> block (scratch_base, GC knobs, worker isolation default) and the GC crontab entry beside <code>WorkflowResume</code>.</li>
+      <li><span class="tag existing">existing</span> <code>test/repo_builder/projects/worktree_test.exs</code> + <code>worktree_merge_test.exs</code> — tmp-git-repo fixtures to reuse for the new plumbing tests.</li>
+      <li><span class="tag existing">existing</span> <code>test/repo_builder_web/live/projects_live_test.exs</code> — existing show-page coverage that must stay green with the new card.</li>
+      <li><span class="tag existing">existing</span> <code>ai_docs/typed-elixir-standard.md</code>, <code>BUILD_PROMPT.md</code> §7/§8/§9, <code>ai_docs/agentic-layer-adaptor.md</code> — routed by <code>.claude/commands/conditional_docs.md</code> for this task (Oban, contexts, LiveView, adaptor).</li>
+    </ul>
+    <h3>New Files</h3>
+    <ul>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/projects/worktree_inventory.ex</code> — the reconciling context: typed <code>Entry</code> struct, <code>list/1</code>, <code>merge/2</code>, <code>remove/3</code>, <code>gc/2</code>.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/workers/worktree_gc.ex</code> — Oban cron worker sweeping merged, aged worktrees across projects.</li>
+      <li><span class="tag new">new</span> <code>priv/repo/migrations/&lt;ts&gt;_default_project_isolation_worktree.exs</code> — alter <code>projects.isolation_mode</code> column default to <code>'worktree'</code> (existing rows untouched).</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/projects/worktree_inventory_test.exs</code> — reconcile/merge/remove/gc against tmp git repos.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/workers/worktree_gc_test.exs</code> — <code>Oban.Testing.perform_job</code> sweep coverage.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder_web/live/test_worktree_panel_test.exs</code> — <code>Phoenix.LiveViewTest</code> integration test for the panel and its events.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/orchestrator/tools/agent_ops_isolation_test.exs</code> — worker dispatch isolation-resolution matrix (or extend the existing agent_ops test file if one covers dispatch; decide at build time and note in Amendments).</li>
+    </ul>
+  </section>
+
+  <section id="phases">
+    <h2>Implementation Phases</h2>
+    <p><strong>IMPORTANT:</strong> Execute every phase and task step by step, in order, top to bottom.</p>
+    <p>Status markers: <code>[]</code> idle · <code>[wip]</code> in progress · <code>[x]</code> complete · <code>[f]</code> failed. All start as <code>[]</code>; the Build Plan workflow updates them as it works.</p>
+
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 1: Git plumbing — extend <code>Projects.Worktree</code></h3>
+      <p>Add the read/maintenance primitives the inventory needs. Follow the module's existing conventions exactly: <code>System.cmd/3</code> via the private <code>git/2</code> helper, <code>{:ok, _} | {:error, term}</code> tagged tuples, never raise, <code>@spec</code> on every public function, precise return types (no bare <code>map()</code> — define <code>@type</code>s).</p>
+
+      <figure>
+        <img class="placeholder" src=".planf3-assets/placeholders/phase.png" alt="Five new pure git shell-out functions extending the existing Worktree module: list, ahead-behind, diff shortstat, delete-branch, prune">
+        <figcaption>Phase 1: pure, never-raising git plumbing added to the existing primitive module. (stock placeholder)</figcaption>
+      </figure>
+
+      <h4>1. <code>list/1</code> — parse <code>git worktree list --porcelain</code></h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Add <code>@type listed :: %{path: String.t(), head_sha: String.t() | nil, branch: String.t() | nil}</code> and <code>@spec list(String.t()) :: {:ok, [listed()]} | {:error, term()}</code>.</li>
+        <li><code class="status">[x]</code> Parse porcelain output: blocks separated by blank lines; fields <code>worktree &lt;path&gt;</code>, <code>HEAD &lt;sha&gt;</code>, <code>branch refs/heads/&lt;name&gt;</code>; detached/bare blocks yield <code>branch: nil</code>. The first block (the main working tree) is included — callers filter.</li>
+        <li><code class="status">[x]</code> Non-git root returns <code>{:error, :not_a_git_repo}</code> (reuse <code>git_repo?/1</code>).</li>
+      </ul>
+
+      <h4>2. <code>ahead_behind/3</code> and <code>diff_shortstat/3</code></h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>@spec ahead_behind(String.t(), String.t(), String.t()) :: {:ok, {non_neg_integer(), non_neg_integer()}} | {:error, term()}</code> via <code>git rev-list --left-right --count &lt;trunk&gt;...&lt;branch&gt;</code> (behind = left, ahead = right; parse the two tab-separated integers).</li>
+        <li><code class="status">[x]</code> <code>@spec diff_shortstat(String.t(), String.t(), String.t()) :: {:ok, String.t()} | {:error, term()}</code> via <code>git diff --shortstat &lt;trunk&gt;...&lt;branch&gt;</code>; an empty diff returns <code>{:ok, ""}</code>.</li>
+        <li><code class="status">[x]</code> A branch that no longer exists (deleted by hand) returns <code>{:error, reason}</code> — the inventory renders it as "branch gone", never crashes.</li>
+      </ul>
+
+      <h4>3. <code>delete_branch/2</code> and <code>prune/1</code></h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>@spec delete_branch(String.t(), String.t()) :: :ok | {:error, term()}</code> via <code>git branch -D &lt;branch&gt;</code>, <strong>guarded</strong>: refuse (return <code>{:error, :not_an_adw_branch}</code>) unless the branch starts with the existing <code>@branch_prefix</code> (<code>"adw/"</code>) — this function must never be able to delete <code>dev</code>/<code>main</code>.</li>
+        <li><code class="status">[x]</code> <code>@spec prune(String.t()) :: :ok</code> — best-effort <code>git worktree prune</code>, always <code>:ok</code> (mirrors <code>cleanup/1</code>'s tolerance).</li>
+        <li><code class="status">[x]</code> Make the private <code>scratch_base/1</code> reachable for the inventory: add a public <code>@spec scratch_base() :: String.t()</code> wrapper (config <code>:repo_builder, :worktree, :scratch_base</code>, falling back to <code>Path.join(System.tmp_dir!(), "rb_worktrees")</code> — identical resolution to today's private helper).</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>Extend <code>test/repo_builder/projects/worktree_test.exs</code> using its existing tmp-git-repo fixture pattern (init a repo in <code>tmp_dir</code>, commit, <code>checkout/2</code> a worktree). Edge cases: porcelain parse with detached HEAD, delete_branch prefix guard, ahead_behind on a branch with 0 and &gt;0 commits, diff_shortstat on identical branches, all functions against a non-git dir.</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>mix test test/repo_builder/projects/worktree_test.exs --warnings-as-errors</code> — new plumbing green, old behaviour unchanged.</li>
+        <li><code class="status">[x]</code> <code>mix compile --warnings-as-errors &amp;&amp; mix format --check-formatted &amp;&amp; mix credo --strict</code> — typed standard holds (specs on every new public fn).</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 2: The reconciling inventory context — <code>Projects.WorktreeInventory</code></h3>
+      <p>A new context module that merges three sources of truth into typed entries and owns the on-demand merge/remove/gc operations. It calls <code>Workflows</code> for all DB access (it is <em>not</em> a <code>Repo</code> caller itself, honouring §8's context boundary) and <code>Worktree</code> for all git access.</p>
+
+      <figure>
+        <img class="placeholder" src=".planf3-assets/placeholders/phase.png" alt="Three sources — workflow run rows, git worktree registry, scratch directory listing — reconciled into one typed Entry list with merge, remove, and gc operations">
+        <figcaption>Phase 2: run rows ⊕ git registry ⊕ scratch dir → one typed inventory. (stock placeholder)</figcaption>
+      </figure>
+
+      <h4>1. <code>Workflows.list_worktree_runs/1</code></h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Add <code>@spec list_worktree_runs(Ecto.UUID.t() | nil) :: [WorkflowRun.t()]</code>: runs scoped by <code>scope_by_project/2</code> where <code>worktree_branch</code> is not nil, newest first, limit 100.</li>
+      </ul>
+
+      <h4>2. The <code>Entry</code> struct and <code>list/1</code></h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>typedstruct enforce: true</code> Entry: <code>branch :: String.t()</code>, <code>path :: String.t()</code>, and optional (<code>enforce: false</code>) <code>run_id :: Ecto.UUID.t()</code>, <code>run_status :: atom()</code>, <code>merge_status :: :merged | :failed</code>, <code>merged_sha :: String.t()</code>, <code>on_disk? :: boolean()</code> (default false), <code>in_git? :: boolean()</code> (default false), <code>ahead :: non_neg_integer()</code>, <code>behind :: non_neg_integer()</code>, <code>shortstat :: String.t()</code>, <code>run_inserted_at :: DateTime.t()</code>.</li>
+        <li><code class="status">[x]</code> <code>@spec list(Project.t()) :: {:ok, [Entry.t()]} | {:error, term()}</code>: (a) <code>Workflows.list_worktree_runs(project.id)</code> keyed by branch; (b) <code>Worktree.list(project.root_path)</code> filtered to <code>adw/</code>-prefixed branches (drop the main working tree and any non-ADW worktrees) → sets <code>in_git?</code>; (c) <code>File.ls(Worktree.scratch_base())</code> entries whose dir name matches a run id / existing path → sets <code>on_disk?</code> (missing scratch dir ⇒ empty, not an error). Union all three keyed by branch (fallback key: path), so orphans in any single source still appear.</li>
+        <li><code class="status">[x]</code> Enrich each entry with <code>ahead_behind</code> + <code>diff_shortstat</code> against <code>Worktree.detect_trunk/1</code> — but <strong>cap enrichment at the 30 newest entries</strong> (git calls are ~2 per entry) and leave older ones un-enriched (nil ahead/behind renders as "—"). A dead branch's enrichment errors degrade to nils.</li>
+        <li><code class="status">[x]</code> A non-git <code>root_path</code> returns <code>{:ok, []}</code> for a project with no worktree runs, else entries from run rows only (visibility even when disk is gone).</li>
+      </ul>
+
+      <h4>3. <code>merge/2</code>, <code>remove/3</code>, <code>gc/2</code></h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>@spec merge(Project.t(), String.t()) :: {:ok, %{sha: String.t(), trunk: String.t()}} | {:error, term()}</code>: delegate to <code>Worktree.merge(project.root_path, branch: branch)</code>; on <code>{:ok, %{sha: sha}}</code> find the matching run (by <code>worktree_branch</code>) and <code>Workflows.record_merge(run, %{merge_status: :merged, merged_sha: sha})</code>; on error record <code>%{merge_status: :failed, merge_error: reason}</code> when a run exists. No run found ⇒ still merge, skip recording.</li>
+        <li><code class="status">[x]</code> <code>@spec remove(Project.t(), Entry.t(), keyword()) :: :ok | {:error, term()}</code>: <code>Worktree.cleanup(%{repo: project.root_path, path: entry.path})</code>; with <code>delete_branch: true</code> also <code>Worktree.delete_branch/2</code> (prefix-guarded). Refuse (<code>{:error, :unmerged}</code>) when the entry is unmerged AND has commits ahead, unless <code>force: true</code> — losing unlanded agent work must be an explicit choice.</li>
+        <li><code class="status">[x]</code> <code>@spec gc(Project.t(), keyword()) :: {:ok, non_neg_integer()}</code>: remove (with branch deletion) every entry whose <code>merge_status == :merged</code> and whose run is older than <code>opts[:days]</code> (default from config <code>gc_after_days</code>, default 7); finish with <code>Worktree.prune/1</code>. Returns the count removed. Idempotent; per-entry failures are logged and skipped, never abort the sweep.</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>New <code>test/repo_builder/projects/worktree_inventory_test.exs</code> on the tmp-git-repo fixture + <code>DataCase</code> (run rows need the DB). Edge cases: orphan on disk with no run row; run row whose worktree was hand-deleted (<code>on_disk?: false</code>); merge conflict path records <code>:failed</code>; <code>remove</code> refuses unmerged-ahead without <code>force</code>; <code>gc</code> skips young and unmerged entries and counts correctly; scratch_base override via app-env in the test.</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>mix test test/repo_builder/projects/worktree_inventory_test.exs --warnings-as-errors</code> — reconcile + operations green.</li>
+        <li><code class="status">[x]</code> <code>mix test test/repo_builder/projects --warnings-as-errors</code> — whole projects context still green.</li>
+        <li><code class="status">[x]</code> Tidewave <code>project_eval</code> smoke: <code>RepoBuilder.Projects.WorktreeInventory.list(project)</code> against a real registered project returns <code>{:ok, entries}</code> (dev-server validation step for the builder).</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 3: The Worktrees panel on <code>ProjectsLive :show</code></h3>
+      <p>A new card between "Recent runs" and the secrets card. The inventory loads via <code>start_async</code> so the show-page mount stays fast (consistent with the recent console mount-perf work — git shell-outs never block first paint). All destructive actions carry <code>data-confirm</code>. Also add the isolation-mode toggle so an operator can flip an existing <code>:direct</code> project to <code>:worktree</code> from the UI (Phase 5 changes only the default for new projects).</p>
+
+      <figure>
+        <img class="placeholder" src=".planf3-assets/placeholders/phase.png" alt="A LiveView card listing worktree rows with branch, run status, merge chip, ahead-behind counts, and per-row merge, remove, and remove-with-branch buttons plus bulk GC and prune header actions">
+        <figcaption>Phase 3: the panel — async-loaded rows, per-row actions, bulk GC. (stock placeholder)</figcaption>
+      </figure>
+
+      <h4>1. Async inventory assign</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> In <code>apply_action(socket, :show, ...)</code>: assign <code>worktrees: nil</code> (renders "loading…") and <code>start_async(:load_worktrees, fn -> WorktreeInventory.list(project) end)</code>; <code>handle_async(:load_worktrees, {:ok, {:ok, entries}}, ...)</code> assigns the list; error/exit assigns <code>[]</code> plus a flash. Extract a private <code>reload_worktrees/1</code> helper reused by every event below.</li>
+      </ul>
+
+      <h4>2. Panel markup</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Card <code>id="worktrees-panel"</code>, heading "Worktrees · <code>&lt;count&gt;</code>", header buttons: <strong>Refresh</strong>, <strong>GC merged</strong> (<code>data-confirm</code> naming the age threshold), <strong>Prune registry</strong>.</li>
+        <li><code class="status">[x]</code> One row per entry (<code>id={"wt-#{entry.branch}"}</code> sanitized): branch (mono), run status, merge chip (reuse the existing merged/failed/unmerged chip idiom from the runs list), <code>+ahead/−behind</code>, shortstat title-attr, and badges for <code>orphaned</code> (<code>on_disk?</code> or <code>in_git?</code> without a run row) and <code>missing on disk</code> (run row without disk/registry presence).</li>
+        <li><code class="status">[x]</code> Per-row actions: <strong>Merge</strong> (hidden when already <code>:merged</code>; <code>data-confirm</code> naming trunk), <strong>Remove</strong> (<code>data-confirm</code>; passes force), <strong>Remove + delete branch</strong> (<code>data-confirm</code> warning the branch is destroyed). Empty state: "No worktrees for this project."</li>
+      </ul>
+
+      <h4>3. Event handlers</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>"merge_worktree"</code> (<code>phx-value-branch</code>) → <code>WorktreeInventory.merge/2</code>; flash "<code>branch</code> merged @ <code>sha</code> into <code>trunk</code>" or the error; then <code>reload_worktrees/1</code> and refresh <code>runs</code> (the chip changes).</li>
+        <li><code class="status">[x]</code> <code>"remove_worktree"</code> / <code>"remove_worktree_branch"</code> (<code>phx-value-branch</code>) → <code>remove/3</code> with <code>force: true</code> (the confirm dialog IS the explicit choice) and <code>delete_branch:</code> false/true respectively; flash outcome; reload.</li>
+        <li><code class="status">[x]</code> <code>"gc_worktrees"</code> → <code>gc/2</code>; flash "reclaimed N worktrees"; reload. <code>"prune_worktrees"</code> → <code>Worktree.prune/1</code>; reload. <code>"refresh_worktrees"</code> → reload only.</li>
+        <li><code class="status">[x]</code> <code>"toggle_isolation"</code> → <code>Projects.update_project(project, %{isolation_mode: other})</code>; re-assign <code>project</code>; render the current mode as a clickable chip next to the existing <code>repo_health</code> isolation label.</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>New <code>test/repo_builder_web/live/test_worktree_panel_test.exs</code> (<code>Phoenix.LiveViewTest</code> + <code>ConnCase</code>): fixture registers a project over a tmp git repo, seeds a run row with a real provisioned worktree (via <code>Worktree.checkout/2</code>) and one orphan dir in a test-scoped scratch_base. Assert: panel renders both rows with correct badges; merge event lands the branch (assert <code>merged_sha</code> persisted + chip updates); remove event deletes the dir; gc reclaims the merged row; toggle flips <code>isolation_mode</code>. Keep <code>projects_live_test.exs</code> green (the async assign must not break existing show-page tests — <code>render_async/1</code> where needed).</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>mix test test/repo_builder_web/live/test_worktree_panel_test.exs --warnings-as-errors</code> — panel behaviour proven end-to-end.</li>
+        <li><code class="status">[x]</code> <code>mix test test/repo_builder_web/live/projects_live_test.exs --warnings-as-errors</code> — no regression on the existing show page.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 4: Oban cron garbage collection — <code>Workers.WorktreeGC</code></h3>
+      <p>Automate the sweep so the scratch dir cannot grow unbounded. Modeled on <code>Workers.WorkflowResume</code>: cron-scheduled, <code>max_attempts: 1</code>, idempotent, and safe to run any time because <code>WorktreeInventory.gc/2</code> only touches merged-and-aged entries.</p>
+
+      <h4>1. Config block</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Add to <code>config/config.exs</code>: <code>config :repo_builder, :worktree, scratch_base: nil, gc_enabled: true, gc_after_days: 7, worker_isolation_default: :worktree</code> — with comments; <code>scratch_base: nil</code> preserves today's tmp-dir fallback. (The <code>worker_isolation_default</code> key is consumed in Phase 5.)</li>
+        <li><code class="status">[x]</code> Extend the Oban crontab: <code>{"30 3 * * *", RepoBuilder.Workers.WorktreeGC}</code> beside the existing <code>WorkflowResume</code> entry.</li>
+      </ul>
+
+      <h4>2. The worker</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>use Oban.Worker, queue: :default, max_attempts: 1</code>; <code>perform/1</code> returns <code>:ok</code> immediately when <code>gc_enabled</code> is false.</li>
+        <li><code class="status">[x]</code> Public <code>@spec sweep() :: non_neg_integer()</code> (mirrors <code>WorkflowResume.reconcile/0</code>): for every project in <code>Projects.list_projects()</code> with a git <code>root_path</code>, run <code>WorktreeInventory.gc(project, [])</code>, sum counts; per-project failures log a warning and continue.</li>
+        <li><code class="status">[x]</code> Emit one <code>Logger.info</code> summary line ("worktree gc reclaimed N across M projects") so the sweep is visible in system logs.</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>New <code>test/repo_builder/workers/worktree_gc_test.exs</code> with <code>Oban.Testing</code>'s <code>perform_job/3</code>: seed a project + one merged-and-old run/worktree and one fresh unmerged one; assert the sweep removes exactly the first, returns 1, and is a no-op on second run; assert the <code>gc_enabled: false</code> kill switch. Backdate the run row's <code>inserted_at</code> directly for the age case.</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>mix test test/repo_builder/workers/worktree_gc_test.exs --warnings-as-errors</code> — sweep semantics proven.</li>
+        <li><code class="status">[x]</code> Tidewave <code>project_eval</code> smoke: <code>RepoBuilder.Workers.WorktreeGC.sweep()</code> runs green on the dev node.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 5: Worktree isolation by default for orchestrator-spawned workers</h3>
+      <p>Close the fourth gap: agents CRUD'd/spawned by an orchestrator should run isolated by default. Resolution order for a worker's isolation becomes: <strong>explicit spawn arg → the worker's project <code>isolation_mode</code> → config <code>worker_isolation_default</code> (ships <code>:worktree</code>)</strong>. The schema default for <em>new</em> projects flips to <code>:worktree</code>; existing projects keep their stored value (flippable via the Phase 3 toggle). Everything stays fail-safe because <code>Session.Server</code> + <code>Worktree.checkout/2</code> already fall through to direct on a non-git cwd (e.g. a managed orchestrator workspace).</p>
+
+      <figure>
+        <img class="placeholder" src=".planf3-assets/placeholders/phase.png" alt="Isolation resolution funnel: explicit spawn argument, then project isolation mode, then configured worktree default, with a fail-safe direct fallthrough for non-git working directories">
+        <figcaption>Phase 5: spawn arg → project mode → configured default, always fail-safe on non-git cwds. (stock placeholder)</figcaption>
+      </figure>
+
+      <h4>1. Schema default + migration</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>Projects.Project</code>: change the Ecto.Enum default <code>isolation_mode: :direct</code> → <code>:worktree</code>; update the moduledoc.</li>
+        <li><code class="status">[x]</code> Migration altering the column default to <code>'worktree'</code> (<code>modify :isolation_mode, :string, default: "worktree"</code>) with a comment that existing rows are deliberately untouched; provide the symmetric <code>down</code>.</li>
+      </ul>
+
+      <h4>2. Dispatch resolution in the orchestrator tools</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Add a shared <code>@spec default_isolation() :: :direct | :worktree</code> helper (read config <code>worker_isolation_default</code>, default <code>:worktree</code>) — place it in <code>Projects</code> (or <code>Worktree</code>) so both tool modules and future callers share one reader.</li>
+        <li><code class="status">[x]</code> <code>agent_ops.worker_dispatch_location/2</code>: the nil-project clause returns <code>{orchestrator_working_dir(...), default_isolation()}</code> instead of <code>{..., nil}</code>; the project clause keeps <code>project.isolation_mode</code> (a stored <code>:direct</code> remains an explicit operator choice); the project-not-found clause also uses <code>default_isolation()</code>.</li>
+        <li><code class="status">[x]</code> <code>create_agent/2</code> (and its spawn path) accepts an optional <code>"isolation"</code> arg: validate against <code>~w(direct worktree)</code> via <code>String.to_existing_atom</code>-safe matching (invalid value ⇒ <code>{:error, reason}</code> tool result, never crash); when present it wins over both project mode and the default. Document the arg in the tool's schema/description so the orchestrator LLM can use it.</li>
+        <li><code class="status">[x]</code> <code>orchestrator/tools/adw.ex</code> line ~257: the nil-project fallback pair becomes <code>{nil, default_isolation()}</code>; a resolved project keeps mirroring its mode (unchanged).</li>
+        <li><code class="status">[x]</code> Verify (read-only) <code>Session.Server</code>'s worktree provisioning (line ~1437) and the orchestrator brain launch (<code>orchestrator/server.ex</code> <code>:launch</code> opts): the <strong>orchestrator's own session</strong> must NOT gain isolation — only workers; confirm no <code>isolation_mode</code> is threaded there and add a comment guarding the distinction.</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>New <code>test/repo_builder/orchestrator/tools/agent_ops_isolation_test.exs</code> (or extend the existing agent_ops coverage — decide at build time): the resolution matrix — (project <code>:worktree</code> ⇒ worktree), (project <code>:direct</code> ⇒ direct), (nil project ⇒ config default), (explicit arg beats all), (invalid arg ⇒ error result), (config override to <code>:direct</code> respected). Plus a changeset test that a new <code>Project</code> defaults to <code>:worktree</code>, and a migration round-trip via <code>mix ecto.migrate</code>/<code>ecto.rollback</code> in dev. Sweep the whole suite: session-runtime and workflow-engine tests that implicitly assumed direct-mode nil-project workers must stay green (the non-git tmp cwds used in tests fall through to direct, which is why this stays back-compatible — verify, and fix any test that registered a real git repo and now provisions a worktree unexpectedly).</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>mix test test/repo_builder/orchestrator --warnings-as-errors</code> — resolution matrix + no orchestrator regressions.</li>
+        <li><code class="status">[x]</code> <code>mix ecto.migrate &amp;&amp; mix ecto.rollback --step 1 &amp;&amp; mix ecto.migrate</code> — migration is reversible.</li>
+        <li><code class="status">[x]</code> <code>mix test --warnings-as-errors</code> — full suite green under the new default.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+  </section>
+
+  <section id="validation">
+    <h2>Validation Commands</h2>
+    <p>Execute these commands to validate the entire plan is complete:</p>
+    <ul class="checklist">
+      <li><code class="status">[x]</code> <code>mix compile --warnings-as-errors</code> — zero warnings across all new modules.</li>
+      <li><code class="status">[x]</code> <code>mix format --check-formatted</code> — canonical style.</li>
+      <li><code class="status">[x]</code> <code>mix credo --strict</code> — includes the <code>@spec</code>-on-every-public-function gate for all new code.</li>
+      <li><code class="status">[x]</code> <code>mix test --warnings-as-errors</code> — full suite (existing ~1,777 + new worktree/inventory/panel/GC/isolation tests) green.</li>
+      <li><code class="status">[x]</code> <code>mix dialyzer</code> — success typing holds for the new typed structs and tagged-tuple contracts.</li>
+      <li><code class="status">[x]</code> Manual smoke (dev server + Tidewave): register a tmp git repo as a project, launch a worktree run, then on <code>/projects/:id</code> observe the row, click <strong>Merge</strong>, confirm the merged chip + <code>git log</code> shows the <code>--no-ff</code> merge commit, then <strong>GC merged</strong> reclaims it.</li>
+    </ul>
+    <div class="loop">
+      🔁 <strong>The plan is not complete until every box is checked and every command passes. If for some reason a step is not possible to complete, mark it with [f] and move on if possible.</strong>
+    </div>
+  </section>
+
+  <section id="questionables">
+    <h2>Questionables</h2>
+    <details>
+      <summary>On-demand merge checks out the trunk in the operator's own working tree — is that acceptable?</summary>
+      <p class="qa-answer"><code>Worktree.merge/2</code> (pre-existing, used by the <code>:merge</code> step since issue-adw-non-iso-merge) runs <code>git checkout &lt;trunk&gt;</code> + <code>merge --no-ff</code> in <code>repo_root</code>, then restores the previous branch only on conflict. If the operator has uncommitted changes on another branch in that tree, the checkout can fail (git refuses) — which surfaces as a clean <code>{:error, reason}</code> flash, never data loss. This plan deliberately reuses the existing primitive rather than introducing a second merge strategy (e.g. merging inside a temporary worktree); if the checkout-in-operator-tree behaviour proves annoying in practice, a follow-up can rework <code>merge/2</code> to merge via a detached temporary worktree without touching the operator's checkout.</p>
+    </details>
+    <details>
+      <summary>Existing projects keep <code>:direct</code> after the default flips — silent inconsistency?</summary>
+      <p class="qa-answer">Deliberate: mutating stored operator choices in a migration would be surprising. The Phase 3 toggle makes flipping a one-click action, and the projects UI already displays the mode in <code>repo_health</code>. New projects and nil-project workers get the safe default.</p>
+    </details>
+    <details>
+      <summary>Worktree-by-default for nil-project workers — what directory do they isolate from?</summary>
+      <p class="qa-answer">The orchestrator's <code>working_dir</code>. When that is a managed (non-git) workspace, <code>Worktree.checkout/2</code> falls through to <code>{:direct, root}</code> — identical to today. When the orchestrator is bound to a real git checkout (the "improving the platform on itself" case that motivated this plan), workers now branch instead of stomping <code>dev</code>. The fail-safe fallthrough is what makes the default flip low-risk.</p>
+    </details>
+    <details>
+      <summary>Per-entry git calls in the inventory — mount-time cost?</summary>
+      <p class="qa-answer">Bounded three ways: the panel loads via <code>start_async</code> (never blocks first paint, consistent with the console mount-perf work), enrichment is capped at the 30 newest entries, and <code>list_worktree_runs/1</code> is limited to 100 rows. No caching layer in v1; add one only if a real project shows lag.</p>
+    </details>
+    <details>
+      <summary>GC deletes branches — can landed work be lost?</summary>
+      <p class="qa-answer">GC only touches entries whose run has <code>merge_status == :merged</code>, i.e. the commits are already on the trunk; deleting <code>adw/&lt;run_id&gt;</code> then loses nothing. Unmerged worktrees are never GC'd regardless of age — reclaiming those is always a manual, confirmed UI action.</p>
+    </details>
+    <details>
+      <summary>Elixir worktrees don't inherit <code>_build</code>/deps — cold-compile tax per worktree?</summary>
+      <p class="qa-answer">Out of scope here (this plan manages lifecycle, not build caching). Noted as future work: seeding a new worktree's <code>_build</code>/<code>deps</code> from the parent checkout, or a shared <code>MIX_BUILD_PATH</code> strategy, would cut the first-gate cost dramatically for Elixir target repos.</p>
+    </details>
+  </section>
+
+  <section id="notes">
+    <h2>Notes</h2>
+    <p><strong>Context.</strong> This plan closes the operator-facing half of the worktree story. The primitives all exist: <code>Projects.Worktree</code> (checkout/cleanup/merge/detect_trunk, issue-adw-non-iso-merge), run-row handoff columns (<code>worktree_path</code>/<code>worktree_branch</code>/<code>merge_*</code>), the Runner's deterministic <code>:merge</code> step kind, and session-runtime provisioning honouring <code>opts[:isolation_mode]</code>. What was missing is management: visibility, on-demand merge, reclamation, and a sane default.</p>
+    <p><strong>Design decisions.</strong> (1) <code>WorktreeInventory</code> is a pure orchestration context — git via <code>Worktree</code>, DB via <code>Workflows</code>/<code>Projects</code> — keeping the §8 "contexts are the only Repo callers" boundary intact. (2) The union-reconcile (rather than intersect) surfaces orphans in <em>any</em> source, which is the whole point of the panel. (3) The GC worker copies <code>WorkflowResume</code>'s shape (cron + idempotent public function) so operational reasoning transfers. (4) Isolation resolution is a strict precedence chain with the fail-safe non-git fallthrough carrying all the back-compat weight — that fallthrough is why tests and managed workspaces survive the default flip unchanged.</p>
+    <p><strong>Rejected approaches.</strong> A DB-only panel (no git/disk reconcile) — cheap but blind to exactly the drift that motivates the feature. Overriding a project's stored <code>:direct</code> with the new config default — surprising inversions of explicit operator choices. Merging via a PR flow (push + <code>gh pr create</code>) — right for GitHub-remoted repos but out of scope; <code>Worktree.merge/2</code> already handles local-only repos, which is the primary self-improvement use case.</p>
+    <p><strong>Dependencies.</strong> No new hex packages. Oban, LiveView <code>start_async</code>, and <code>System.cmd/3</code> git shell-outs are all established in-repo patterns.</p>
+    <p><strong>Future work.</strong> Worktree <code>_build</code>/deps seeding for Elixir repos (see Questionables); a disk-usage column (<code>du -s</code> is too slow to run per-row synchronously — needs async per-entry hydration); pushing <code>adw/*</code> branches and opening PRs for remoted projects; wiring the panel's counts into the console's project header as an at-a-glance badge.</p>
+  </section>
+
+  <section id="amendments">
+    <h2>Amendments</h2>
+    <details>
+      <summary>2026-07-05T12:46:14Z — Initial plan (no amendments yet)</summary>
+      <p>Created with PLANF3_IMAGES unset → stock placeholder images per policy.</p>
+    </details>
+    <details>
+      <summary>2026-07-05T13:54:05Z — Built: all 5 phases green (1,838 tests, full gate)</summary>
+      <p>Implemented by the Build Plan workflow. Deviations from the letter of the plan:
+      (1) the isolation-mode toggle lives in the Worktrees panel header rather than beside the
+      <code>repo_health</code> label — same behaviour, better context; (2) the isolation
+      resolution chain was extracted as the public, pure
+      <code>Projects.resolve_worker_isolation/2</code> (instead of a private helper in
+      agent_ops) so the matrix is directly testable; (3) the per-worker override is stored on
+      the agent's <code>config["isolation"]</code> at create time — dispatch-time
+      <code>command_agent</code> args were not extended; (4) scratch-dir orphan attribution
+      verifies the worktree's <code>.git</code> pointer targets the project's repo, since the
+      scratch base is shared across projects; (5) gc eligibility additionally requires
+      something physical to reclaim (<code>on_disk? or in_git?</code>) so run-row-only
+      memories are not re-counted every sweep; (6) the committed orchestrator tool-manifest
+      snapshot was regenerated (intentional <code>create_agent</code> schema change) and the
+      Project-defaults test updated to the new <code>:worktree</code> default. Runtime smoke:
+      register → checkout → inventory (+1 ahead) → merge to main → gc, all verified via
+      <code>mix run</code> against the dev node.</p>
+    </details>
+  </section>
+
+</main>
+</body>
+</html>

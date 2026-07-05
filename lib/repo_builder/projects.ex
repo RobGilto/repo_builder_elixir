@@ -45,6 +45,36 @@ defmodule RepoBuilder.Projects do
     |> Repo.insert()
   end
 
+  @doc """
+  The isolation mode for orchestrator-spawned workers with NO bound project
+  (worktree-panel-and-gc plan): config `:repo_builder, :worktree,
+  :worker_isolation_default`, shipping `:worktree`. A bound project's own
+  `isolation_mode` wins over this; an explicit spawn arg wins over both. Fail-safe:
+  non-git cwds fall through to direct in the session runtime regardless.
+  """
+  @spec default_isolation() :: Project.isolation_mode()
+  def default_isolation do
+    case Application.get_env(:repo_builder, :worktree, [])[:worker_isolation_default] do
+      :direct -> :direct
+      _other -> :worktree
+    end
+  end
+
+  @doc """
+  Resolve a worker's effective isolation (worktree-panel-and-gc plan) as a strict
+  precedence chain: the worker's explicit `config["isolation"]` (set via the
+  `create_agent` tool arg) → the bound project's `isolation_mode` → the platform
+  `default_isolation/0`. Pure — testable without a dispatch.
+  """
+  @spec resolve_worker_isolation(map() | nil, Project.isolation_mode() | nil) ::
+          Project.isolation_mode()
+  def resolve_worker_isolation(worker_config, project_mode)
+
+  def resolve_worker_isolation(%{"isolation" => "direct"}, _mode), do: :direct
+  def resolve_worker_isolation(%{"isolation" => "worktree"}, _mode), do: :worktree
+  def resolve_worker_isolation(_config, mode) when mode in [:direct, :worktree], do: mode
+  def resolve_worker_isolation(_config, _mode), do: default_isolation()
+
   @spec update_project(Project.t(), map()) :: {:ok, Project.t()} | {:error, Ecto.Changeset.t()}
   def update_project(%Project{} = project, params) do
     project

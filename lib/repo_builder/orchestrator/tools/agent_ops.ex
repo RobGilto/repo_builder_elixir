@@ -56,6 +56,8 @@ defmodule RepoBuilder.Orchestrator.Tools.AgentOps do
     with {:ok, name} <- fetch_string(args, "name"),
          {:ok, template} <- resolve_template(args),
          {:ok, tools} <- resolve_tools(args),
+         {:ok, isolation} <- validate_isolation(args),
+         {:ok, worktree_run_id} <- validate_worktree_run_id(args),
          project_id = orchestrator_project_id(orchestrator_id),
          {:ok, apis} <- resolve_apis(project_id, args),
          args = apply_template_args(args, template),
@@ -89,6 +91,8 @@ defmodule RepoBuilder.Orchestrator.Tools.AgentOps do
           |> agent_config(template)
           |> maybe_put_tools(tools)
           |> maybe_put_apis(apis)
+          |> maybe_put_isolation(isolation)
+          |> maybe_put_worktree_run_id(worktree_run_id)
       }
 
       case Agents.create_worker(orchestrator_id, params) do
@@ -158,7 +162,11 @@ defmodule RepoBuilder.Orchestrator.Tools.AgentOps do
         cwd: cwd,
         # Honour the project's worktree isolation where the session runtime applies it
         # (nil ⇒ direct, unchanged for unscoped/back-compat workers).
-        isolation_mode: isolation_mode
+        isolation_mode: isolation_mode,
+        # Takeover key (issue worktree-takeover): when set, the session lands in the
+        # EXISTING adw/<run_id> worktree/branch instead of one keyed on this worker's id.
+        # nil ⇒ the session runtime's existing agent_id fallback (byte-identical to before).
+        run_id: worktree_run_id(worker)
       ]
 
       case Session.Supervisor.start_session(opts) do
@@ -558,7 +566,23 @@ defmodule RepoBuilder.Orchestrator.Tools.AgentOps do
   # falls back to the orchestrator's working dir with no isolation (back-compat).
   @spec worker_dispatch_location(Agents.Agent.t(), Ecto.UUID.t()) ::
           {String.t() | nil, Project.isolation_mode() | nil}
-  defp worker_dispatch_location(%{project_id: project_id}, orchestrator_id)
+  # Isolation resolution (worktree-panel-and-gc plan): explicit per-worker arg
+  # (config["isolation"], set at create time) → the bound project's isolation_mode
+  # (a stored :direct is an explicit operator choice) → Projects.default_isolation()
+  # (ships :worktree). Non-git cwds fall through to direct in the session runtime,
+  # which is what keeps the :worktree default fail-safe for managed workspaces.
+  defp worker_dispatch_location(worker, orchestrator_id) do
+    {cwd, project_mode} = project_dispatch_location(worker, orchestrator_id)
+    {cwd, Projects.resolve_worker_isolation(worker.config, project_mode)}
+  end
+
+  # The takeover key persisted at create time (issue worktree-takeover), or nil. A nil key
+  # keeps the session runtime's existing `agent_id`-based worktree derivation unchanged.
+  @spec worktree_run_id(Agents.Agent.t()) :: String.t() | nil
+  defp worktree_run_id(%{config: %{"worktree_run_id" => id}}) when is_binary(id), do: id
+  defp worktree_run_id(_worker), do: nil
+
+  defp project_dispatch_location(%{project_id: project_id}, orchestrator_id)
        when is_binary(project_id) do
     case Projects.get_project(project_id) do
       %Project{root_path: root, isolation_mode: mode} -> {root, mode}
@@ -566,7 +590,7 @@ defmodule RepoBuilder.Orchestrator.Tools.AgentOps do
     end
   end
 
-  defp worker_dispatch_location(_worker, orchestrator_id) do
+  defp project_dispatch_location(_worker, orchestrator_id) do
     {orchestrator_working_dir(orchestrator_id), nil}
   end
 
@@ -818,6 +842,57 @@ defmodule RepoBuilder.Orchestrator.Tools.AgentOps do
     do: Map.put(config, "apis", Enum.map(apis, & &1.name))
 
   defp maybe_put_apis(config, _apis), do: config
+
+  # Validate the optional per-worker `isolation` override (worktree-panel-and-gc plan).
+  # Absent ⇒ `{:ok, nil}` (resolve from project mode / config default at dispatch time);
+  # anything but the two modes is rejected up front.
+  @spec validate_isolation(map()) :: {:ok, String.t() | nil} | {:error, reason()}
+  defp validate_isolation(args) do
+    case Map.get(args, "isolation") do
+      nil -> {:ok, nil}
+      mode when mode in ["direct", "worktree"] -> {:ok, mode}
+      other -> {:error, "isolation must be \"direct\" or \"worktree\", got: #{inspect(other)}"}
+    end
+  end
+
+  # Persist an explicit isolation choice on the worker's config; it wins over the
+  # project mode and the configured default at every dispatch. Inference-only spec
+  # (mirrors `maybe_put_tools/2`).
+  defp maybe_put_isolation(config, mode) when mode in ["direct", "worktree"],
+    do: Map.put(config, "isolation", mode)
+
+  defp maybe_put_isolation(config, _mode), do: config
+
+  # Validate the optional `worktree_run_id` takeover key (issue worktree-takeover). It
+  # becomes both a scratch-dir segment and a git branch suffix, so it is charset-guarded at
+  # this WireType boundary and treated as opaque after. Absent ⇒ `{:ok, nil}`.
+  @worktree_run_id_re ~r/^[A-Za-z0-9._-]+$/
+  @spec validate_worktree_run_id(map()) :: {:ok, String.t() | nil} | {:error, reason()}
+  defp validate_worktree_run_id(args) do
+    case Map.get(args, "worktree_run_id") do
+      nil ->
+        {:ok, nil}
+
+      id when is_binary(id) ->
+        if Regex.match?(@worktree_run_id_re, id) do
+          {:ok, id}
+        else
+          {:error,
+           "worktree_run_id must match #{inspect(@worktree_run_id_re.source)} (path/branch-safe), got: #{inspect(id)}"}
+        end
+
+      other ->
+        {:error, "worktree_run_id must be a string, got: #{inspect(other)}"}
+    end
+  end
+
+  # Persist the takeover key on the worker's config; threaded into the session as `run_id`
+  # at dispatch so the session runtime lands in the existing adw/<id> worktree. Inference-only
+  # spec (mirrors `maybe_put_isolation/2`).
+  defp maybe_put_worktree_run_id(config, id) when is_binary(id),
+    do: Map.put(config, "worktree_run_id", id)
+
+  defp maybe_put_worktree_run_id(config, _id), do: config
 
   # Prepend the provisioned APIs' usage instructions/doc URLs to the worker charter so the
   # worker reads HOW to use each transferred API. `[]` ⇒ the prompt is untouched.

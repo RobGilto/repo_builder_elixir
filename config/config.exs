@@ -260,8 +260,30 @@ config :repo_builder, Oban,
   queues: [default: 10, sessions: 20, workflows: 10],
   plugins: [
     {Oban.Plugins.Cron,
-     crontab: [{"*/5 * * * *", RepoBuilder.Workers.WorkflowResume}], timezone: "Etc/UTC"}
+     crontab: [
+       {"*/5 * * * *", RepoBuilder.Workers.WorkflowResume},
+       # Nightly worktree sweep (worktree-panel-and-gc plan): reclaims merged, aged
+       # run worktrees + branches per project. Idempotent; gated by :worktree gc_enabled.
+       {"30 3 * * *", RepoBuilder.Workers.WorktreeGC}
+     ],
+     timezone: "Etc/UTC"}
   ]
+
+# Run-worktree isolation + lifecycle (worktree-panel-and-gc plan).
+#   scratch_base:  parent dir for per-run worktrees; nil ⇒ <tmp>/rb_worktrees (the
+#                  historical default resolution in Projects.Worktree).
+#   gc_enabled / gc_after_days: the nightly WorktreeGC sweep — reclaims MERGED run
+#                  worktrees (and their adw/* branches) older than the age; unmerged
+#                  trees are never auto-reclaimed.
+#   worker_isolation_default: isolation for orchestrator-spawned workers with NO
+#                  bound project (a bound project's own isolation_mode wins; an
+#                  explicit spawn arg wins over both). Non-git cwds fall through to
+#                  direct regardless, so :worktree is fail-safe.
+config :repo_builder, :worktree,
+  scratch_base: nil,
+  gc_enabled: true,
+  gc_after_days: 7,
+  worker_isolation_default: :worktree
 
 # Webhook trigger security (BUILD_PROMPT.md §7). The secret is resolved at runtime
 # (config/runtime.exs); the replay window bounds the signed-timestamp age.

@@ -102,4 +102,33 @@ defmodule RepoBuilderWeb.NavigationPerfTest do
       |> TelemetryCapture.assert_event_under(RepoBuilderWeb.ConsoleLive, "toggle_view", 50)
     end
   end
+
+  describe "project switch timing" do
+    test "select_project completes under 200 ms (excluding deferred hydration)", %{conn: conn} do
+      # Create a second project to switch to
+      {:ok, project} =
+        RepoBuilder.Projects.create_project(%{
+          "name" => "perf-test-project",
+          "root_path" => "/tmp"
+        })
+
+      {:ok, lv, _} = live(conn, ~p"/")
+
+      # Capture the select_project event timing - the handle_event should be fast
+      # because backfill_events + seed_workflow_progress are deferred to handle_info.
+      # We time just the handle_event, not the deferred handle_info.
+      start = System.monotonic_time(:millisecond)
+      render_change(lv, "select_project", %{"project_id" => project.id})
+      handle_event_time = System.monotonic_time(:millisecond) - start
+
+      # The key optimization: backfill_events + seed_workflow_progress are now deferred
+      # via handle_info, so the UI responds immediately even though the full data
+      # hydration happens asynchronously.
+      assert handle_event_time < 200,
+             "select_project handle_event took #{handle_event_time} ms, expected < 200 ms"
+
+      # Clean up
+      RepoBuilder.Projects.delete_project(project)
+    end
+  end
 end

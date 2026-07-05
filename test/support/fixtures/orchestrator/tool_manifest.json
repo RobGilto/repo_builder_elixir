@@ -26,6 +26,14 @@
           "description": "Registered harness the worker runs on (e.g. claude, pi). Ignored when `category` is given.",
           "type": "string"
         },
+        "isolation": {
+          "description": "Working-tree isolation for this worker's sessions. Omit to inherit: the bound project's isolation_mode, else the platform default (worktree). `worktree` runs each session on its own adw/* branch in a git worktree (parallel-safe, reviewable); `direct` works in the shared tree. Non-git working dirs always run direct.",
+          "enum": [
+            "direct",
+            "worktree"
+          ],
+          "type": "string"
+        },
         "model": {
           "description": "Optional model override.",
           "type": "string"
@@ -51,6 +59,10 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "worktree_run_id": {
+          "description": "Continue an EXISTING adw/* worktree branch: pass the retired/prior worker's agent id (its worktree key). This worker's sessions run in that worktree on that branch, with all of the prior worker's commits intact — the supported takeover path after a worker was retired mid-task. Omit for a fresh branch. Only meaningful with worktree isolation.",
+          "type": "string"
         }
       },
       "required": [

@@ -88,6 +88,26 @@ defmodule RepoBuilder.Workflows do
   @spec get_run(Ecto.UUID.t()) :: WorkflowRun.t() | nil
   def get_run(id), do: Repo.get(WorkflowRun, id)
 
+  @doc """
+  Runs that were worktree-isolated (have a recorded `worktree_branch`), scoped to a
+  project (`nil` ⇒ unscoped), newest first. Feeds the worktree inventory
+  (`Projects.WorktreeInventory`) — hidden runs are included on purpose: a hidden run's
+  worktree still occupies disk and must stay reclaimable.
+  """
+  @spec list_worktree_runs(Ecto.UUID.t() | nil, pos_integer()) :: [WorkflowRun.t()]
+  def list_worktree_runs(project_id, limit \\ 100) do
+    WorkflowRun
+    |> scope_by_project(project_id)
+    |> then(
+      &from(r in &1,
+        where: not is_nil(r.worktree_branch),
+        order_by: [desc: r.inserted_at],
+        limit: ^limit
+      )
+    )
+    |> Repo.all()
+  end
+
   @spec create_run(map()) :: {:ok, WorkflowRun.t()} | {:error, Ecto.Changeset.t()}
   def create_run(params) do
     %WorkflowRun{}

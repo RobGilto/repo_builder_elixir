@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan: Learning Week 1 — OTP Lifecycle, LiveView Symmetry &amp; Seam Design</title>
+<style>
+  :root {
+    --bg: #f7f9f9;
+    --surface: #ffffff;
+    --ink: #1c2b2d;
+    --ink-soft: #4a5d60;
+    --accent: #0e7c7b;
+    --accent-soft: #d5eceb;
+    --warn: #b45309;
+    --new: #7c3aed;
+    --existing: #0e7c7b;
+    --border: #dbe4e4;
+    --code-bg: #eef3f3;
+    --mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+    --sans: "Inter", -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans); line-height: 1.6; }
+  main { max-width: 900px; margin: 0 auto; padding: 2.5rem 1.5rem 5rem; }
+  h1 { font-size: 1.7rem; letter-spacing: -0.02em; border-bottom: 3px solid var(--accent); padding-bottom: .5rem; }
+  h2 { font-size: 1.25rem; color: var(--accent); margin-top: 2.5rem; letter-spacing: -0.01em; }
+  h3 { font-size: 1.05rem; margin-top: 1.6rem; }
+  h4 { font-size: .95rem; margin: 1.2rem 0 .4rem; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .04em; }
+  code { font-family: var(--mono); font-size: .85em; background: var(--code-bg); padding: .1em .35em; border-radius: 4px; }
+  pre code { display: block; padding: 1em; overflow-x: auto; }
+  figure { margin: 1.5rem 0; text-align: center; }
+  figure img { max-width: 100%; border-radius: 10px; border: 1px solid var(--border); box-shadow: 0 2px 10px rgba(28,43,45,.08); }
+  figcaption { font-size: .82rem; color: var(--ink-soft); margin-top: .5rem; }
+  details.meta { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: .6rem 1rem; font-size: .85rem; }
+  details.meta dl { display: grid; grid-template-columns: 9rem 1fr; gap: .25rem .8rem; margin: .5rem 0 0; }
+  details.meta dt { color: var(--ink-soft); font-family: var(--mono); font-size: .78rem; }
+  details.meta dd { margin: 0; word-break: break-word; }
+  section { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.2rem 1.6rem; margin-top: 1.5rem; }
+  .tag { font-family: var(--mono); font-size: .7rem; padding: .1em .5em; border-radius: 999px; color: #fff; vertical-align: middle; }
+  .tag.existing { background: var(--existing); }
+  .tag.new { background: var(--new); }
+  .phase { border-left: 4px solid var(--accent); background: var(--bg); border-radius: 8px; padding: 1rem 1.4rem; margin: 1.4rem 0; }
+  .phase h3 { margin-top: .2rem; }
+  ul.checklist { list-style: none; padding-left: .2rem; }
+  ul.checklist li { margin: .35rem 0; }
+  code.status { color: var(--warn); font-weight: 700; background: #fff7ed; border: 1px solid #fed7aa; }
+  .loop { background: var(--accent-soft); border-radius: 8px; padding: .7rem 1rem; font-size: .9rem; margin-top: 1rem; }
+  .day-shape { display: flex; gap: .8rem; flex-wrap: wrap; font-size: .8rem; margin: .4rem 0 .8rem; }
+  .day-shape span { background: var(--accent-soft); color: var(--accent); border-radius: 999px; padding: .15em .8em; font-weight: 600; }
+  table { border-collapse: collapse; width: 100%; font-size: .85rem; margin: .8rem 0; }
+  th, td { border: 1px solid var(--border); padding: .4rem .6rem; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); }
+  .overflow { overflow-x: auto; }
+  details { margin: .5rem 0; }
+  summary { cursor: pointer; font-weight: 600; }
+  .qa-answer { color: var(--ink-soft); }
+  blockquote { border-left: 3px solid var(--accent); margin: .8rem 0; padding: .2rem 1rem; color: var(--ink-soft); font-style: italic; }
+</style>
+</head>
+<body>
+<main>
+
+  <!-- ===== HEADER + UPDATABLE METADATA ===== -->
+  <header>
+    <h1>Plan: Learning Week 1 — OTP Lifecycle, LiveView Symmetry &amp; Seam Design</h1>
+    <details class="meta">
+      <summary>Metadata</summary>
+      <dl>
+        <dt>created</dt>      <dd>2026-07-05T23:27:37+10:00</dd>
+        <dt>modified</dt>     <dd>2026-07-05T23:27:37+10:00</dd>
+        <dt>commits</dt>      <dd>—</dd>
+        <dt>agent name</dt>   <dd>Claude Fable 5 (Claude Code)</dd>
+        <dt>session id</dt>   <dd>afb8f74a-ec86-448a-b739-15ea973e4c01</dd>
+        <dt>back refs</dt>    <dd>specs/project-audit-refactor-roadmap-and-greenfield-spinoffs.html, specs/issue-log-16249-adw-log-16249-sdlc_planner-fix-worker-stuck-running.md, specs/issue-orchestrator-stuck-adw-bug-sdlc_planner-orchestrator-stuck-running.md, specs/issue-plan-adw-plan-sdlc_planner-navigation-perf-root-cause.md, specs/console-mount-seed-optimization.html, specs/issue-essay-features-adw-featuregap-sdlc_planner-custom-adw-spec-arg-not-threaded-to-step-cwd.md</dd>
+        <dt>forward refs</dt> <dd>—</dd>
+      </dl>
+    </details>
+  </header>
+
+  <figure>
+    <!-- {{HERO_IMAGE: seven-day learning ladder rising from OTP process fundamentals to a unified launch-contract capstone, minimal teal engineering diagram}} -->
+    <figcaption>Seven days, five gaps: from process lifecycle fundamentals to the launch-contract capstone.</figcaption>
+  </figure>
+
+  <!-- ===== PURPOSE / PROBLEM / SOLUTION ===== -->
+  <section id="purpose">
+    <h2>Purpose</h2>
+    <p>A one-week (Jul 6–12), 1–2 hours/day deliberate-practice plan for Robert to close the five understanding gaps triangulated from analyzing all ~150 specs in this repo's history. The repo itself is the textbook: every concept is studied against the real modules, and every exercise is drawn from bugs Robert already shipped and fixed (or hasn't fixed yet). The goal is not more features — it is that by Sunday, Robert can explain <em>why</em> each recurring bug class happened and can design the fix pattern unprompted. This directly answers the "should I rebuild?" question with: no — grow the understanding, keep the repo.</p>
+  </section>
+
+  <section id="problem">
+    <h2>Problem</h2>
+    <p>Three weeks of spec-driven AI development produced a sophisticated platform (orchestrator, worker fleet, dual ADW runtimes, cost guardrails) sitting on top of five recurring gap classes, ranked by pain: <strong>(1) OTP process lifecycle &amp; state-of-truth</strong> — six variants of "status says running, process is dead" because a terminal event was assumed universal; <strong>(2) Phoenix LiveView/Ecto idioms</strong> — no <code>live_session</code> until Jul 5, N+1 rollups, eager mounts, reconnect paths repeatedly forgotten; <strong>(3) seam/contract design</strong> — five parallel launch paths hand-wiring the same options, drifting one sibling at a time, plus hand-maintained Elixir↔Python↔TS registries breaking parity; <strong>(4) failure-mode engineering</strong> — silent fallbacks (empty prompts, scratch cwd, dropped error reasons) and lifecycles built to start but not end; <strong>(5) process hygiene</strong> — uncommitted multi-feature trees, duplicate specs, tolerated tooling bugs. The developer's own Jul 4 audit named most of this; what's missing is the underlying mental models and habits so the generator of these bugs stops running.</p>
+    <figure>
+      <!-- {{PROBLEM_IMAGE: five recurring crack classes radiating from one codebase foundation, minimal diagram}} -->
+      <figcaption>Five recurring crack classes — all symptoms of missing fundamentals, not sloppy code.</figcaption>
+    </figure>
+  </section>
+
+  <section id="solution">
+    <h2>Solution</h2>
+    <p>Seven daily phases, one focus area every ~1.5 days, each day shaped as <strong>Concept (≈25 min) → Trace (≈40 min) → Exercise (≈30 min)</strong>. Concepts are studied with <code>/teach-me</code> (micro-chunk tutoring) and <code>sketch-diagram</code> (Mermaid whiteboards). Traces read the <em>actual</em> modules and the git commits of fixes already made — including the Jul 5 perf commits (<code>4fc3db4</code>, <code>5c5daac</code>: 480ms→81ms) which are now study material. Exercises are hands-on: kill processes in IEx and watch the reaper, write one reconciliation test, hunt one N+1, hand-author the LaunchRequest contract design (AI as reviewer only, never author), convert one silent fallback to fail-loud, and close the week with spec triage + a lessons ledger. Every phase ends with explicit validation: a runnable command and/or a "can explain X unaided" quiz via <code>/check-my-understanding</code>.</p>
+    <figure>
+      <!-- {{SOLUTION_IMAGE: daily loop of concept, trace real code, hands-on exercise, validate, minimal cycle diagram}} -->
+      <figcaption>The daily loop: concept → trace real code → exercise → validate.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== RELEVANT FILES ===== -->
+  <section id="files" class="files">
+    <h2>Relevant Files</h2>
+
+    <h3>Existing Files</h3>
+    <ul>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/session/server.ex</code> — the GenServer whose lifecycle produced the stuck-status bug family; Day 1–2 trace target</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/session/liveness_reaper.ex</code> — the reconciliation backstop added after the phantom-status bugs; Day 1–2 study of the fix pattern</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/session/supervisor.ex</code> — supervision tree entry point; Day 1 sketch subject</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/server.ex</code> — turn lifecycle, queue, wakeup signals; Day 2 trace target</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/queue.ex</code> — the serializer pattern; Day 2 concept anchor</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/router.ex</code> — now has <code>live_session</code> grouping (commit <code>4fc3db4</code>); Day 3 worked example</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/live/console_live.ex</code> — 2,433 lines (post-split); mount/handle_params seeding; Day 3–4 trace target</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/workflow_engine/runner.ex</code> — in-app ADW launch path #2; Day 5 seam enumeration</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/workers/step_worker.ex</code> — durable ADW launch path #3; Day 5 seam enumeration</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/harness/custom_spawn.ex</code> — launch path #4; Day 5 seam enumeration</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/tools/adw.ex</code> — orchestrator-initiated launch path #5; Day 5 seam enumeration</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/adw/scaffold.ex</code> + <code>adws/adw_new.py</code> — the cross-language step-registry parity hazard; Day 6 parity-test target</li>
+      <li><span class="tag existing">existing</span> <code>specs/project-audit-refactor-roadmap-and-greenfield-spinoffs.html</code> — Robert's own crack list; source of P0/P1 exercise items all week</li>
+    </ul>
+
+    <h3>New Files</h3>
+    <ul>
+      <li><span class="tag new">new</span> <code>docs/learning/LESSONS.md</code> — the lessons ledger: one entry per day (what broke, why, the pattern that prevents it)</li>
+      <li><span class="tag new">new</span> <code>docs/learning/launch-paths-table.md</code> — Day 5 enumeration: every launch path × every option it threads (or drops)</li>
+      <li><span class="tag new">new</span> <code>specs/launch-contract-design.md</code> — Day 5 capstone: hand-written LaunchRequest contract design (AI reviews, does not author)</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/session/liveness_reconciliation_test.exs</code> — Day 2 exercise: brutal-kill reconciliation test (new, or extend the existing reaper test with the orchestrator-table edge case)</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/adw/step_registry_parity_test.exs</code> — Day 6 exercise: Elixir↔Python step allowlist parity test</li>
+    </ul>
+  </section>
+
+  <!-- ===== IMPLEMENTATION PHASES ===== -->
+  <section id="phases">
+    <h2>Implementation Phases</h2>
+    <p><strong>IMPORTANT:</strong> Execute every phase and task step by step, in order, top to bottom.</p>
+    <p>Status markers: <code>[]</code> idle · <code>[wip]</code> in progress · <code>[x]</code> complete · <code>[f]</code> failed. All start as <code>[]</code>; the Build Plan workflow updates them as it works.</p>
+    <p>Every day follows the same shape:</p>
+    <div class="day-shape"><span>Concept ≈25 min</span><span>Trace ≈40 min</span><span>Exercise ≈30 min</span><span>Validate ≈10 min</span></div>
+
+    <!-- ============ DAY 1 ============ -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 1: Mon Jul 6 — OTP Lifecycle I: Links, Monitors, and the Death of <code>terminate/2</code></h3>
+      <p>The root mental model behind the entire stuck-status bug family: a BEAM process can die without running <code>terminate/2</code>, so any invariant that depends on "the terminal callback always fires" is broken by design. Today builds the vocabulary (links vs monitors, exit signals, trapping exits, brutal kills) and traces how this repo's own <code>Session.Server</code> → <code>LivenessReaper</code> pair embodies the problem and the cure.</p>
+
+      <figure>
+        <!-- {{PHASE_IMAGE: process death paths where terminate callback is skipped, monitor and reaper catching the fall, minimal OTP diagram}} -->
+        <figcaption>Three ways a process dies — only one runs <code>terminate/2</code>. Monitors and reapers catch the rest.</figcaption>
+      </figure>
+
+      <h4>1. Concept study</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Run <code>/teach-me</code> on: links vs monitors, exit signals and <code>:kill</code>, <code>Process.flag(:trap_exit, true)</code>, and the three cases where <code>terminate/2</code> does NOT run (brutal kill, untrapped exit signal, node/VM crash)</li>
+        <li><code class="status">[]</code> Use <code>sketch-diagram</code> to draw this repo's supervision tree from <code>application.ex</code> down through <code>Session.Supervisor</code> to a session process</li>
+      </ul>
+
+      <h4>2. Trace real code</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Read <code>lib/repo_builder/session/server.ex</code>: find <code>init/1</code>, every place status is written to the DB, and what <code>terminate/2</code> does (or doesn't) clean up</li>
+        <li><code class="status">[]</code> Read <code>lib/repo_builder/session/liveness_reaper.ex</code>: identify the reconciliation interval, what "alive" means to it (Registry? pid check?), and which tables it repairs</li>
+        <li><code class="status">[]</code> Re-read your own spec <code>specs/issue-log-16249-...fix-worker-stuck-running.md</code> and map each sentence of its root cause to the exact lines you just read</li>
+      </ul>
+
+      <h4>3. Exercise — kill it yourself</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> In <code>iex -S mix</code>, start a fake-harness session, find its pid, and <code>Process.exit(pid, :kill)</code></li>
+        <li><code class="status">[]</code> Immediately query the session/agent row: confirm the status is stale (<code>:running</code> with no process behind it)</li>
+        <li><code class="status">[]</code> Wait out (or manually trigger) the LivenessReaper and watch it reconcile; write the observed kill→detect→repair timeline into <code>docs/learning/LESSONS.md</code> as Day 1's entry</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>Validation is a live IEx demonstration plus an unaided verbal explanation, checked by Claude acting as examiner (via <code>/check-my-understanding</code> scoped to today's topic).</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>iex -S mix</code> demo above reproduced end-to-end — proves the stale-status window exists and the reaper closes it</li>
+        <li><code class="status">[]</code> Explain unaided: "name the three death paths that skip <code>terminate/2</code>, and why a monitor still fires for all of them" — examiner confirms correct</li>
+        <li><code class="status">[]</code> <code>docs/learning/LESSONS.md</code> exists with the Day 1 entry — proves the ledger habit started</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <!-- ============ DAY 2 ============ -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 2: Tue Jul 7 — OTP Lifecycle II: Derive, Don't Store</h3>
+      <p>The stuck-status family shipped six times because liveness was <em>stored</em> as a DB field instead of <em>derived</em> from the process. Today: status-as-projection thinking, why the worker fix wasn't generalized to the orchestrator table (the "fix once, miss the sibling" pattern), and why synchronous I/O inside a GenServer's message loop causes head-of-line blocking (your Jun 19 hot-path-writes bug).</p>
+
+      <h4>1. Concept study</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>/teach-me</code> on: Registry-based liveness lookup, "source of truth vs projection" for process state, and why <code>handle_info</code> is a serial mailbox (I/O there blocks everything behind it)</li>
+        <li><code class="status">[]</code> Read your own <code>specs/issue-hot-path-writes-...decouple-synchronous-db-writes...md</code> as the worked example of hot-loop I/O</li>
+      </ul>
+
+      <h4>2. Trace real code</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Read <code>lib/repo_builder/orchestrator/server.ex</code> turn lifecycle: where status is written, where wakeup signals arrive, and where the <code>pending_resume?</code>-style lost-signal guard lives</li>
+        <li><code class="status">[]</code> Diff the worker-stuck fix against the orchestrator-stuck fix (git log on <code>session/</code> and <code>orchestrator/</code>): articulate why the pattern had to be fixed twice, and what a generalized version would look like</li>
+      </ul>
+
+      <h4>3. Exercise — write the reconciliation test</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Check whether a reaper test already exists (<code>grep -r LivenessReaper test/</code>); if yes, extend it with one missing edge case (e.g. orchestrator-table reconciliation); if no, write <code>test/repo_builder/session/liveness_reconciliation_test.exs</code>: start session → brutal kill → assert row reconciled</li>
+        <li><code class="status">[]</code> Write the test yourself first; only then ask Claude to review it (reviewer, not author)</li>
+        <li><code class="status">[]</code> Add Day 2 entry to <code>docs/learning/LESSONS.md</code>: "derive, don't store" + the sibling-fix lesson</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>ExUnit proves the reconciliation invariant; the examiner quiz proves the mental model transferred.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>cd /data/1.Projects/repo_builder_elixir &amp;&amp; mix test test/repo_builder/session/</code> — the new/extended reconciliation test passes alongside existing session tests</li>
+        <li><code class="status">[]</code> Explain unaided: "why did the same phantom-status bug ship for workers AND orchestrators, and what design would have made it impossible for both?" — examiner confirms</li>
+        <li><code class="status">[]</code> <code>git -C /data/1.Projects/repo_builder_elixir add -A &amp;&amp; git commit</code> for today's test — proves commit-per-day hygiene (area 5) is running from Day 2</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <!-- ============ DAY 3 ============ -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 3: Wed Jul 8 — LiveView Lifecycle: Mount, Reconnect, and the Second Render</h3>
+      <p>The single most repeated UI bug class in your specs is "works live, breaks on reconnect/backfill" — chat history, agent-card tokens, roster clobber, hidden logs. Today builds the LiveView lifecycle model (dead render → connected mount → reconnect re-mount), what survives a reconnect (nothing in assigns!), and studies your own Jul 5 fixes (<code>live_session</code> grouping, lazy seeds) as the worked example of doing it right.</p>
+
+      <h4>1. Concept study</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>/teach-me</code> on: the two mounts (dead + connected), what a reconnect does to assigns, <code>live_session</code> and live navigation vs full remounts, and why form reconciliation fires change events with unchanged values (your roster-cascade-clobber bug)</li>
+        <li><code class="status">[]</code> <code>sketch-diagram</code>: one sequence diagram — browser refresh vs live-nav vs reconnect, showing which callbacks run in each</li>
+      </ul>
+
+      <h4>2. Trace real code</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>git show 4fc3db4</code> and <code>git show 5c5daac</code> — read your own perf fixes line by line: what moved out of mount, what became lazy, what the telemetry showed before/after (480ms → 81ms)</li>
+        <li><code class="status">[]</code> Read <code>lib/repo_builder_web/router.ex</code>: explain what each <code>live_session</code> block groups and what navigating across the boundary costs</li>
+        <li><code class="status">[]</code> In <code>console_live.ex</code>, list which assigns are seeded in <code>mount</code> vs <code>handle_params</code> vs lazily on tab-open — annotate 5 examples of each</li>
+      </ul>
+
+      <h4>3. Exercise — break it on purpose</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> With the app running, set up state (chat messages, selected filters), then kill the WebSocket (dev tools → network offline → online) and hard-refresh; record which state survives, which resets, and WHY for each (persisted vs assign-only)</li>
+        <li><code class="status">[]</code> Find one remaining assign that silently masquerades as durable (survives while connected, gone after refresh) — file it as a one-paragraph note in <code>docs/learning/LESSONS.md</code> Day 3 entry (fixing it is optional stretch work)</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>Validation mixes a browser demonstration (reconnect audit) with the examiner quiz on lifecycle callbacks.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Reconnect audit table (state × survives? × why) written into Day 3 ledger entry — proves the durable-vs-ephemeral distinction is now checked deliberately</li>
+        <li><code class="status">[]</code> Explain unaided: "walk me through every callback from typing the URL to a live console, then from a network blip" — examiner confirms</li>
+        <li><code class="status">[]</code> <code>cd /data/1.Projects/repo_builder_elixir &amp;&amp; mix test test/repo_builder_web/ --max-failures 5</code> — web tests still green (no regressions from any stretch fix)</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <!-- ============ DAY 4 ============ -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 4: Thu Jul 9 — Ecto &amp; Data Truth: N+1, Aggregates, Atomic JSONB</h3>
+      <p>Your cost badge double-counted, your rollup did a full <code>SELECT *</code> per agent, and four concurrent <code>configure_tier</code> calls lost updates on a JSONB column. Today: reading query logs as a habit, aggregation in the database instead of in Elixir, and the read-modify-write anatomy of the lost-update bug (<code>SELECT FOR UPDATE</code> vs optimistic locking).</p>
+
+      <h4>1. Concept study</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>/teach-me</code> on: spotting N+1 in Ecto (preload vs per-row query), <code>group_by</code>/aggregate pushdown, and the lost-update anatomy — why read-merge-write over HTTP/JSONB needs <code>FOR UPDATE</code> or a version column</li>
+        <li><code class="status">[]</code> Skim <code>:telemetry</code> basics: what <code>[:repo_builder, :repo, :query]</code> events carry and how the Jul 5 fixes used measurement first</li>
+      </ul>
+
+      <h4>2. Trace real code</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Find the batched cost-rollup query from commit <code>4fc3db4</code> and its N+1 predecessor in git history — write down the before/after query shapes</li>
+        <li><code class="status">[]</code> Find the <code>FOR UPDATE</code> (or equivalent) fix from the agent-models lost-update bug and explain which of the four concurrent writers would have lost without it</li>
+      </ul>
+
+      <h4>3. Exercise — measure, then hunt</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Enable Ecto query logging (or attach a quick telemetry counter) and capture query counts for two console actions (e.g. open Cost tab, switch project)</li>
+        <li><code class="status">[]</code> Hunt one remaining N+1 or unmeasured hot path; if found, record it (fix optional); if none found, add a permanent telemetry span to one previously unmeasured path instead</li>
+        <li><code class="status">[]</code> Day 4 ledger entry: the query-count numbers you measured, and the "measure before optimizing" rule in your own words</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>Validation is quantitative: recorded query counts, plus the examiner quiz on lost-update anatomy.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Query-count table for 2+ console actions recorded in Day 4 ledger entry — proves measurement habit</li>
+        <li><code class="status">[]</code> Explain unaided: "two processes read the same JSONB metadata and write back — narrate the exact interleaving that loses an update, and two fixes" — examiner confirms</li>
+        <li><code class="status">[]</code> <code>cd /data/1.Projects/repo_builder_elixir &amp;&amp; mix test --max-failures 5</code> — suite green after any instrumentation added</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <!-- ============ DAY 5 ============ -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 5: Fri Jul 10 — Seam Design Capstone: The Launch Contract</h3>
+      <p>Your signature bug generator: at least five parallel launch paths each hand-wire the same options (cwd, project_id, persist ids, provider/model, isolation), and every new option gets added to one path and missed in the siblings — that's the empty-prompt ADW, the never-persisted custom-ADW events, and the agent acting on a hallucinated spec in a scratch directory. Today you design (by hand — AI reviews only) one <code>LaunchRequest</code> contract that makes sibling drift structurally impossible. Design only; implementation is next week.</p>
+
+      <figure>
+        <!-- {{PHASE_IMAGE: five drifting parallel launch pipes converging into one typed launch contract funnel, minimal architecture diagram}} -->
+        <figcaption>Five hand-wired launch paths converge into one validated contract — drift becomes impossible, not just unlikely.</figcaption>
+      </figure>
+
+      <h4>1. Concept study</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>/teach-me</code> on: contract-first seam design — one struct + one constructor with fail-loud validation vs N keyword lists; canonical identity (your one-entity-three-key-formats bug); parity tests at boundaries</li>
+      </ul>
+
+      <h4>2. Trace — enumerate every launch path</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Walk each path and record which options it threads and which it drops: <code>orchestrator/tools/adw.ex</code>, <code>workflow_engine/runner.ex</code>, <code>workers/step_worker.ex</code>, <code>harness/custom_spawn.ex</code>, the planning-wizard path in <code>console_live.ex</code>, and the portable Python <code>adws/</code> shell-out</li>
+        <li><code class="status">[]</code> Produce <code>docs/learning/launch-paths-table.md</code>: rows = paths, columns = cwd, project_id, orchestrator_db_id/agent_db_id (persistence), provider/model, isolation_mode, prompt/spec delivery — mark every empty cell: each one is a shipped or latent bug</li>
+      </ul>
+
+      <h4>3. Exercise — hand-write the contract design</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Write <code>specs/launch-contract-design.md</code> YOURSELF (no AI drafting): the <code>LaunchRequest</code> struct fields, which are required vs defaulted, which defaults must fail loud instead of falling back silently (cwd!), and where each of the six paths would construct it</li>
+        <li><code class="status">[]</code> Map at least 3 historical spec'd bugs to the specific field/validation that would have prevented each</li>
+        <li><code class="status">[]</code> Have Claude adversarially review the design (find holes, race conditions, missed paths) and record accepted/rejected feedback in the doc</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>A design phase validates through completeness of the enumeration and survival of adversarial review, not through code execution.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>test -s docs/learning/launch-paths-table.md &amp;&amp; test -s specs/launch-contract-design.md</code> — both artifacts exist and are non-empty</li>
+        <li><code class="status">[]</code> Table covers all six launch paths with no unexplained empty cells — proves the enumeration habit ("what's the second path?") is executable</li>
+        <li><code class="status">[]</code> Adversarial review round completed with at least one design change made in response — proves the review loop worked</li>
+        <li><code class="status">[]</code> Day 5 ledger entry written: the sibling-drift lesson in your own words</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <!-- ============ DAY 6 ============ -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 6: Sat Jul 11 — Failure-Mode Engineering: Fail Loud, Close the Loop</h3>
+      <p>Your best hard-won lesson ("prompts are not mechanisms — the platform must guarantee invariants") generalizes: silent fallbacks hide errors (scratch-cwd fallback, dropped error reasons, fail-soft secret drops), and lifecycles were built to start but not end (launch without cancel, branch without merge, worktree without GC). Today: a taxonomy of your own silent failures, then convert one to fail-loud and pin the Elixir↔Python step registry with a parity test.</p>
+
+      <h4>1. Concept study</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>/teach-me</code> on: fail-fast vs fail-soft trade-offs (when each is right, why silent is never right), designing error events that carry reasons, and lifecycle closure as a spec checklist ("how does it end? who can stop it? what cleans it up?")</li>
+      </ul>
+
+      <h4>2. Trace — build your silent-failure taxonomy</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Re-read three of your own bugs as one class: surface-worker-error-reason (error reason dropped), custom-adw-spec-arg (silent scratch-cwd fallback), provisioned-api-secret-missing-silent (fail-soft with no signal) — write the common shape in one sentence</li>
+        <li><code class="status">[]</code> Grep for candidate silent fallbacks: <code>grep -rn "|| \|rescue\|:error ->" lib/repo_builder/harness lib/repo_builder/workflow_engine --include='*.ex' | head -40</code> and shortlist 3 suspicious ones</li>
+      </ul>
+
+      <h4>3. Exercise — one fail-loud conversion + one parity test</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Pick the best candidate from the shortlist and convert it: silent fallback → explicit error event/log with reason, plus a test proving the loud path fires</li>
+        <li><code class="status">[]</code> Write <code>test/repo_builder/adw/step_registry_parity_test.exs</code>: assert the step kinds known to <code>RepoBuilder.Adw.Scaffold</code>/<code>StepSpec</code> match the steps <code>adws/adw_new.py</code> can generate (read the Python source or its manifest from the test) — the exact class of your <code>plan_f3</code> "Unknown step" bug</li>
+        <li><code class="status">[]</code> Day 6 ledger entry: the silent-failure taxonomy sentence + "how does it end?" checklist question</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>ExUnit proves both the loud failure and the cross-language parity invariant; the quiz checks the taxonomy generalized.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>cd /data/1.Projects/repo_builder_elixir &amp;&amp; mix test test/repo_builder/adw/step_registry_parity_test.exs</code> — parity test passes (or fails loudly revealing a real current drift, which you then fix)</li>
+        <li><code class="status">[]</code> <code>cd /data/1.Projects/repo_builder_elixir &amp;&amp; mix test --max-failures 5</code> — full suite green including the fail-loud conversion's test</li>
+        <li><code class="status">[]</code> Explain unaided: "when is fail-soft correct, and what one thing must it always still do?" (answer: emit a signal) — examiner confirms</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <!-- ============ DAY 7 ============ -->
+    <div class="phase">
+      <h3><code class="status">[]</code> Phase 7: Sun Jul 12 — Hygiene, Retro &amp; Next Week's Plan</h3>
+      <p>Close the loop on the week itself. Your Jul 4 audit flagged the process debt: uncommitted multi-feature trees, duplicate/superseded specs piling up, 24 near-duplicate Python scripts. Today is triage, a full-week self-quiz across all five areas, finishing the lessons ledger, and drafting next week's plan (implementing the LaunchRequest contract) — so the learning compounds instead of evaporating.</p>
+
+      <h4>1. Spec inventory triage</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Sweep <code>specs/</code>: for each file, mark (in a triage list) built / superseded / duplicate / still-planned; explicitly pair the two competing workstream-swimlane specs and mark the loser</li>
+        <li><code class="status">[]</code> Verify the working tree is clean and this week's exercises are committed one-feature-per-commit; <code>git -C /data/1.Projects/repo_builder_elixir status --short</code> comes back empty</li>
+      </ul>
+
+      <h4>2. Full-week retro quiz</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Run <code>/check-my-understanding</code> across all five areas (process lifecycle, LiveView symmetry, Ecto truth, seam contracts, failure modes) — record the score in the ledger</li>
+        <li><code class="status">[]</code> For any area scored weak, add a 25-minute review block to next week's plan rather than re-cramming today</li>
+      </ul>
+
+      <h4>3. Finish the ledger, draft next week</h4>
+      <ul class="checklist">
+        <li><code class="status">[]</code> Complete <code>docs/learning/LESSONS.md</code>: seven entries, each with "what broke / why / the pattern that prevents it" — these are your personal review checklist for every future spec</li>
+        <li><code class="status">[]</code> Add the two standing spec-checklist questions to your spec template or CLAUDE.md: "what's the second path?" and "how does it end?"</li>
+        <li><code class="status">[]</code> Draft next week's plan headline: implement <code>LaunchRequest</code> behind the existing paths one at a time (strangler-fig), with the parity/reconciliation tests from this week as the safety net</li>
+      </ul>
+
+      <h4>4. Testing Strategy</h4>
+      <p>Validation is artifact existence plus the recorded quiz — the week is complete when the ledger, the triage, and a clean tree all exist.</p>
+      <ul class="checklist">
+        <li><code class="status">[]</code> <code>git -C /data/1.Projects/repo_builder_elixir status --short</code> — empty output (clean tree, everything committed)</li>
+        <li><code class="status">[]</code> <code>grep -c '^## ' /data/1.Projects/repo_builder_elixir/docs/learning/LESSONS.md</code> — returns ≥ 7 (one entry per day)</li>
+        <li><code class="status">[]</code> Quiz score recorded in ledger; weak areas scheduled, not ignored</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== GLOBAL VALIDATION ===== -->
+  <section id="validation">
+    <h2>Validation Commands</h2>
+    <p>Execute these commands to validate the entire plan is complete:</p>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>cd /data/1.Projects/repo_builder_elixir &amp;&amp; mix test --max-failures 5</code> — full suite green including the week's new tests (reconciliation, parity, fail-loud)</li>
+      <li><code class="status">[]</code> <code>test -s /data/1.Projects/repo_builder_elixir/docs/learning/LESSONS.md &amp;&amp; grep -c '^## ' /data/1.Projects/repo_builder_elixir/docs/learning/LESSONS.md</code> — lessons ledger complete with ≥ 7 entries</li>
+      <li><code class="status">[]</code> <code>test -s /data/1.Projects/repo_builder_elixir/docs/learning/launch-paths-table.md &amp;&amp; test -s /data/1.Projects/repo_builder_elixir/specs/launch-contract-design.md</code> — Day 5 capstone artifacts exist</li>
+      <li><code class="status">[]</code> <code>git -C /data/1.Projects/repo_builder_elixir log --oneline --since='2026-07-06' | wc -l</code> — ≥ 6 commits, roughly one per learning day (hygiene habit)</li>
+      <li><code class="status">[]</code> Final <code>/check-my-understanding</code> score across all five focus areas recorded in the ledger — the real success metric of the week</li>
+    </ul>
+    <div class="loop">
+      🔁 <strong>The plan is not complete until every box is checked and every command passes. If for some reason a step is not possible to complete, mark it with [f] and move on if possible.</strong>
+    </div>
+  </section>
+
+  <!-- ===== NOTES ===== -->
+  <section id="notes">
+    <h2>Notes</h2>
+
+    <h3>Rules of engagement (the whole point of the week)</h3>
+    <ul>
+      <li><strong>AI is tutor and reviewer, never author, for the exercises.</strong> Concept study uses <code>/teach-me</code> and <code>sketch-diagram</code> freely; but the Day 2 test, Day 5 design doc, and Day 6 conversion are written by hand first, reviewed after. Struggling is the mechanism.</li>
+      <li><strong>Trace before fix.</strong> Every exercise starts from a spec you already wrote — read your own root-cause analysis, then find it in the code. This converts three weeks of pain into curriculum.</li>
+      <li><strong>Time-box hard.</strong> If a day blows past 2 hours, stop and carry the remainder — the daily loop matters more than any single item. Days are independent enough that a missed day shifts, not breaks, the week.</li>
+    </ul>
+
+    <h3>Why these five areas, in this order</h3>
+    <p>This plan operationalizes the spec-archaeology of all ~150 specs (Jun 15 – Jul 5). Ranking is by bug-count × cost: the stuck-status/OTP family shipped ≥6 times and burned real hours and API spend; LiveView reconnect asymmetry shipped ≥5 times; sibling-path drift ≥5 times (and again on Jul 5, after the audit); silent fallbacks caused the most expensive single incident (hours of 429-wall re-dispatch); hygiene amplifies everything else. Notably, the Jul 5 perf work (480ms→81ms once telemetry existed) proved the gap is measurement habit and framework idiom, not ability.</p>
+
+    <div class="overflow">
+    <table>
+      <tr><th>Day</th><th>Focus area</th><th>Primary spec(s) used as material</th></tr>
+      <tr><td>Mon</td><td>OTP lifecycle I</td><td>fix-worker-stuck-running (log-16249)</td></tr>
+      <tr><td>Tue</td><td>OTP lifecycle II</td><td>orchestrator-stuck-running · worker-idle-status-while-running · hot-path-writes</td></tr>
+      <tr><td>Wed</td><td>LiveView symmetry</td><td>navigation-perf-root-cause · chat-history-backfill · roster-cascade-clobber</td></tr>
+      <tr><td>Thu</td><td>Ecto &amp; data truth</td><td>console-mount-seed-optimization · agent-models-modal (lost update) · cost-badge double-count</td></tr>
+      <tr><td>Fri</td><td>Seam contracts (capstone)</td><td>custom-adw-spec-arg-not-threaded · custom-adw-observability · portable-adw-missing</td></tr>
+      <tr><td>Sat</td><td>Failure modes</td><td>surface-worker-error-reason · provisioned-api-secret-missing-silent · plan-f3 handover</td></tr>
+      <tr><td>Sun</td><td>Hygiene &amp; retro</td><td>project-audit-refactor-roadmap (F1, F5, F7)</td></tr>
+    </table>
+    </div>
+
+    <h3>Assumptions &amp; dependencies</h3>
+    <ul>
+      <li>The app boots in dev (<code>mix phx.server</code> / <code>iex -S mix</code>) and the fake harness still works for the Day 1 kill exercise — verify Monday morning; if the dev vault-key issue recurs, the Day 1 trace becomes "fix dev boot" (itself a config/environment lesson).</li>
+      <li>Test-suite baseline is green-ish; if not, Day 2's scope shrinks to just the new test file, and suite repair moves to next week's plan.</li>
+      <li>Next week (implementation of the LaunchRequest contract, strangler-fig over the six paths) should be planned via a fresh <code>/planf3</code> once this week's design doc survives review — forward-reference it in this file's metadata when created.</li>
+      <li>No new dependencies are required this week; everything uses stock ExUnit, IEx, git, and existing skills (<code>/teach-me</code>, <code>sketch-diagram</code>, <code>/check-my-understanding</code>).</li>
+    </ul>
+
+    <figure>
+      <!-- {{NOTES_IMAGE: weekly progression timeline mapping each day to one understanding gap closed, minimal roadmap}} -->
+      <figcaption>The week at a glance: each day converts one shipped bug class into a permanent mental model.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== AMENDMENTS ===== -->
+  <section id="amendments">
+    <h2>Amendments</h2>
+    <!-- Append-only; populated by Update Plan / Update References workflows after first execution. -->
+  </section>
+
+</main>
+</body>
+</html>

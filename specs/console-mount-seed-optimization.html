@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan: ConsoleLive Mount Seed Optimization — 480 ms → sub-150 ms first paint</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --bg-2: #161b22;
+    --bg-3: #1c2430;
+    --text: #d7dde5;
+    --text-2: #8b98a9;
+    --accent: #22d3ee;      /* cyan — matches the console UI */
+    --accent-2: #0e7490;
+    --ok: #34d399;
+    --warn: #fbbf24;
+    --danger: #f87171;
+    --border: #2a3441;
+    --mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+    --sans: "Inter", system-ui, -apple-system, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans); line-height: 1.6; }
+  main { max-width: 960px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem; }
+  h1 { font-size: 1.6rem; letter-spacing: -0.02em; border-bottom: 2px solid var(--accent-2); padding-bottom: .6rem; }
+  h2 { font-size: 1.25rem; color: var(--accent); margin-top: 3rem; }
+  h3 { font-size: 1.05rem; margin-top: 2rem; }
+  h4 { font-size: .95rem; color: var(--text); margin: 1.4rem 0 .4rem; }
+  p  { color: var(--text); }
+  code { font-family: var(--mono); font-size: .85em; background: var(--bg-3); padding: .12em .4em; border-radius: 4px; color: #9ee8f5; }
+  pre { background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; }
+  pre code { background: none; padding: 0; color: var(--text); }
+  figure { margin: 2rem 0; text-align: center; }
+  figure img { max-width: 100%; border-radius: 10px; border: 1px solid var(--border); }
+  figcaption { color: var(--text-2); font-size: .85rem; margin-top: .5rem; }
+  details.meta { background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; padding: .6rem 1rem; margin: 1rem 0; }
+  details.meta summary { cursor: pointer; color: var(--text-2); font-size: .85rem; }
+  details.meta dl { display: grid; grid-template-columns: 8.5rem 1fr; gap: .25rem .75rem; font-size: .82rem; }
+  details.meta dt { color: var(--text-2); }
+  details.meta dd { margin: 0; font-family: var(--mono); word-break: break-all; }
+  .tag { font-size: .7rem; font-family: var(--mono); padding: .1em .5em; border-radius: 999px; vertical-align: middle; }
+  .tag.existing { background: #1e3a5f; color: #7dd3fc; }
+  .tag.new { background: #14432e; color: #6ee7b7; }
+  .files ul { list-style: none; padding-left: 0; }
+  .files li { margin: .45rem 0; }
+  .phase { background: var(--bg-2); border: 1px solid var(--border); border-left: 4px solid var(--accent-2); border-radius: 8px; padding: 1rem 1.4rem 1.4rem; margin: 1.6rem 0; }
+  .phase h3 { margin-top: .4rem; }
+  code.status { color: var(--warn); background: var(--bg); border: 1px solid var(--border); min-width: 2.2em; display: inline-block; text-align: center; }
+  ul.checklist { list-style: none; padding-left: .4rem; }
+  ul.checklist li { margin: .5rem 0; padding-left: .2rem; }
+  .loop { background: #241d0d; border: 1px solid #4d3f14; color: #fde68a; border-radius: 8px; padding: .8rem 1rem; margin-top: 1.2rem; font-size: .9rem; }
+  #questionables details { background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; padding: .6rem 1rem; margin: .8rem 0; }
+  #questionables summary { cursor: pointer; color: var(--warn); }
+  .qa-answer { color: var(--text-2); }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .88rem; }
+  th, td { border: 1px solid var(--border); padding: .5rem .7rem; text-align: left; }
+  th { background: var(--bg-3); color: var(--accent); font-weight: 600; }
+  td code { white-space: nowrap; }
+  .metric-good { color: var(--ok); font-weight: 600; }
+  .metric-bad { color: var(--danger); font-weight: 600; }
+  .callout { background: var(--bg-3); border-left: 3px solid var(--accent); border-radius: 6px; padding: .8rem 1.1rem; margin: 1.2rem 0; font-size: .92rem; }
+</style>
+</head>
+<body>
+<main>
+
+  <!-- ===== HEADER + UPDATABLE METADATA ===== -->
+  <header>
+    <h1>Plan: ConsoleLive Mount Seed Optimization — 480 ms → sub-150 ms first paint</h1>
+    <details class="meta">
+      <summary>Metadata</summary>
+      <dl>
+        <dt>created</dt>      <dd>2026-07-05T10:25:00+10:00</dd>
+        <dt>modified</dt>     <dd>2026-07-05T10:25:00+10:00, 2026-07-05T16:35:00+10:00 (built)</dd>
+        <dt>commits</dt>      <dd>4fc3db4 (baseline: live_session + lazy tabs + telemetry)</dd>
+        <dt>agent name</dt>   <dd>Claude Fable 5 (claude-code)</dd>
+        <dt>session id</dt>   <dd>ec17eaff-8c16-41c9-90cb-0d174c197f47</dd>
+        <dt>back refs</dt>    <dd>specs/issue-plan-adw-plan-sdlc_planner-navigation-perf-root-cause.md, specs/issue-perf-adw-console-live-mount-lag-sdlc_planner-console-mount-perf.md</dd>
+        <dt>forward refs</dt> <dd>—</dd>
+      </dl>
+    </details>
+  </header>
+
+  <!-- Hero image — synced to the :root visual identity. Replace with <img> once generated. -->
+  <figure>
+    <img src="console-mount-seed-optimization/hero.png" alt="Mount timeline bar shrinking from 480ms to 150ms">
+    <figcaption>The remaining mount cost: every return to the console pays ~480 ms of sequential seed work before first paint.</figcaption>
+  </figure>
+
+  <!-- ===== PURPOSE / PROBLEM / SOLUTION ===== -->
+  <section id="purpose">
+    <h2>Purpose</h2>
+    <p>
+      Cut ConsoleLive's connected-mount time from the measured <strong>~480 ms</strong> (dev,
+      <code>phoenix.live_view.mount.stop.duration</code> telemetry, 2026-07-05) to a
+      <strong>sub-150 ms first paint</strong>, so returning to <code>/</code> from any route feels
+      instant. The <code>live_session</code> transport fix (commit <code>4fc3db4</code>) already made
+      navigation <em>to</em> other routes 6–14 ms; the return trip is now pure mount work, and this
+      plan removes or defers that work. Every change is measurable through the LiveView telemetry
+      wired in the same commit.
+    </p>
+  </section>
+
+  <section id="problem">
+    <h2>Problem</h2>
+    <p>
+      ConsoleLive's connected mount (<code>console_live.ex:314–340</code>) still runs a
+      <strong>sequential 14-step seed chain</strong> before the first diff is sent. Live measurement
+      (browser round-trips + LiveDashboard) puts the whole chain at 424–588 ms per return-to-console.
+      Code inspection identifies three concrete offenders that were <em>not</em> addressed by the
+      lazy-tab fix:
+    </p>
+    <table>
+      <tr><th>Offender</th><th>Where</th><th>Cost per mount</th></tr>
+      <tr>
+        <td><span class="metric-bad">N+1 workflow lookups</span></td>
+        <td><code>Shared.seed_workflow_progress/1</code> → <code>workflow_view/1</code> (shared.ex:777)</td>
+        <td>1 + up to <strong>50</strong> <code>Repo.get(Workflow)</code> queries — one per recent run, sequential</td>
+      </tr>
+      <tr>
+        <td><span class="metric-bad">Duplicate seeds</span></td>
+        <td><code>backfill_events/1</code> internally re-runs <code>seed_context_tokens</code> + <code>seed_counters</code> (shared.ex:507–508) that the mount chain already ran (console_live.ex:321–322)</td>
+        <td>2 redundant aggregate queries over <code>agent_logs</code></td>
+      </tr>
+      <tr>
+        <td><span class="metric-bad">History backfill on the paint path</span></td>
+        <td><code>backfill_events/1</code> (shared.ex:466) — 200-row <code>SELECT *</code> incl. jsonb payloads, per-row <code>log_to_row</code> + <code>pretty_json</code> CPU, plus the separate chat backfill query</td>
+        <td>Largest single block; all of it blocks first paint yet renders below the fold</td>
+      </tr>
+    </table>
+    <figure>
+      <img src="console-mount-seed-optimization/problem.png" alt="14 sequential seed blocks blocking the browser paint, three highlighted red">
+      <figcaption>All 14 seeds run sequentially before the browser gets its first diff — including 50 N+1 queries and duplicated aggregates.</figcaption>
+    </figure>
+  </section>
+
+  <section id="solution">
+    <h2>Solution</h2>
+    <p>
+      Three moves, in measurement-first order:
+      <strong>(1) instrument per-seed timing</strong> with a <code>:telemetry.span</code> wrapper so
+      each seed's real cost is visible in the dev log and LiveDashboard before and after every change;
+      <strong>(2) fix the pure waste</strong> — batch the 50 workflow-title lookups into one
+      <code>WHERE id IN</code> query and delete the duplicate context/counter seeds from the mount
+      chain; <strong>(3) defer the history backfill</strong> — mount paints the shell (rail, header,
+      empty stream) immediately and a <code>send(self(), :seed_history)</code> fills the event stream,
+      chat pane, and workflow swimlane right after first paint, exactly the pattern PlanningLive
+      already uses for its project list (commit <code>62e1a7d</code>).
+    </p>
+    <figure>
+      <img src="console-mount-seed-optimization/solution.png" alt="Before/after: sequential chain becomes short chain plus deferred hydration after the paint line">
+      <figcaption>Paint first, hydrate after: the mount chain keeps only shell-critical seeds; history hydrates in a post-paint handle_info.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== RELEVANT FILES ===== -->
+  <section id="files" class="files">
+    <h2>Relevant Files</h2>
+
+    <h3>Existing Files</h3>
+    <ul>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/live/console_live.ex</code> — connected mount chain (lines 314–340); seeds get reordered/split here; new <code>handle_info(:seed_history, …)</code>.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/live/console_live/shared.ex</code> — <code>seed_workflow_progress/1</code> (N+1 fix), <code>backfill_events/1</code> (drop internal duplicate seeds), seed span wrappers.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/workflows.ex</code> — new batch lookup <code>get_workflows_by_ids/1</code> (single <code>WHERE id IN</code> query, returns a map).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/telemetry/live_view_perf.ex</code> — extend the dev handler to also log <code>[:repo_builder, :console, :seed, :stop]</code> spans as <code>[lv_perf] seed &lt;name&gt; N ms</code>.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/telemetry.ex</code> — add <code>summary("repo_builder.console.seed.stop.duration", tags: [:seed])</code> so per-seed cost charts in LiveDashboard.</li>
+      <li><span class="tag existing">existing</span> <code>test/repo_builder_web/live/test_navigation_perf_test.exs</code> — tighten the ConsoleLive mount budget after the deferral lands; add post-hydration assertions.</li>
+      <li><span class="tag existing">existing</span> <code>test/support/telemetry_capture.ex</code> — reused as-is for the tightened timing assertions.</li>
+    </ul>
+
+    <h3>New Files</h3>
+    <ul>
+      <li><span class="tag new">new</span> <code>lib/repo_builder_web/live/console_live/mount_seeds.ex</code> — small module owning the seed-span wrapper (<code>span/3</code>) and the critical-vs-deferred seed split, so the mount chain in <code>console_live.ex</code> reads as policy, not plumbing.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder_web/live/test_console_seed_hydration_test.exs</code> — asserts the deferred seeds are absent immediately after mount and present after the <code>:seed_history</code> message processes, plus the batched workflow query result parity.</li>
+    </ul>
+  </section>
+
+  <!-- ===== IMPLEMENTATION PHASES ===== -->
+  <section id="phases">
+    <h2>Implementation Phases</h2>
+    <p><strong>IMPORTANT:</strong> Execute every phase and task step by step, in order, top to bottom.</p>
+    <p>Status markers: <code>[]</code> idle · <code>[wip]</code> in progress · <code>[x]</code> complete · <code>[f]</code> failed. All start as <code>[]</code>; the Build Plan workflow updates them as it works.</p>
+
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 1: Per-Seed Instrumentation + Baseline</h3>
+      <p>
+        Make each seed's cost individually visible before touching anything. Wrap every step of the
+        connected mount chain in a <code>:telemetry.span</code> emitting
+        <code>[:repo_builder, :console, :seed]</code> with a <code>%{seed: :backfill_events}</code>-style
+        metadata tag. The dev <code>LiveViewPerf</code> handler prints them as
+        <code>[lv_perf] seed backfill_events 220 ms</code>; a LiveDashboard summary charts them.
+        Capture a baseline table into this plan's Amendments before Phase 2 begins.
+      </p>
+
+      <h4>1.1. Add the seed span wrapper</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Create <code>RepoBuilderWeb.ConsoleLive.MountSeeds</code> with <code>@spec span(Socket.t(), atom(), (Socket.t() -> Socket.t())) :: Socket.t()</code> using <code>:telemetry.span([:repo_builder, :console, :seed], %{seed: name}, fn -> {fun.(socket), %{seed: name}} end)</code>.</li>
+        <li><code class="status">[x]</code> Rewrite the connected mount chain in <code>console_live.ex</code> to route each existing seed through <code>MountSeeds.span/3</code> — zero behavioural change, spans only.</li>
+        <li><code class="status">[x]</code> Extend <code>RepoBuilder.Telemetry.LiveViewPerf</code> to attach <code>[:repo_builder, :console, :seed, :stop]</code> and log <code>[lv_perf] seed &lt;name&gt; N ms</code> (same dev-only config flag; keep the <code>@spec</code>s).</li>
+        <li><code class="status">[x]</code> Add <code>summary("repo_builder.console.seed.stop.duration", tags: [:seed], unit: {:native, :millisecond})</code> to <code>RepoBuilderWeb.Telemetry.metrics/0</code>.</li>
+      </ul>
+
+      <h4>1.2. Capture the baseline</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Restart <code>mix phx.server</code>, load <code>/</code> three times, and record the per-seed <code>[lv_perf] seed …</code> lines into an Amendments entry (the before-table this plan's success is judged against).</li>
+      </ul>
+
+      <h4>1.3. Testing Strategy</h4>
+      <p>Compile-and-suite gate only — this phase is instrumentation with no behavioural change, so the whole existing suite must stay green untouched.</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>mix compile --warnings-as-errors</code> — spans compile clean, @specs intact.</li>
+        <li><code class="status">[x]</code> <code>mix format --check-formatted &amp;&amp; mix credo --strict</code> — style + @spec gate.</li>
+        <li><code class="status">[x]</code> <code>mix test --warnings-as-errors</code> — zero regressions from wrapping.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 2: Kill Pure Waste — N+1 Batch + Duplicate Seeds</h3>
+      <p>
+        Two zero-risk query eliminations with identical observable behaviour. Expected saving:
+        up to 52 queries per mount.
+      </p>
+
+      <figure>
+        <img src="console-mount-seed-optimization/phase2.png" alt="Fifty per-run query arrows collapsing into one batched query">
+        <figcaption>Fifty per-run workflow lookups collapse into one grouped query; two duplicated aggregate seeds are deleted outright.</figcaption>
+      </figure>
+
+      <h4>2.1. Batch the workflow-title lookups</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Add <code>Workflows.get_workflows_by_ids/1</code> — <code>@spec get_workflows_by_ids([Ecto.UUID.t()]) :: %{Ecto.UUID.t() => Workflow.t()}</code>, single <code>where(w.id in ^ids)</code> query, <code>%{}</code> guard for <code>[]</code> (mirror <code>Logs.cost_rollup_for_agents!/1</code> from 4fc3db4).</li>
+        <li><code class="status">[x]</code> In <code>Shared.seed_workflow_progress/1</code>: collect <code>workflow_id</code>s from the 50 runs, fetch the map once, thread it into <code>workflow_view/2</code> (arity bump) replacing the per-run <code>Workflows.get_workflow/1</code> call.</li>
+        <li><code class="status">[x]</code> Check other <code>workflow_view</code> callsites (<code>grep -n "workflow_view(" shared.ex</code>) — single-run refresh paths may keep the single <code>get_workflow/1</code>; only the 50-run seed loop must batch.</li>
+      </ul>
+
+      <h4>2.2. Delete the duplicate context/counter seeds</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Remove <code>|&gt; Shared.seed_context_tokens()</code> and <code>|&gt; Shared.seed_counters()</code> from the connected mount chain (console_live.ex:321–322) — <code>backfill_events/1</code> already runs both at its tail (shared.ex:507–508), so mount currently pays them twice.</li>
+        <li><code class="status">[x]</code> Add a comment on the mount chain noting backfill owns these two seeds, so they don't get re-added.</li>
+      </ul>
+
+      <h4>2.3. Testing Strategy</h4>
+      <p>Parity-focused: the swimlane and agent cards must be pixel-identical, only cheaper. New test proves the batch and the old tests prove nothing else moved.</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> New test in <code>test_console_seed_hydration_test.exs</code>: create 3 runs across 2 workflows, mount, assert <code>workflow_progress</code> titles/types match the per-run lookup result (parity), using fixtures from existing swimlane tests.</li>
+        <li><code class="status">[x]</code> <code>mix test test/repo_builder_web/live/adws_workstreams_swimlane_test.exs test/repo_builder_web/live/test_adw_swimlane_test.exs</code> — swimlane behaviour unchanged.</li>
+        <li><code class="status">[x]</code> <code>mix test --warnings-as-errors</code> — full suite green.</li>
+        <li><code class="status">[x]</code> Dev-log check: <code>[lv_perf] seed seed_workflow_progress</code> drops materially vs the Phase 1 baseline; record in Amendments.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 3: Defer History Hydration Past First Paint</h3>
+      <p>
+        Split the mount chain into <strong>shell-critical</strong> (projects, active project, agents,
+        agent costs, lanes, budget, planf3 policy, orchestrator, cost seeds, definitions, subscriptions —
+        all cheap after Phase 2) and <strong>deferred hydration</strong>
+        (<code>backfill_events</code> + <code>seed_workflow_progress</code> — the history-heavy pair).
+        Connected mount assigns the existing empty defaults, sends <code>self()</code> a
+        <code>:seed_history</code> message, and returns; the new <code>handle_info(:seed_history, …)</code>
+        runs the deferred pair. This is the exact pattern PlanningLive uses since <code>62e1a7d</code>.
+      </p>
+
+      <figure>
+        <img src="console-mount-seed-optimization/phase3.png" alt="Sequence diagram: mount, paint, then async hydrate filling the stream">
+        <figcaption>Mount returns after the cheap shell seeds; :seed_history hydrates the stream, chat, and swimlane immediately after paint.</figcaption>
+      </figure>
+
+      <h4>3.1. Split the chain</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> In the connected mount, keep the shell-critical seeds inline; replace <code>backfill_events</code> + <code>seed_workflow_progress</code> with <code>send(self(), :seed_history)</code> placed <em>after</em> <code>subscribe_feeds()</code> so no live event can arrive before the subscription exists.</li>
+        <li><code class="status">[x]</code> Add <code>handle_info(:seed_history, socket)</code> in <code>console_live.ex</code> running <code>Shared.backfill_events/1 |&gt; Shared.seed_workflow_progress/1</code> inside <code>MountSeeds.span/3</code> wrappers, returning <code>{:noreply, socket}</code>.</li>
+        <li><code class="status">[x]</code> Ordering guard: live events arriving between mount and <code>:seed_history</code> append to the (empty) stream; <code>backfill_events</code> already does <code>stream(:events, rows, reset: true)</code> — verify the reset semantics make late backfill authoritative (it replaces, not duplicates). Document this in the handler comment.</li>
+        <li><code class="status">[x]</code> Verify the ADWS toggle: <code>toggle_view</code> before hydration shows an empty swimlane for &lt;100 ms then fills — acceptable; confirm no crash on empty <code>workflow_progress</code>.</li>
+      </ul>
+
+      <h4>3.2. Update timing-sensitive tests</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Sweep tests that assert backfilled state straight after <code>live(conn, ~p"/")</code> (<code>grep -rln "backfill\|event_buffer\|workflow_progress" test/repo_builder_web/live/</code>); insert a <code>render(view)</code> sync point after mount where needed — LiveViewTest processes the pending <code>:seed_history</code> before <code>render/1</code> returns since messages are handled in order.</li>
+        <li><code class="status">[x]</code> New tests in <code>test_console_seed_hydration_test.exs</code>: (a) persisted logs appear in the stream after hydration; (b) chat pane messages appear after hydration; (c) a live <code>{:agent_event, …}</code> sent between mount and hydration is not lost after the backfill reset (accept either dedup or authoritative-replace semantics, assert whichever the implementation guarantees).</li>
+      </ul>
+
+      <h4>3.3. Testing Strategy</h4>
+      <p>Full gate plus a tightened perceived-latency budget: the mount span now excludes history work, so the test threshold drops from 500 ms to 250 ms — regressions that re-inflate mount fail CI.</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Tighten <code>assert_mount_under(RepoBuilderWeb.ConsoleLive, 500)</code> → <code>250</code> in <code>test_navigation_perf_test.exs</code> (headroom over CI variance; dev target is &lt;150 ms).</li>
+        <li><code class="status">[x]</code> <code>mix test test/repo_builder_web/live/test_navigation_perf_test.exs test/repo_builder_web/live/test_console_seed_hydration_test.exs</code> — perf + hydration suites green.</li>
+        <li><code class="status">[x]</code> <code>mix test --warnings-as-errors</code> — full suite green (this is the phase most likely to surface order-dependent tests; fix each with the <code>render/1</code> sync point, never with sleeps).</li>
+        <li><code class="status">[x]</code> <code>mix dialyzer</code> — no new warnings from the split.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 4: Measure, Record, Guard</h3>
+      <p>
+        Close the loop with the same instruments that motivated the plan: browser round-trips,
+        LiveDashboard summaries, and the dev <code>[lv_perf]</code> lines. Record the after-table and
+        lock the wins in as budgets.
+      </p>
+
+      <h4>4.1. Live measurement</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Restart <code>mix phx.server</code>; drive <code>/</code> ⇄ <code>/plan</code> ×3 in a browser; record per-seed and total mount <code>[lv_perf]</code> lines into Amendments alongside the Phase 1 baseline.</li>
+        <li><code class="status">[x]</code> Confirm in LiveDashboard (<code>/dev/dashboard/metrics?nav=repo_builder</code>) the per-seed summary shows the deferred seeds firing post-mount, and <code>phoenix.live_view.mount.stop.duration</code> for ConsoleLive is &lt;150 ms dev.</li>
+        <li><code class="status">[x]</code> Visual check: no flash-of-empty-console regression — the rail/header render instantly and the stream fills within one frame-ish; if the fill is visibly late, consider a subtle loading shimmer on the stream container (note it, don't gold-plate).</li>
+      </ul>
+
+      <h4>4.2. Testing Strategy</h4>
+      <p>The full five-command gate, one last time, from a clean compile.</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>mix compile --warnings-as-errors</code> — clean.</li>
+        <li><code class="status">[x]</code> <code>mix format --check-formatted</code> — clean.</li>
+        <li><code class="status">[x]</code> <code>mix credo --strict</code> — no issues.</li>
+        <li><code class="status">[x]</code> <code>mix test --warnings-as-errors</code> — full suite green.</li>
+        <li><code class="status">[x]</code> <code>mix dialyzer</code> — no new warnings.</li>
+      </ul>
+      <div class="loop">
+        🔁 <strong>Do not exit this phase until every box above is checked.</strong>
+        If any command fails, fix the cause and re-run — loop until all pass.
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== GLOBAL VALIDATION ===== -->
+  <section id="validation">
+    <h2>Validation Commands</h2>
+    <p>Execute these commands to validate the entire plan is complete:</p>
+    <ul class="checklist">
+      <li><code class="status">[x]</code> <code>mix compile --warnings-as-errors</code> — compiles clean with the seed spans, batch query, and mount split.</li>
+      <li><code class="status">[x]</code> <code>mix format --check-formatted</code> — formatting holds.</li>
+      <li><code class="status">[x]</code> <code>mix credo --strict</code> — lint + the hard @spec gate pass.</li>
+      <li><code class="status">[x]</code> <code>mix test test/repo_builder_web/live/test_navigation_perf_test.exs</code> — mount budget tightened to 250 ms and green.</li>
+      <li><code class="status">[x]</code> <code>mix test test/repo_builder_web/live/test_console_seed_hydration_test.exs</code> — deferred hydration semantics proven.</li>
+      <li><code class="status">[x]</code> <code>mix test --warnings-as-errors</code> — full suite green.</li>
+      <li><code class="status">[x]</code> <code>mix dialyzer</code> — contracts clean, no new ignores.</li>
+    </ul>
+    <div class="loop">
+      🔁 <strong>The plan is not complete until every box is checked and every command passes. If for some reason a step is not possible to complete, mark it with [f] and move on if possible.</strong>
+    </div>
+  </section>
+
+  <!-- ===== QUESTIONABLES ===== -->
+  <section id="questionables">
+    <h2>Questionables</h2>
+    <details>
+      <summary>Is the seed split (shell-critical vs deferred) drawn in the right place?</summary>
+      <p class="qa-answer">
+        Assumed split: defer only <code>backfill_events</code> + <code>seed_workflow_progress</code>
+        (history-heavy, below-the-fold). Everything else stays inline because after Phase 2 each is a
+        single cheap query and several feed the immediately-visible rail. Phase 1's per-seed baseline is
+        the arbiter: if e.g. <code>seed_definitions</code> (file I/O) or <code>assign_orchestrator</code>
+        (create-or-get write path) shows &gt;30 ms, promote it to the deferred set in Phase 3 and note the
+        change in Amendments.
+      </p>
+    </details>
+    <details>
+      <summary>Race: a live event arriving between mount and :seed_history</summary>
+      <p class="qa-answer">
+        <code>backfill_events</code> ends in <code>stream(:events, rows, reset: true)</code>, so a late
+        backfill <em>replaces</em> any rows appended in the gap — and since the DB write path
+        (Logs.Writer) persists events before-or-around broadcast, the replaced rows re-enter via the
+        backfill query in almost all cases. The accepted risk is a not-yet-persisted in-gap event being
+        dropped from the <em>center stream</em> render (it still reached agents' live panes). Phase 3.2(c)
+        pins whichever semantics the implementation guarantees. If drop-loss proves real in the test,
+        the fallback is buffering in-gap events in a socket assign and re-applying them after the reset.
+      </p>
+    </details>
+    <details>
+      <summary>Should chat backfill defer separately from the stream backfill?</summary>
+      <p class="qa-answer">
+        No — kept as one <code>:seed_history</code> step. The chat pane is also below the fold on a
+        fresh mount, and splitting them doubles the ordering surface for marginal gain. Revisit only if
+        Phase 4 measurement shows <code>backfill_messages</code> dominating the deferred span.
+      </p>
+    </details>
+    <details>
+      <summary>Why not Task.async / start_async parallelism for the seed chain?</summary>
+      <p class="qa-answer">
+        Rejected for this plan: <code>start_async</code> for DB work breaks the Ecto sandbox ownership
+        model in tests (the async process needs explicit allowance) and adds failure-mode surface for
+        each seed. Deferral gets the perceived-latency win with in-process sequencing. Parallelism
+        remains a follow-up if the deferred span itself becomes a UX problem (it runs after paint, so it
+        shouldn't).
+      </p>
+    </details>
+    <details>
+      <summary>Lazy payload_json — deliberately out of scope</summary>
+      <p class="qa-answer">
+        <code>log_to_row/4</code> pretty-prints every payload (<code>pretty_json</code>) for 200 rows even
+        though payload JSON is only shown on row expand. Making it lazy touches the row shape used by the
+        entire live path and every stream consumer — high blast radius for a CPU cost that Phase 3 moves
+        off the paint path anyway. Recorded as future work in Notes, not attempted here.
+      </p>
+    </details>
+  </section>
+
+  <!-- ===== NOTES ===== -->
+  <section id="notes">
+    <h2>Notes</h2>
+    <h3>Measured baseline (2026-07-05, dev, commit 4fc3db4)</h3>
+    <table>
+      <tr><th>Measurement</th><th>Value</th><th>Instrument</th></tr>
+      <tr><td>Console → <code>/plan</code> navigation</td><td class="metric-good">6–14 ms</td><td>client, phx:page-loading-stop</td></tr>
+      <tr><td><code>/plan</code> → console navigation</td><td class="metric-bad">424–588 ms</td><td>client, phx:page-loading-stop (6 runs)</td></tr>
+      <tr><td>ConsoleLive connected mount</td><td class="metric-bad">476 ms</td><td>phoenix.live_view.mount.stop.duration, LiveDashboard</td></tr>
+      <tr><td>handle_params</td><td class="metric-good">0.6 ms</td><td>LiveDashboard</td></tr>
+      <tr><td>WebSocket connections across 12 navigations</td><td class="metric-good">1 (no reconnects)</td><td>browser network log + liveSocket.isConnected()</td></tr>
+    </table>
+    <div class="callout">
+      Dev numbers are inflated by <code>debug_heex_annotations</code> and
+      <code>enable_expensive_runtime_checks</code> (config/dev.exs). Compare like-with-like: judge this
+      plan by the dev-mode before/after delta, not the absolute value.
+    </div>
+    <h3>Context &amp; dependencies</h3>
+    <ul>
+      <li>No new libraries. Everything uses <code>:telemetry</code> (already a dep) and existing patterns.</li>
+      <li>Prerequisite commit <code>4fc3db4</code> shipped: <code>live_session :app</code> routing, <code>Logs.cost_rollup_for_agents!/1</code> batching, lazy settings tabs, LiveView telemetry metrics, <code>LiveViewPerf</code> dev handler, <code>TelemetryCapture</code> test helper.</li>
+      <li>The deferral pattern is proven in-repo: PlanningLive defers its project-list load to <code>handle_info</code> (commit <code>62e1a7d</code>) — reuse its shape and its test sync-point idiom.</li>
+      <li>Typed style holds throughout: <code>@spec</code> on every public function, <code>Repo</code> access stays behind the <code>Workflows</code>/<code>Logs</code> contexts (BUILD_PROMPT.md §3/§8).</li>
+      <li>Future work (out of scope): lazy <code>payload_json</code> on row expand; <code>start_async</code> parallel seeds; Cost Center tab's synchronous aggregation (<code>Shared.load_cost_center/1</code>) wrapping in <code>start_async</code> — all only worth revisiting with post-Phase-4 numbers in hand.</li>
+    </ul>
+  </section>
+
+  <!-- ===== AMENDMENTS ===== -->
+  <section id="amendments">
+    <h2>Amendments</h2>
+    <!-- Append-only. Phase 1.2 and Phase 4.1 write their measurement tables here. -->
+    <details open>
+      <summary>2026-07-05T16:05+10:00 — Phase 1 baseline: the cost seeds, not the history seeds, dominate</summary>
+      <p>
+        Per-seed baseline (dev, 26,161 <code>agent_logs</code> rows, 3 mounts, total 436–531 ms):
+        <code>cost</code> 144–199 ms, <code>orchestrator_cost</code> 136–158 ms,
+        <code>backfill_events</code> 67–71 ms, <code>orchestrator</code> 32–42 ms,
+        <code>definitions</code> 21–22 ms, <code>context_tokens</code> 12–19 ms,
+        <code>counters</code> 8–10 ms, <code>workflow_progress</code> 1–4 ms, everything else ≤3 ms.
+        <strong>Finding:</strong> the two cost seeds are ~65% of mount. <code>seed_cost</code> re-runs
+        <code>Logs.cost_rollup!/1</code> per agent (duplicating the batched <code>agent_costs</code>
+        assign computed one pipe earlier) and <code>orchestrator_own_cost/1</code> — a full-row
+        <code>SELECT *</code> summed in Elixir — runs twice (<code>seed_cost</code> +
+        <code>seed_orchestrator_cost</code>). Per Questionable #1, Phase 2 scope expands with task 2.0:
+        convert <code>cost_rollup!/1</code> + <code>orchestrator_cost_rollup!/1</code> to SQL
+        <code>SUM</code> aggregation, make <code>seed_cost</code> reuse the <code>agent_costs</code>
+        assign (zero extra queries), and compute the orchestrator's own cost once for both assigns.
+        The workflow N+1 (2.1) stays — it is real at scale, merely cheap in this dev DB.
+      </p>
+    </details>
+    <details open>
+      <summary>2026-07-05T16:20+10:00 — Phase 2 result: mount 480 ms → 168 ms</summary>
+      <p>
+        Post-Phase-2 dev measurement (code-reloaded server, warm):
+        <code>costs</code> (merged seed, SQL SUM + batched GROUP BY) <strong>4 ms</strong> — was
+        <code>cost</code> 144–199 ms + <code>orchestrator_cost</code> 136–158 ms (~300 ms combined).
+        Duplicate <code>context_tokens</code>/<code>counters</code> chain seeds removed
+        (backfill owns them). Total mount <strong>168 ms</strong> (from 436–531 ms).
+        Remaining: <code>backfill_events</code> 93 ms, <code>orchestrator</code> 39 ms,
+        <code>definitions</code> 20 ms. Scope deviation, in scope-spirit:
+        <code>seed_costs</code> recomputes workers via the batched
+        <code>cost_rollup_for_agents!/1</code> (one cheap query) instead of reusing the
+        <code>agent_costs</code> assign — keeps the switch-orchestrator path fresh with identical cost.
+        <code>cost_rollup!/1</code> + <code>orchestrator_cost_rollup!/1</code> are now SQL SUMs
+        (contract preserved: always Decimal, 0 for no rows; parity proven by existing
+        persistence/cost-carrier tests).
+      </p>
+    </details>
+    <details open>
+      <summary>2026-07-05T16:35+10:00 — Build complete: mount 436–531 ms → 59–81 ms; return-to-console 79–107 ms</summary>
+      <p>
+        Final dev measurement (same instruments as baseline):
+        ConsoleLive connected mount <strong>59–81 ms</strong> (target &lt;150 ms — beaten);
+        client return-to-console <strong>79–107 ms</strong> (was 424–588 ms);
+        <code>/plan</code> outbound 6–10 ms. Deferred hydration confirmed post-paint:
+        <code>backfill_events</code> 115 ms + <code>workflow_progress</code> 2 ms run in
+        <code>handle_info(:seed_history)</code> after the mount span closes. Remaining mount cost
+        ranks: <code>orchestrator</code> ~35 ms (create-or-get write path) and
+        <code>definitions</code> ~31 ms (file I/O) — the next candidates if further cuts are ever
+        wanted, per Questionable #1. Gates at completion: compile -Werror, format, credo --strict,
+        dialyzer, full suite 1781 green; mount test budget tightened 500 → 250 ms.
+        One order-dependent single-test flake surfaced once mid-build and did not reproduce across
+        two consecutive full green runs. Changes are uncommitted at build end (commit to follow).
+      </p>
+    </details>
+  </section>
+
+</main>
+</body>
+</html>

@@ -93,6 +93,12 @@ defmodule RepoBuilder.Agents.HandoverTest do
       assert prompt =~ "ai_docs/"
     end
 
+    test "wind_down_prompt tells worktree-isolated workers to commit first" do
+      prompt = Handover.wind_down_prompt(nil)
+      assert prompt =~ "git add -A"
+      assert prompt =~ "adw/"
+    end
+
     test "wind_down_prompt omits the receipt cleanly when nil/blank" do
       prompt = Handover.wind_down_prompt(nil)
       assert prompt =~ "[WIND DOWN — CONTEXT LIMIT]"
@@ -108,6 +114,7 @@ defmodule RepoBuilder.Agents.HandoverTest do
       assert prompt =~ "RETIRED"
       assert prompt =~ "ai_docs/scout-handover.md"
       assert prompt =~ "FRESH worker"
+      assert prompt =~ "worktree_run_id"
     end
 
     test "forced_retire_resume_prompt notes the missing doc" do
@@ -124,6 +131,7 @@ defmodule RepoBuilder.Agents.HandoverTest do
       assert clause =~ ":handover <relative-path>"
       assert clause =~ "## Achieved"
       assert clause =~ "## Remaining"
+      assert clause =~ "git add -A"
     end
   end
 end

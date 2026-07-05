@@ -241,7 +241,10 @@ defmodule RepoBuilder.Harness.Claude do
         _ -> []
       end
 
-    {:ok, blocks ++ usage}
+    # A synthetic assistant frame carrying a transient provider error (`"error": "rate_limit"`
+    # / `"overloaded"`, model `"<synthetic>"`; issue rate-limit-stall) surfaces a
+    # `Status{kind: :rate_limit}` so the turn is treated as throttling, not stagnation.
+    {:ok, transient_status(raw) ++ blocks ++ usage}
   end
 
   def normalize(%{"type" => "user", "message" => message} = raw, _ctx) when is_map(message) do
@@ -334,6 +337,15 @@ defmodule RepoBuilder.Harness.Claude do
     ]
 
   defp assistant_block(_block, _raw), do: []
+
+  # A one-element `Status{kind: :rate_limit}` list when the frame carries a transient
+  # provider error marker, else `[]` (issue rate-limit-stall).
+  @transient_errors ~w(rate_limit overloaded)
+  @spec transient_status(map()) :: [Event.Status.t()]
+  defp transient_status(%{"error" => error} = raw) when error in @transient_errors,
+    do: [%Event.Status{harness: :claude, kind: :rate_limit, detail: raw, raw: raw}]
+
+  defp transient_status(_raw), do: []
 
   # --- user content blocks ---
 

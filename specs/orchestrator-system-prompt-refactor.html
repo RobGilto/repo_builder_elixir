@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan: Orchestrator System Prompt Refactor — Dedupe, Reorder, Conditionalize</title>
+<style>
+:root {
+  --bg: #fafbfc;
+  --surface: #ffffff;
+  --ink: #1a2332;
+  --ink-soft: #4a5568;
+  --accent: #3b5bdb;
+  --accent-soft: #edf2ff;
+  --ok: #2b8a3e;
+  --warn: #e8590c;
+  --line: #e2e8f0;
+  --code-bg: #f1f5f9;
+  --mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+  --sans: "Inter", -apple-system, "Segoe UI", sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans); line-height: 1.6; font-size: 16px; }
+main { max-width: 960px; margin: 0 auto; padding: 3rem 2rem 6rem; }
+h1 { font-size: 1.9rem; letter-spacing: -0.02em; border-bottom: 3px solid var(--accent); padding-bottom: .6rem; }
+h2 { font-size: 1.4rem; margin-top: 3rem; color: var(--accent); letter-spacing: -0.01em; }
+h3 { font-size: 1.15rem; margin-top: 2rem; }
+h4 { font-size: 1rem; margin-top: 1.5rem; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .04em; font-size: .85rem; }
+code { font-family: var(--mono); font-size: .85em; background: var(--code-bg); padding: .1em .35em; border-radius: 4px; }
+pre { background: var(--code-bg); padding: 1rem; border-radius: 8px; overflow-x: auto; border: 1px solid var(--line); }
+pre code { background: none; padding: 0; }
+figure { margin: 2rem 0; text-align: center; }
+figure img { max-width: 100%; border-radius: 10px; border: 1px solid var(--line); box-shadow: 0 2px 12px rgba(26,35,50,.08); }
+figcaption { font-size: .85rem; color: var(--ink-soft); margin-top: .6rem; font-style: italic; }
+details.meta { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: .6rem 1rem; margin: 1rem 0 2rem; }
+details.meta summary { cursor: pointer; font-weight: 600; color: var(--ink-soft); }
+details.meta dl { display: grid; grid-template-columns: 140px 1fr; gap: .3rem .8rem; font-size: .85rem; }
+details.meta dt { font-weight: 600; color: var(--ink-soft); }
+details.meta dd { margin: 0; font-family: var(--mono); font-size: .8rem; overflow-wrap: anywhere; }
+.tag { display: inline-block; font-size: .7rem; font-weight: 700; text-transform: uppercase; padding: .1em .55em; border-radius: 99px; letter-spacing: .05em; }
+.tag.existing { background: var(--accent-soft); color: var(--accent); }
+.tag.new { background: #e6fcf5; color: var(--ok); }
+.phase { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 1.5rem 2rem; margin: 1.5rem 0; }
+.phase h3 { margin-top: 0; }
+code.status { background: var(--warn); color: #fff; font-weight: 700; }
+ul.checklist { list-style: none; padding-left: .3rem; }
+ul.checklist li { margin: .5rem 0; padding-left: .2rem; }
+.loop { background: #fff9db; border: 1px solid #ffe066; border-radius: 8px; padding: .8rem 1.2rem; margin-top: 1.2rem; font-size: .92rem; }
+table { border-collapse: collapse; width: 100%; margin: 1.2rem 0; font-size: .88rem; background: var(--surface); }
+th, td { border: 1px solid var(--line); padding: .55rem .75rem; text-align: left; vertical-align: top; }
+th { background: var(--accent-soft); color: var(--ink); font-weight: 600; }
+.table-wrap { overflow-x: auto; }
+.callout { background: var(--accent-soft); border-left: 4px solid var(--accent); border-radius: 0 8px 8px 0; padding: .9rem 1.2rem; margin: 1.4rem 0; font-size: .95rem; }
+#questionables details, #amendments details { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: .6rem 1rem; margin: .7rem 0; }
+#questionables summary, #amendments summary { cursor: pointer; font-weight: 600; }
+.qa-answer { color: var(--ink-soft); }
+</style>
+</head>
+<body>
+<main>
+
+  <!-- ===== HEADER + UPDATABLE METADATA ===== -->
+  <header>
+    <h1>Plan: Orchestrator System Prompt Refactor — Dedupe, Reorder, Conditionalize</h1>
+    <details class="meta">
+      <summary>Metadata</summary>
+      <dl>
+        <dt>created</dt>      <dd>2026-07-04T12:00:00Z</dd>
+        <dt>modified</dt>     <dd>2026-07-04T12:00:00Z, 2026-07-04T21:25:00+10:00 (built)</dd>
+        <dt>commits</dt>      <dd>(none yet — build left uncommitted per /implement workflow)</dd>
+        <dt>agent name</dt>   <dd>Claude Fable 5 (claude-fable-5)</dd>
+        <dt>session id</dt>   <dd>8df04432-b254-4ac3-bd86-8e44e640d920</dd>
+        <dt>back refs</dt>    <dd>lib/repo_builder/orchestrator/system_prompt.ex, lib/repo_builder/orchestrator/tool_catalog.ex, ai_docs/orchestrator-system-prompt.md</dd>
+        <dt>forward refs</dt> <dd>ai_docs/system-prompt-dedupe-ledger.md, test/repo_builder/orchestrator/system_prompt_dedupe_test.exs</dd>
+      </dl>
+    </details>
+  </header>
+
+  <figure>
+    <img src="orchestrator-system-prompt-refactor/hero.png" alt="A tangled duplicated prompt document restructured into a clean layered stack — one home per concept">
+    <figcaption>One prompt, one home per concept: 34KB of repeated policy consolidated into a layered template.</figcaption>
+  </figure>
+
+  <!-- ===== PURPOSE / PROBLEM / SOLUTION ===== -->
+  <section id="purpose">
+    <h2>Purpose</h2>
+    <p>Restructure the runtime-assembled Orchestrator system prompt builder
+    (<code>lib/repo_builder/orchestrator/system_prompt.ex</code>) to (1) consolidate every
+    duplicated concept into a single authoritative home, (2) reorder sections so concepts
+    precede the mechanics that depend on them — with the durable-workstream memory model
+    established first, (3) conditionally omit repo-dependent machinery when no working
+    directory / project is bound, and (4) make tool descriptions in the prompt terse while
+    the full descriptions continue to flow through the MCP <code>tools/list</code> channel.
+    <strong>Zero behavior change:</strong> every rule that exists today survives, expressed once.</p>
+  </section>
+
+  <section id="problem">
+    <h2>Problem</h2>
+    <p>The prompt renders at ~34KB (current snapshot: <code>ai_docs/orchestrator-system-prompt.md</code>,
+    34,003 bytes for a <em>no-repo</em> orchestrator) and that cost is paid on <strong>every turn of every
+    session</strong>. The bloat comes from three sources:</p>
+    <ul>
+      <li><strong>Repeated concepts</strong> — at least 9 mechanisms are explained 2–5 times each
+        (see the occurrence map below). Beyond token waste this creates drift risk: an edit to one
+        copy silently contradicts the others. The most extreme case: <code>subagent_map_block/0</code>
+        and <code>worker_roles_block/0</code> both call <code>Templates.list()</code> and print the
+        <em>identical list twice</em> in the same render (system_prompt.ex:367 and :519).</li>
+      <li><strong>Double-channel tool policy</strong> — <code>ToolCatalog</code> descriptions are the
+        MCP <code>tools/list</code> schema (served by <code>orchestrator_mcp_controller.ex:52</code> and
+        the pi manifest) <em>and</em> are printed verbatim into the prompt's <code>Available tools</code>
+        block (system_prompt.ex:503-507). The model receives ~9KB of tool policy twice, and long
+        descriptions like <code>run_quality_gate</code> / <code>start_adw</code> carry full workflow
+        policy that also lives in the prose sections.</li>
+      <li><strong>Inert sections</strong> — when no working directory is set (like the captured
+        snapshot!), the quality gate, phase machine slash-command dispatch, cross-repo ADW mechanics,
+        and UI/UX surface detection cannot run, yet render in full.</li>
+      <li><strong>Inverted ordering</strong> — the keystone concept (workstreams as durable external
+        memory, which makes <code>compact_self</code> safe and underpins the drive loop, phase machine,
+        and rehydrate-on-resume) is explained near the <em>end</em> (external_memory_block, line 131 of
+        the build template), after ~130 lines of operating mechanics that assume it.</li>
+    </ul>
+    <figure>
+      <img src="orchestrator-system-prompt-refactor/problem.png" alt="The same concept block echoed three times in one long document, with drift cracks between the copies">
+      <figcaption>Nine concepts, each explained 2–5 times — every copy a drift hazard, every byte paid per turn.</figcaption>
+    </figure>
+  </section>
+
+  <section id="solution">
+    <h2>Solution</h2>
+    <p>Four coordinated moves on the <em>template</em> (builder functions), never on a single render:</p>
+    <ol>
+      <li><strong>One home per concept.</strong> Each duplicated concept gets a single authoritative
+        prose section; other mentions become one-line cross-references or disappear. The full
+        concept→home mapping and dedupe ledger are in <a href="#notes">Notes</a> — they double as the
+        reviewer's checklist that nothing was dropped.</li>
+      <li><strong>Terse tool block via a <code>summary</code> field.</strong> Add an optional
+        <code>:summary</code> to each <code>ToolCatalog</code> tool map; the prompt's tools block renders
+        <code>summary || description</code> (one line each), while MCP <code>tools/list</code> and the pi
+        manifest keep the full <code>description</code> unchanged. No capability is lost: the model still
+        receives full tool docs through the tool-schema channel.</li>
+      <li><strong>Concept-first ordering.</strong> New layering: identity + durable-memory model →
+        core loop (goal→decompose→drive→verify→report, incl. turn discipline) → phase machine +
+        quality gate → context management → dispatch reference (tiers/ADWs/slash/templates) → terse
+        tool list + rendered environment facts.</li>
+      <li><strong>Conditional inclusion.</strong> A <code>repo_bound?/1</code> predicate (project resolved
+        or working_dir set) gates the repo-dependent blocks (quality gate, phase-machine dispatch detail,
+        UI/UX polish, cross-repo ADW paragraph, verify-mechanics). The no-repo render gets a two-line
+        notice instead. Public block functions keep their arities; gating happens in <code>build/1</code>.</li>
+    </ol>
+    <p><strong>Estimated reduction:</strong> with-repo render ~34KB → ~23–25KB (−28%); no-repo render
+    ~34KB → ~17–19KB (−45%). Verified empirically in Phase 6 by re-rendering both variants.</p>
+    <figure>
+      <img src="orchestrator-system-prompt-refactor/solution.png" alt="Five-layer stack: durable memory at the base, then core loop, phase machine, context, tools — upper layers detachable">
+      <figcaption>Concept-before-mechanic layering: durable memory first, terse tool reference last, repo-dependent layers detachable.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== RELEVANT FILES ===== -->
+  <section id="files" class="files">
+    <h2>Relevant Files</h2>
+
+    <h3>Existing Files</h3>
+    <ul>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/system_prompt.ex</code> — the target: the builder template (754 lines). All block functions, ordering, and conditional gating live here.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/tool_catalog.ex</code> — 27 tool maps (~39.7KB); gains the optional <code>:summary</code> field. Its <code>description</code> stays the MCP/pi source of truth.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/controllers/orchestrator_mcp_controller.ex</code> — serves <code>ToolCatalog.tools()</code> as <code>tools/list</code>; must remain byte-identical (uses <code>description</code>, ignores <code>summary</code>).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/harness/pi.ex</code> — writes <code>ToolCatalog.pi_manifest_json/0</code>; same invariant as the MCP controller.</li>
+      <li><span class="tag existing">existing</span> <code>test/repo_builder/orchestrator/system_prompt_test.exs</code> — string/regex assertions on prompt content; several will need moving to the with-repo build or re-anchoring to the new single homes.</li>
+      <li><span class="tag existing">existing</span> <code>test/repo_builder/orchestrator/system_prompt_project_test.exs</code>, <code>system_prompt_primer_test.exs</code>, <code>system_prompt_secrets_test.exs</code>, <code>system_prompt_external_apis_test.exs</code> — per-feature prompt tests; assert they still pass and gate correctly.</li>
+      <li><span class="tag existing">existing</span> <code>test/repo_builder/orchestrator/ui_ux_skills_test.exs</code>, <code>test/repo_builder_web/live/test_orchestrator_system_prompt_test.exs</code>, <code>test/repo_builder/harness/orchestrator_system_prompt_flag_test.exs</code> — other consumers of the prompt surface; re-run and re-anchor if needed.</li>
+      <li><span class="tag existing">existing</span> <code>ai_docs/orchestrator-system-prompt.md</code> — the captured render snapshot; regenerated in Phase 6 as the before/after review artifact.</li>
+    </ul>
+
+    <h3>New Files</h3>
+    <ul>
+      <li><span class="tag new">new</span> <code>ai_docs/system-prompt-dedupe-ledger.md</code> — the reviewer artifact: concept→home mapping + per-duplicate "reduced to" ledger + before/after byte counts for both render variants.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/orchestrator/system_prompt_dedupe_test.exs</code> — regression guard: key policy phrases occur exactly once; no-repo render omits repo-gated blocks; with-repo render includes them.</li>
+    </ul>
+  </section>
+
+  <!-- ===== IMPLEMENTATION PHASES ===== -->
+  <section id="phases">
+    <h2>Implementation Phases</h2>
+    <p><strong>IMPORTANT:</strong> Execute every phase and task step by step, in order, top to bottom.</p>
+    <p>Status markers: <code>[]</code> idle · <code>[wip]</code> in progress · <code>[x]</code> complete · <code>[f]</code> failed. All start as <code>[]</code>; the Build Plan workflow updates them as it works.</p>
+
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 1: Baseline &amp; Ledger</h3>
+      <p>Freeze the "before" state so every later deletion is provably a dedupe, and finalize the
+      occurrence inventory against the live file (the map in Notes was built from a fresh read of
+      system_prompt.ex and the 2026-07-04 snapshot; re-verify line anchors before editing).</p>
+
+      <h4>1. Capture baseline renders</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Render the prompt for BOTH variants via <code>mix run</code>: (a) a no-repo orchestrator (<code>%Orchestrator{harness: "fake", working_dir: nil}</code>), (b) a repo-bound one (working_dir = platform root). Save to <code>/tmp/…/prompt-before-norepo.md</code> and <code>prompt-before-repo.md</code> with byte counts.</li>
+        <li><code class="status">[x]</code> Record the byte counts in the new <code>ai_docs/system-prompt-dedupe-ledger.md</code> header.</li>
+      </ul>
+
+      <h4>2. Finalize the ledger</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Copy the concept→home mapping table (Notes §A) and dedupe ledger (Notes §B) into <code>ai_docs/system-prompt-dedupe-ledger.md</code>; walk the current file top-to-bottom and confirm no rule/occurrence is missing from the map — add any stragglers (e.g. tier-selection guidance appears in operating rules + <code>create_agent</code> desc + tiers block).</li>
+        <li><code class="status">[x]</code> For each of the 27 ToolCatalog tools, draft its one-line <code>summary</code> in the ledger, and mark which sentences of its full description are policy that must move to (or already exists in) a prose home.</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>Pure documentation phase — validation is that the baseline artifacts exist and the ledger covers every line of the current template.</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>test -s ai_docs/system-prompt-dedupe-ledger.md</code> — ledger written with baseline byte counts.</li>
+        <li><code class="status">[x]</code> <code>mix test test/repo_builder/orchestrator/</code> — suite still green (nothing changed yet).</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 2: ToolCatalog <code>summary</code> Field</h3>
+      <p>Give every tool a terse one-liner for the prompt while leaving the MCP/pi channel untouched.
+      This is mechanically independent of the restructure, so it lands first.</p>
+
+      <h4>1. Add the field</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Extend the tool typespec in <code>tool_catalog.ex</code> (~line 12) with optional <code>summary: String.t()</code> and add <code>ToolCatalog.prompt_line/1</code> (or equivalent) returning <code>summary || description</code>.</li>
+        <li><code class="status">[x]</code> Write the 27 summaries from the ledger. Rules: ≤ 2 lines; say <em>what it does + when to reach for it</em>; policy sentences (verify-first, selection ladders, safety rationale) point to the prose home instead of restating it (e.g. <code>start_adw</code>: "Launch an AI Developer Workflow run; returns a run id for <code>check_adw</code>. Selection ladder: see ADW section."). Cross-reference wording must match the final section titles chosen in Phase 3.</li>
+        <li><code class="status">[x]</code> Point <code>system_prompt.ex</code> <code>tools_block/0</code> at the summary line; confirm <code>orchestrator_mcp_controller.ex</code> <code>tool_descriptor/1</code> and <code>ToolCatalog.pi_manifest_json/0</code> still emit the full <code>description</code> (add a test pinning this).</li>
+      </ul>
+
+      <h4>2. Testing Strategy</h4>
+      <p>ExUnit: assert prompt uses summaries, MCP descriptor unchanged. Edge case: a tool with no <code>summary</code> falls back to <code>description</code> (so a future tool added without a summary never renders blank).</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>mix test test/repo_builder/orchestrator/ test/repo_builder_web/</code> — catalog + controller tests green.</li>
+        <li><code class="status">[x]</code> <code>mix run</code> render check: the <code>Available tools</code> block is one line per tool and the with-repo render shrank ≥ 5KB vs baseline.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 3: Restructure the Template (dedupe + reorder)</h3>
+      <p>The core move: rewrite <code>build/1</code>'s heredoc and the block functions to the new layering,
+      consolidating each concept into its single home per the mapping table. Public block functions
+      (<code>leader_expertise_block/0</code>, <code>phased_delivery_block/0</code>, <code>quality_gate_block/0</code>,
+      <code>external_memory_block/0</code>) keep their names and arities — content moves, signatures don't.</p>
+
+      <figure>
+        <img src="orchestrator-system-prompt-refactor/phase3.png" alt="Before/after: scattered duplicate blocks on the left merge via arrows into a single ordered column of unique sections">
+        <figcaption>Every occurrence flows to exactly one home; deletions are dedupes, not dropped rules.</figcaption>
+      </figure>
+
+      <h4>1. New section order in <code>build/1</code></h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> §1 Identity + durable memory: identity paragraph, then <code>external_memory_block()</code> promoted here (absorbing the compact_self/rehydrate copy from <code>context_management_block</code> lines 487-491 and the safety rationale currently in the <code>compact_self</code> tool description).</li>
+        <li><code class="status">[x]</code> §2 Core loop: <code>leader_expertise_block()</code> (goal → decompose → drive → verify → report) absorbing the merged turn-discipline text: message-queue semantics + "one step per turn / don't poll / re-engaged on return" + the closing "Working rhythm" paragraph (deleted as a separate section). The single authoritative VERIFY rule lives here.</li>
+        <li><code class="status">[x]</code> §3 Phase machine + quality gate: <code>phased_delivery_block()</code> then <code>quality_gate_block()</code>; the per-stage bullets reference the §2 VERIFY rule instead of restating it; the test-stage bullet's gate walkthrough shrinks to one line + "see Quality gate".</li>
+        <li><code class="status">[x]</code> §4 Context management: <code>context_management_block()</code> keeps ONLY worker-context policy (compact vs clear, graceful handover, report_cost watching) with a one-line cross-ref to §1 for self-compaction.</li>
+        <li><code class="status">[x]</code> §5 Dispatch reference: worker tiers, single merged worker-templates block (delete <code>worker_roles_block/0</code>; keep <code>subagent_map_block/0</code>, its empty-state message must still name builder/reviewer/tester/documenter/debugger to preserve the existing test anchor), ADW section (the ONE home for the selection ladder + decompose-into-runs + cross-repo working_dir rules, moved out of operating rules), slash commands, research-tools grant, ultrathink rule, tier self-unblock (<code>get_config</code>/<code>configure_tier</code>/<code>set_orchestrator_config</code>), <code>get_logs</code> guidance.</li>
+        <li><code class="status">[x]</code> §6 Rendered facts: terse tools block, harnesses, own harness, working dir, primer/stack/secrets/APIs, expertise, reflections.</li>
+      </ul>
+
+      <h4>2. Execute the dedupe ledger</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Apply every row of the ledger (Notes §B): delete/reduce each duplicate exactly as recorded; where wording differs between copies, keep the union of constraints (e.g. the ≈80% threshold, the "bounded by the stall limit" qualifiers) so no rule weakens.</li>
+        <li><code class="status">[x]</code> Update the ledger with the final "reduced to" wording per row (the reviewer diffs old→new against it).</li>
+        <li><code class="status">[x]</code> Preserve all injection points: <code>{{TOOLS}}</code>-equivalent <code>tools_block()</code>, <code>harnesses_block()</code>, ADW/slash discovery, tiers, primer/stack/secrets/APIs/expertise/reflections — nothing hardcoded that varies per render.</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>ExUnit string/regex assertions re-anchored to the new homes. Edge cases: empty-state fallbacks (no templates, no ADWs, no slash commands) still render their fallback lines; ordering-sensitive regexes (<code>~r/mutation.*pre_merge/s</code>, <code>~r/80%.*clear_context/s</code>) still match after reordering.</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>mix test test/repo_builder/orchestrator/ test/repo_builder_web/live/test_orchestrator_system_prompt_test.exs test/repo_builder/harness/</code> — all prompt-surface tests green (updating assertions where they anchored to a removed duplicate, per the ledger).</li>
+        <li><code class="status">[x]</code> <code>mix run</code> render diff vs baseline: manually confirm each removed passage appears in the ledger as a dedupe row.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 4: Conditional Inclusion (repo-gated blocks)</h3>
+      <p>Gate repo-dependent machinery behind a working-directory/project presence check so the
+      no-repo orchestrator stops carrying inert policy. Gating lives in <code>build/1</code>; the public
+      block functions stay pure and arity-0 (asserted elsewhere).</p>
+
+      <h4>1. The gate</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Add <code>repo_bound?/1</code>: true when <code>resolve_project/1</code> returns a project OR <code>working_dir</code> is a non-empty binary (matching the existing <code>working_dir_block/1</code> branching).</li>
+        <li><code class="status">[x]</code> Gate when unbound: <code>quality_gate_block()</code>, the phase-machine dispatch detail + UI/UX polish paragraphs of <code>phased_delivery_block()</code> (split the block or gate it whole — keep workstream/decompose guidance available only if it can run without a repo; if <code>/feature</code>-style dispatch is repo-only, gate the whole block and note it), the cross-repo ADW paragraph, and <code>inspect_repo</code>-mechanics detail (keep the abstract "verify, never trust a self-report" rule in §2 unconditionally).</li>
+        <li><code class="status">[x]</code> Unbound render gets a two-line notice: repo-dependent protocols (phased delivery dispatch, quality gate, UI/UX) are inactive until the operator sets a working directory (Settings → General) — merged into the existing no-dir working-directory copy (system_prompt.ex:225-233).</li>
+        <li><code class="status">[x]</code> Confirm already-conditional blocks (primer, stack, secrets, APIs, expertise, reflections) are unchanged and still empty-string on no-project.</li>
+      </ul>
+
+      <h4>2. Testing Strategy</h4>
+      <p>Two-variant rendering in ExUnit: build with and without a working_dir (tmp dir) and assert block presence/absence. Edge cases: working_dir set but no registered project (unbound-with-dir renders repo-gated blocks — it has a real tree); orchestrator with <code>project_id</code> but the project row deleted (falls to unbound).</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>mix test test/repo_builder/orchestrator/system_prompt_dedupe_test.exs</code> — new presence/absence tests green (file created here or in Phase 5; fine to co-develop).</li>
+        <li><code class="status">[x]</code> <code>mix test</code> — full suite green; any existing test that built an unbound orchestrator but asserted a now-gated block (e.g. the quality-gate test in <code>system_prompt_test.exs:119</code>) is updated to build repo-bound.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 5: Regression Guards</h3>
+      <p>Lock the refactor in so duplicates can't silently regrow and the gate can't silently break.</p>
+
+      <h4>1. Dedupe guard test</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Create <code>test/repo_builder/orchestrator/system_prompt_dedupe_test.exs</code>: for a with-repo render, assert sentinel phrases occur EXACTLY once — e.g. <code>"rehydrate-on-resume"</code> rationale, the ADW selection ladder (<code>"trivial change"</code>), the subagent-template list header, <code>"never trust a worker's self-report"</code>-class phrasing (pick the final canonical wording), the fix-loop walkthrough.</li>
+        <li><code class="status">[x]</code> Assert section ORDER: durable-memory section index &lt; core-loop &lt; phase-machine &lt; context-management &lt; tools block (via <code>:binary.match/2</code> offsets).</li>
+        <li><code class="status">[x]</code> Assert no-repo render: omits quality gate/UI-UX/cross-repo text, includes the inactive-protocols notice, still includes identity, memory model, core loop, tools.</li>
+      </ul>
+
+      <h4>2. Testing Strategy</h4>
+      <p>The guard test IS the strategy; also sweep every other prompt-consuming test file (driver, server, live view, harness-flag, ui_ux_skills) for stale anchors.</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>mix test</code> — entire suite green.</li>
+        <li><code class="status">[x]</code> <code>grep -rn "prompt =~" test/ | wc -l</code> sanity sweep — every prompt assertion reviewed against the new template (note count in ledger).</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 6: Verify, Measure, Snapshot</h3>
+      <p>Prove the two goals — nothing lost, bytes saved — and refresh the review artifacts.</p>
+
+      <h4>1. Measure &amp; snapshot</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Re-render both variants; record after-byte-counts and % reduction in the ledger (targets: with-repo −25% or better, no-repo −40% or better; if missed, report actuals honestly rather than trimming policy to hit a number).</li>
+        <li><code class="status">[x]</code> Regenerate <code>ai_docs/orchestrator-system-prompt.md</code> from the new builder (same header format, new size), noting the variant rendered.</li>
+        <li><code class="status">[x]</code> Final ledger pass: every concept row has a home; every dedupe row names its "reduced to" text; a reviewer can walk old-snapshot → ledger → new-snapshot and account for every deleted line.</li>
+      </ul>
+
+      <h4>2. Testing Strategy</h4>
+      <p>The project's full green gate (typed-Elixir standard: format, strict Credo with the @spec gate, TypeCheck-compatible compile, Dialyzer, full suite).</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>mix format --check-formatted</code> — formatting clean.</li>
+        <li><code class="status">[x]</code> <code>mix credo --strict</code> — no new issues (incl. the @spec gate on any new public function).</li>
+        <li><code class="status">[x]</code> <code>mix dialyzer</code> — clean against the existing ignore file.</li>
+        <li><code class="status">[x]</code> <code>mix test</code> — full suite green.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+  </section>
+
+  <!-- ===== GLOBAL VALIDATION ===== -->
+  <section id="validation">
+    <h2>Validation Commands</h2>
+    <p>Execute these commands to validate the entire plan is complete:</p>
+    <ul class="checklist">
+      <li><code class="status">[x]</code> <code>mix test</code> — full suite green, including the new dedupe/gating guard tests.</li>
+      <li><code class="status">[x]</code> <code>mix credo --strict &amp;&amp; mix dialyzer &amp;&amp; mix format --check-formatted</code> — the typed-Elixir green gate holds.</li>
+      <li><code class="status">[x]</code> <code>mix test test/repo_builder/orchestrator/system_prompt_dedupe_test.exs</code> — sentinel phrases unique; section order enforced; no-repo render gated.</li>
+      <li><code class="status">[x]</code> <code>test -s ai_docs/system-prompt-dedupe-ledger.md &amp;&amp; grep -q "after" ai_docs/system-prompt-dedupe-ledger.md</code> — ledger complete with before/after byte counts for both variants.</li>
+      <li><code class="status">[x]</code> <code>grep -c "description" lib/repo_builder_web/controllers/orchestrator_mcp_controller.ex</code> — MCP descriptor still serves full descriptions (paired with its pinning test).</li>
+    </ul>
+    <div class="loop">🔁 <strong>The plan is not complete until every box is checked and every command passes. If for some reason a step is not possible to complete, mark it with [f] and move on if possible.</strong></div>
+  </section>
+
+  <!-- ===== NOTES ===== -->
+  <section id="notes">
+    <h2>Notes</h2>
+
+    <h3>§A — Concept → single-home mapping (the verification contract)</h3>
+    <p>Occurrence anchors reference <code>lib/repo_builder/orchestrator/system_prompt.ex</code> (SP) at its
+    current 754-line revision, <code>lib/repo_builder/orchestrator/tool_catalog.ex</code> (TC, by tool name),
+    and the rendered snapshot for context. Re-verify anchors in Phase 1 before editing.</p>
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>#</th><th>Concept</th><th>Current occurrences</th><th>New single home</th><th>Other mentions become</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>ADW selection ladder (trivial→plan_build … scout/parallel) + decompose-into-runs + cross-repo working_dir rules</td><td>SP operating rules :68-85; TC <code>start_adw</code> description (full ladder restated); ADW-types listing context :103-104</td><td>§5 Dispatch reference → "ADWs" prose</td><td><code>start_adw</code> summary: launch + run id + "ladder: see ADW section"; ADW-types listing keeps only the two-group list</td></tr>
+        <tr><td>2</td><td>compact_self safety / rehydrate-on-resume / workstreams durable</td><td>SP context_management :487-491; SP external_memory_block :654-668; TC <code>compact_self</code> description</td><td>§1 Durable memory (promoted external_memory_block)</td><td>context-mgmt: one cross-ref line; <code>compact_self</code> summary: "Compact your own context; safe — see Durable memory"</td></tr>
+        <tr><td>3</td><td>One step per turn / don't poll / re-engaged on worker return</td><td>SP drive loop :551-553; SP message-queue block :134-148; SP working-rhythm :150-154</td><td>§2 Core loop → turn discipline</td><td>working-rhythm section deleted (its ADW "observe, don't interfere" line moves to §5 ADWs); queue block merged in</td></tr>
+        <tr><td>4</td><td>VERIFY against the real tree, never trust a self-report</td><td>SP drive loop :548-550; SP phased delivery :584-585; TC <code>report_complete</code>; TC <code>record_stage</code>; TC <code>inspect_repo</code></td><td>§2 Core loop → single canonical VERIFY rule</td><td>phase machine: "verify first (Core loop)"; three tool summaries drop the restatement</td></tr>
+        <tr><td>5</td><td>Subagent template roster</td><td>SP subagent_map_block :100-101; SP worker_roles_block :126-127 (identical <code>Templates.list()</code> print); TC <code>list_agent_templates</code></td><td>§5 Dispatch reference → one "Worker templates &amp; roles" block</td><td><code>worker_roles_block/0</code> deleted (empty-state role names folded into the kept block); tool summary: "on-demand form of the template list"</td></tr>
+        <tr><td>6</td><td>clear_context vs compact_agent decision rule (+ ≈80% proactive rule)</td><td>SP context mgmt :480-491; TC <code>clear_context</code>; TC <code>compact_agent</code></td><td>§4 Context management</td><td>tool summaries: one-liners naming the counterpart tool</td></tr>
+        <tr><td>7</td><td>Quality-gate fix loop (red stage → fix worker w/ diagnostics → re-run until green, stall-bounded) + two-call protocol</td><td>SP phased delivery test bullet :590-594; SP quality_gate_block :636-639; TC <code>run_quality_gate</code> (full protocol)</td><td>§3 Quality gate block</td><td>test-stage bullet: one line + cross-ref; tool summary: two-mode hint + cross-ref</td></tr>
+        <tr><td>8</td><td>Focus discipline (set_focus before spend; one per scope; clear only when verified)</td><td>SP drive loop :554-559; TC <code>set_focus</code>; TC <code>clear_focus</code></td><td>§2 Core loop</td><td>tool summaries terse</td></tr>
+        <tr><td>9</td><td>Worker tier selection (fast/main/heavy/leader semantics)</td><td>SP operating rules :44-46; TC <code>create_agent</code>; tiers listing :97-98</td><td>§5 Dispatch reference, directly above the rendered tier roster</td><td><code>create_agent</code> summary keeps only "prefer <code>category</code>"</td></tr>
+        <tr><td>10</td><td>Goal/progress ledger semantics (durable goal, record every turn, stall/replan)</td><td>SP drive loop :541-547,560-562; TC <code>set_goal</code>/<code>record_progress</code>/<code>get_ledger</code></td><td>§2 Core loop</td><td>tool summaries terse</td></tr>
+        <tr><td>11</td><td>Workstream stage-machine record/advance semantics</td><td>SP phased delivery :583-597; TC <code>record_stage</code>/<code>plan_phases</code>/<code>create_workstream</code>/<code>get_workstream</code>/<code>list_workstreams</code></td><td>§3 Phase machine (+§1 for the memory-index start-of-turn habit)</td><td>tool summaries terse</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <h3>§B — Dedupe ledger (seeded; completed in Phases 1 &amp; 3)</h3>
+    <p>One row per <em>deleted or reduced</em> passage. The build phases append the final replacement
+    wording so a reviewer can pair every diff deletion with a row. Seed rows: the 11 concepts above
+    each produce 1–4 ledger rows (one per non-home occurrence) — ~25 rows expected. Also ledger'd:
+    the 27 tool-description → summary reductions (policy sentences mapped to their prose home or
+    marked "retained in MCP description only").</p>
+
+    <h3>§C — Design decisions &amp; rationale</h3>
+    <ul>
+      <li><strong>Why a <code>summary</code> field instead of trimming descriptions:</strong> <code>ToolCatalog.tools()</code> is served as the MCP <code>tools/list</code> schema (<code>orchestrator_mcp_controller.ex:52</code>) and the pi extension manifest (<code>pi.ex:51</code>). Trimming <code>description</code> would change the tool-calling surface the model sees — a behavior change. The summary field keeps both channels correct: full docs where the harness expects tool schemas, terse lines in the prompt.</li>
+      <li><strong>Public block functions keep arity 0:</strong> their <code>@doc</code>s say "Public so it can be asserted" — tests and possibly the driver reference them. All conditional logic goes in <code>build/1</code>, not into the blocks.</li>
+      <li><strong>Repo-bound predicate mirrors existing branching:</strong> <code>working_dir_block/1</code> already distinguishes project / bare-dir / none; <code>repo_bound?/1</code> is the same tri-state collapsed to a boolean (project OR dir ⇒ bound). A bare working_dir without a registered project still gets the repo machinery — it has a real tree to verify against.</li>
+      <li><strong>The snapshot is a no-repo render:</strong> <code>ai_docs/orchestrator-system-prompt.md</code> (34,003 bytes) was rendered with "No working directory is set" — meaning today's 34KB <em>already excludes</em> primer/stack/expertise. A with-repo render is larger; both variants must be measured in Phases 1/6.</li>
+      <li><strong>Union-of-constraints rule for merging:</strong> where duplicate copies differ in detail (thresholds, boundedness qualifiers, "operator messages take precedence"), the merged home keeps every constraint. Reviewer checks this against the ledger.</li>
+      <li><strong>Rejected:</strong> extracting the prompt to an EEx template file (bigger blast radius, loses the asserted-block structure); rendering tool docs only via MCP and dropping the prompt tools block entirely (the pi/fake harnesses' prompt-only consumers and tests still rely on the block; a terse list is the safe midpoint).</li>
+      <li><strong>Token estimate basis:</strong> tools block ≈ 9.2KB → ≈ 2.5KB (−6.7KB); dedupes ≈ −3.5KB; no-repo gating additionally ≈ −6KB (quality gate 1.2KB + phased delivery 2.6KB + cross-repo/ADW detail + verify mechanics). Net: with-repo ≈ −10KB (−28%), no-repo ≈ −15KB (−45%). Phase 6 replaces estimates with measurements.</li>
+    </ul>
+
+    <h3>§D — Open decisions surfaced (QUESTIONABLE=false → resolved here, revisit in review)</h3>
+    <ul>
+      <li><em>Gate <code>phased_delivery_block</code> whole or split?</em> Default: split — workstream decomposition + external-memory habits stay unconditional (they work without a repo); the slash-command stage dispatch, quality-gate walkthrough, and UI/UX paragraphs gate on repo-bound. If splitting bloats the code, gating the whole block with a one-line unconditional pointer is acceptable.</li>
+      <li><em>Does the Driver or Server inject any of these blocks separately?</em> <code>server.ex</code> references SystemPrompt; Phase 3 must check whether any block function is called outside <code>build/1</code> before moving content between blocks.</li>
+      <li><em>Existing tests that assert gated content on unbound orchestrators</em> (e.g. quality-gate assertions in <code>system_prompt_test.exs:119-127</code> with a no-dir fake orchestrator) switch to a repo-bound fixture — that is a test-fixture change, not a behavior change.</li>
+    </ul>
+  </section>
+
+  <!-- ===== AMENDMENTS ===== -->
+  <section id="amendments">
+    <h2>Amendments</h2>
+    <details>
+      <summary>2026-07-04 — Plan executed in full (all 6 phases); gate green</summary>
+      <p><strong>What was built:</strong> all phases completed as specified — ToolCatalog gained
+      <code>summary</code> + <code>prompt_line/1</code> (29 summaries, 8 fallbacks);
+      <code>build/1</code> reordered to the concept-first layering with <code>worker_roles_block/0</code>
+      deleted and the message-queue / working-rhythm sections merged into the core loop;
+      <code>repo_bound?/1</code> gates phased delivery, quality gate, and the cross-repo ADW paragraph;
+      14 new guard tests in <code>system_prompt_dedupe_test.exs</code>; ledger at
+      <code>ai_docs/system-prompt-dedupe-ledger.md</code>; snapshot regenerated.</p>
+      <p><strong>Measured result:</strong> no-repo render 33,983 → 20,781 bytes (−38.9%); with-repo
+      39,412 → 30,748 bytes (−22.0%). Slightly under the −40%/−25% targets — the with-repo render
+      carries irreducible per-project content (primer/stack/expertise/reflections); no policy was
+      trimmed to hit a number.</p>
+      <p><strong>Deviations from the plan text:</strong> (1) the <code>tool_manifest.json</code>
+      byte-stability fixture (unknown to the plan) was regenerated — 29 insertions, zero deletions,
+      summary keys only; (2) three existing tests were re-anchored (conductor line, repo-bound
+      quality-gate fixture, two stale "Worker roles (data-driven" anchors) exactly as the plan's
+      Questionables §D predicted; (3) validation ran the full typed gate — compile/format/credo
+      strict/dialyzer clean, tests 1738 passing (one known-flaky <code>SecretRedactionE2ETest</code>
+      failure under full-suite load passes in isolation). Work left uncommitted per the
+      /implement workflow.</p>
+    </details>
+  </section>
+
+</main>
+</body>
+</html>

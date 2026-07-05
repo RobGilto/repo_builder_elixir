@@ -242,6 +242,7 @@ defmodule RepoBuilder.WorkflowEngine.Runner do
     step = Map.fetch!(state.steps, name)
     output = done.final_text || state.text_buf
     state = capture_output(state, name, output, done.cost_usd)
+    state = publish_plan_artifact(state, name, output)
     state = record_step(state, name, :succeeded, done.cost_usd)
     reply(advance(state, step.on_success))
   end
@@ -370,4 +371,50 @@ defmodule RepoBuilder.WorkflowEngine.Runner do
 
   @spec stringify_keys(map()) :: map()
   defp stringify_keys(map), do: Map.new(map, fn {k, v} -> {to_string(k), v} end)
+
+  # --- plan artifact publication (Gap 4: spec file handover to build step) ---
+
+  # Plan-step names that should publish their spec path as the `plan` artifact so the
+  # downstream `build` step's `{{plan}}` substitution resolves to a clean path, not the
+  # full HTML body. Mirrors the `_extract_spec_path` / `_local_find_spec_fallback` salvage
+  # on the Python side (workflow_ops.py). Confined to plan-family step names — other step
+  # types are untouched.
+  @plan_step_names ~w[plan plan_f3]
+
+  @spec publish_plan_artifact(State.t(), String.t(), String.t()) :: State.t()
+  defp publish_plan_artifact(%State{} = state, step_name, output) do
+    if step_name in @plan_step_names do
+      case extract_spec_path(output) do
+        {:ok, spec_path} ->
+          Logger.debug(
+            "workflow #{state.run.id} step #{step_name} published plan artifact: #{spec_path}"
+          )
+
+          %{state | artifacts: Map.put(state.artifacts, "plan", spec_path)}
+
+        :error ->
+          Logger.debug(
+            "workflow #{state.run.id} step #{step_name} produced no salvageable spec path"
+          )
+
+          state
+      end
+    else
+      state
+    end
+  end
+
+  # Regex matches the first existing `specs/issue-…-adw-…-sdlc_planner-….{html,md}`
+  # path mentioned in the planner's output text — mirrors the Python-side pattern at
+  # workflow_ops.py `_extract_spec_path`. Public so it can be unit-tested directly.
+  @spec extract_spec_path(String.t()) :: {:ok, String.t()} | :error
+  def extract_spec_path(output) when is_binary(output) do
+    # Strip code fences before matching so a ````html…```` block doesn't confuse the regex.
+    cleaned = Regex.replace(~r/```(?:\w+)?\n?/, output, "")
+
+    case Regex.run(~r/(specs\/[\w.\-\/]+\.(?:html|md))/, cleaned) do
+      [path | _] -> {:ok, path}
+      nil -> :error
+    end
+  end
 end

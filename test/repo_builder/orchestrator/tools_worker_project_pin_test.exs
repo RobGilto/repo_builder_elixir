@@ -63,6 +63,18 @@ defmodule RepoBuilder.Orchestrator.ToolsWorkerProjectPinTest do
     project
   end
 
+  # A git-backed project dir so worktree isolation actually provisions (a non-git cwd
+  # falls through to direct). Returns the project (isolation defaults to :worktree).
+  defp git_project_at(dir) do
+    {_, 0} = System.cmd("git", ["init", "-q", "-b", "main"], cd: dir)
+    {_, 0} = System.cmd("git", ["config", "user.email", "t@example.com"], cd: dir)
+    {_, 0} = System.cmd("git", ["config", "user.name", "t"], cd: dir)
+    File.write!(Path.join(dir, "README.md"), "hi")
+    {_, 0} = System.cmd("git", ["add", "."], cd: dir)
+    {_, 0} = System.cmd("git", ["commit", "-q", "-m", "init"], cd: dir)
+    project_at(dir)
+  end
+
   defp wait_for_done(agent_id, attempts \\ 200) do
     if Enum.any?(Logs.list_recent(agent_id, 500), &(&1.event_type == :done)) do
       :ok
@@ -165,6 +177,48 @@ defmodule RepoBuilder.Orchestrator.ToolsWorkerProjectPinTest do
       cwd = persisted_cwd(worker.id)
       assert cwd, "fixture never reported its pwd"
       assert String.ends_with?(cwd, Path.basename(orch_dir))
+    end
+  end
+
+  describe "worktree_run_id takeover threading (issue worktree-takeover)" do
+    test "command_agent lands the worker in the EXISTING adw/<worktree_run_id> worktree" do
+      project_dir = tmp_dir("takeover")
+      project = git_project_at(project_dir)
+
+      scratch = tmp_dir("takeover-scratch")
+      previous = Application.get_env(:repo_builder, :worktree, [])
+      Application.put_env(:repo_builder, :worktree, Keyword.put(previous, :scratch_base, scratch))
+      on_exit(fn -> Application.put_env(:repo_builder, :worktree, previous) end)
+
+      {:ok, orch} = Orchestrators.get_or_create_for_project(project.id)
+      name = "w-#{uniq()}"
+
+      # The takeover key points at a PRIOR worker's run id, not this worker's agent id.
+      {:ok, _} =
+        Tools.call("create_agent", orch.id, %{
+          "name" => name,
+          "harness" => "pwdfake",
+          "model" => "pwd-model",
+          "isolation" => "worktree",
+          "worktree_run_id" => "prior-run-key"
+        })
+
+      assert {:ok, %{"status" => "dispatched"}} =
+               Tools.call("command_agent", orch.id, %{"name" => name, "prompt" => "go"})
+
+      {:ok, worker} = Agents.get_by_name_for_orchestrator(orch.id, name)
+      wait_for_done(worker.id)
+      cwd = persisted_cwd(worker.id)
+
+      assert cwd, "fixture never reported its pwd"
+      # Keyed on the takeover run id, NOT the worker's own agent id.
+      assert String.ends_with?(cwd, "prior-run-key")
+      refute String.ends_with?(cwd, worker.id)
+      # The reviewable branch is the takeover branch.
+      {branches, 0} =
+        System.cmd("git", ["branch", "--list", "adw/prior-run-key"], cd: project_dir)
+
+      assert branches =~ "adw/prior-run-key"
     end
   end
 

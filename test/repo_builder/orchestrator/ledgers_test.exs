@@ -159,6 +159,29 @@ defmodule RepoBuilder.Orchestrator.LedgersTest do
       assert :ok = Ledgers.auto_record_progress(orch.id, "orch-x-3", :ok, DateTime.utc_now())
       assert Ledgers.latest_progress(orch.id) == nil
     end
+
+    test ":transient outcome flags the entry transient with a distinct summary" do
+      orch = orchestrator()
+      {:ok, _} = Ledgers.upsert_goal(orch.id, %{goal: "g", definition_of_done: "d"})
+
+      :ok = Ledgers.auto_record_progress(orch.id, "orch-t-1", :transient, DateTime.utc_now())
+
+      latest = Ledgers.latest_progress(orch.id)
+      assert latest.transient == true
+      assert latest.made_progress == false
+      assert latest.summary =~ "transient provider rate limit"
+    end
+
+    test ":error outcome leaves transient false (regression guard)" do
+      orch = orchestrator()
+      {:ok, _} = Ledgers.upsert_goal(orch.id, %{goal: "g", definition_of_done: "d"})
+
+      :ok = Ledgers.auto_record_progress(orch.id, "orch-e-1", :error, DateTime.utc_now())
+
+      latest = Ledgers.latest_progress(orch.id)
+      assert latest.transient == false
+      assert latest.summary =~ "no explicit progress report"
+    end
   end
 
   describe "view/1" do

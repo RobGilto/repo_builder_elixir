@@ -93,22 +93,24 @@ defmodule RepoBuilder.Orchestrator.Ledgers do
   newer than `since` (the turn's start), the brain did not record this turn — write a minimal
   entry (`made_progress: false`, outcome in the summary) so the ledger never gaps. A no-op
   when there is no active ledger or the brain already recorded. Fail-soft.
+
+  A `:transient` outcome (a turn that died on a transient provider condition — rate limit /
+  overload; issue rate-limit-stall) writes `transient: true` so the drive-loop failure
+  ladder can treat it as ladder-neutral instead of counting it toward the stall budget.
   """
-  @spec auto_record_progress(Ecto.UUID.t(), String.t() | nil, :ok | :error, DateTime.t()) :: :ok
+  @spec auto_record_progress(
+          Ecto.UUID.t(),
+          String.t() | nil,
+          :ok | :error | :transient,
+          DateTime.t()
+        ) :: :ok
   def auto_record_progress(orchestrator_id, turn_agent_id, outcome, since) do
     case current(orchestrator_id) do
       %TaskLedger{} = ledger ->
         if has_progress_since?(ledger, since) do
           :ok
         else
-          _ =
-            insert_progress(ledger, %{
-              turn_agent_id: turn_agent_id,
-              made_progress: false,
-              on_track: outcome == :ok,
-              summary: "auto-recorded: turn ended #{outcome} (no explicit progress report)"
-            })
-
+          _ = insert_progress(ledger, auto_record_attrs(turn_agent_id, outcome))
           :ok
         end
 
@@ -119,6 +121,30 @@ defmodule RepoBuilder.Orchestrator.Ledgers do
     _error -> :ok
   catch
     _kind, _reason -> :ok
+  end
+
+  # The minimal Progress entry for a turn the brain did not itself record. A transient
+  # provider failure is flagged `transient: true` (ladder-neutral) with a distinct summary;
+  # :ok/:error keep the prior shape byte-for-byte (`transient` defaults false).
+  @spec auto_record_attrs(String.t() | nil, :ok | :error | :transient) :: map()
+  defp auto_record_attrs(turn_agent_id, :transient) do
+    %{
+      turn_agent_id: turn_agent_id,
+      made_progress: false,
+      on_track: false,
+      transient: true,
+      summary:
+        "auto-recorded: turn ended error (transient provider rate limit — not counted toward stall)"
+    }
+  end
+
+  defp auto_record_attrs(turn_agent_id, outcome) do
+    %{
+      turn_agent_id: turn_agent_id,
+      made_progress: false,
+      on_track: outcome == :ok,
+      summary: "auto-recorded: turn ended #{outcome} (no explicit progress report)"
+    }
   end
 
   @doc "The most recent Progress entry for the orchestrator's active ledger, or nil."
@@ -294,6 +320,7 @@ defmodule RepoBuilder.Orchestrator.Ledgers do
       on_track: fetch(attrs, :on_track),
       looping: fetch(attrs, :looping),
       made_progress: fetch(attrs, :made_progress),
+      transient: fetch(attrs, :transient),
       next_agent: fetch(attrs, :next_agent),
       next_instruction: fetch(attrs, :next_instruction),
       summary: fetch(attrs, :summary)

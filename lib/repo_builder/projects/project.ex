@@ -57,7 +57,10 @@ defmodule RepoBuilder.Projects.Project do
     # Open harness identity, validated vs the registry at the changeset boundary.
     field :default_harness, :string
     field :budget_cap_usd, :decimal
-    field :isolation_mode, Ecto.Enum, values: @isolation_modes, default: :direct
+    # :worktree by default for NEW projects (worktree-panel-and-gc plan): parallel
+    # runs branch instead of stomping the operator's tree; non-git roots fall through
+    # to direct at runtime. Existing rows keep their stored operator choice.
+    field :isolation_mode, Ecto.Enum, values: @isolation_modes, default: :worktree
     field :context_primer, :string
     field :status, Ecto.Enum, values: @statuses, default: :active
     timestamps()

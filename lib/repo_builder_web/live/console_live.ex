@@ -378,9 +378,14 @@ defmodule RepoBuilderWeb.ConsoleLive do
   end
 
   # Re-resolve the active orchestrator for the (already-assigned) active project and rebuild
-  # all orchestrator-scoped state: header selection + context gauge, the queue subscription
-  # (unsubscribe the old brain, subscribe the new), and the cost badges + chat/log history.
+  # the fast orchestrator-scoped state: header selection + context gauge, the queue subscription
+  # (unsubscribe the old brain, subscribe the new), and the cost badges.
   # A resolve failure leaves the current brain in place. Called by `select_project`.
+  #
+  # EXPENSIVE: backfill_events + seed_workflow_progress are NOT called here — they run
+  # synchronously on every project switch and dominated the handle_event duration (the mount
+  # path defers them to handle_info(:seed_history) for fast first paint; apply the same
+  # pattern here for snappy project switches). Defer via `:switch_project_history`.
   @spec switch_orchestrator(Phoenix.LiveView.Socket.t(), Ecto.UUID.t() | nil) ::
           Phoenix.LiveView.Socket.t()
   defp switch_orchestrator(socket, previous_id) do
@@ -391,7 +396,9 @@ defmodule RepoBuilderWeb.ConsoleLive do
         |> refresh_definitions_for()
         |> resubscribe_orchestrator_queue(previous_id, orchestrator.id)
         |> seed_costs()
-        |> Shared.backfill_events()
+        # Deferred hydration: backfill_events + seed_workflow_progress run after the
+        # handle_event returns, so the project switch responds immediately.
+        |> tap(fn _ -> send(self(), {:switch_project_history, previous_id, orchestrator.id}) end)
 
       {:error, _reason} ->
         socket
@@ -951,6 +958,19 @@ defmodule RepoBuilderWeb.ConsoleLive do
       socket
       |> MountSeeds.span(:backfill_events, &Shared.backfill_events/1)
       |> MountSeeds.span(:workflow_progress, &Shared.seed_workflow_progress/1)
+
+    {:noreply, socket}
+  end
+
+  # Deferred project-switch hydration (same pattern as :seed_history but for project
+  # switches): run backfill_events + seed_workflow_progress after the handle_event
+  # returns so the project switch responds immediately.
+  @impl true
+  def handle_info({:switch_project_history, _previous_id, _new_id}, socket) do
+    socket =
+      socket
+      |> MountSeeds.span(:switch_backfill, &Shared.backfill_events/1)
+      |> MountSeeds.span(:switch_workflow, &Shared.seed_workflow_progress/1)
 
     {:noreply, socket}
   end

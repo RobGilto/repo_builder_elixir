@@ -36,7 +36,8 @@ defmodule RepoBuilder.ProjectsTest do
       {:ok, project} = Projects.create_project(@valid)
       assert project.command_pack == "auto"
       assert project.command_pack_version == "latest"
-      assert project.isolation_mode == :direct
+      # :worktree by default since the worktree-panel-and-gc plan (parallel-safe runs).
+      assert project.isolation_mode == :worktree
       assert project.status == :active
     end
 

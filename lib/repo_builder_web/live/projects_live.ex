@@ -15,6 +15,9 @@ defmodule RepoBuilderWeb.ProjectsLive do
   alias RepoBuilder.Harness.Registry
   alias RepoBuilder.Orchestrators
   alias RepoBuilder.Projects
+  alias RepoBuilder.Projects.Worktree
+  alias RepoBuilder.Projects.WorktreeInventory
+  alias RepoBuilder.Projects.WorktreeInventory.Entry
   alias RepoBuilder.Secrets
   alias RepoBuilder.Settings
   alias RepoBuilder.StackLayers
@@ -53,6 +56,10 @@ defmodule RepoBuilderWeb.ProjectsLive do
       |> assign(secret_form: %{"name" => "", "value" => ""})
       |> assign(orchestrator: orchestrator, model_rows: model_rows(orchestrator))
       |> assign_stack_layers(project.id)
+      # Worktree inventory shells out to git per entry — load it async so the show
+      # page's first paint never blocks on it (console-mount-perf discipline).
+      |> assign(worktrees: nil)
+      |> reload_worktrees()
     else
       {:error, :not_found} ->
         socket
@@ -205,6 +212,130 @@ defmodule RepoBuilderWeb.ProjectsLive do
      |> assign(secrets: Secrets.list_names(project.id))}
   end
 
+  # --- worktree management panel (worktree-panel-and-gc plan) ---
+
+  def handle_event("refresh_worktrees", _params, socket) do
+    {:noreply, reload_worktrees(socket)}
+  end
+
+  def handle_event("merge_worktree", %{"branch" => branch}, socket) do
+    socket =
+      case WorktreeInventory.merge(socket.assigns.project, branch) do
+        {:ok, %{sha: sha, trunk: trunk}} ->
+          put_flash(
+            socket,
+            :info,
+            "#{branch} merged @ #{String.slice(sha, 0, 7)} into #{trunk}"
+          )
+
+        {:error, reason} ->
+          put_flash(socket, :error, "Merge failed: #{format_reason(reason)}")
+      end
+
+    {:noreply,
+     socket
+     |> assign(runs: Workflows.list_recent_for_project(socket.assigns.project.id, 20))
+     |> reload_worktrees()}
+  end
+
+  def handle_event("remove_worktree", %{"branch" => branch}, socket) do
+    remove_worktree_and_reload(socket, branch, delete_branch: false)
+  end
+
+  def handle_event("remove_worktree_branch", %{"branch" => branch}, socket) do
+    remove_worktree_and_reload(socket, branch, delete_branch: true)
+  end
+
+  def handle_event("gc_worktrees", _params, socket) do
+    {:ok, count} = WorktreeInventory.gc(socket.assigns.project)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Reclaimed #{count} merged worktree(s)")
+     |> reload_worktrees()}
+  end
+
+  def handle_event("prune_worktrees", _params, socket) do
+    :ok = Worktree.prune(socket.assigns.project.root_path)
+
+    {:noreply,
+     socket |> put_flash(:info, "Pruned stale worktree registrations") |> reload_worktrees()}
+  end
+
+  def handle_event("toggle_isolation", _params, socket) do
+    project = socket.assigns.project
+    next = if project.isolation_mode == :worktree, do: :direct, else: :worktree
+
+    case Projects.update_project(project, %{isolation_mode: next}) do
+      {:ok, updated} ->
+        {:noreply, assign(socket, project: updated)}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Could not update isolation mode")}
+    end
+  end
+
+  @impl true
+  def handle_async(:load_worktrees, {:ok, {:ok, entries}}, socket) do
+    {:noreply, assign(socket, worktrees: entries)}
+  end
+
+  def handle_async(:load_worktrees, {:exit, reason}, socket) do
+    {:noreply,
+     socket
+     |> assign(worktrees: [])
+     |> put_flash(:error, "Worktree inventory failed: #{format_reason(reason)}")}
+  end
+
+  # Kick (or re-kick) the async inventory load for the currently shown project.
+  @spec reload_worktrees(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp reload_worktrees(socket) do
+    project = socket.assigns.project
+    start_async(socket, :load_worktrees, fn -> WorktreeInventory.list(project) end)
+  end
+
+  @spec remove_worktree_and_reload(Phoenix.LiveView.Socket.t(), String.t(), keyword()) ::
+          {:noreply, Phoenix.LiveView.Socket.t()}
+  defp remove_worktree_and_reload(socket, branch, opts) do
+    socket =
+      case find_worktree(socket, branch) do
+        %Entry{} = entry ->
+          # The data-confirm dialog IS the explicit choice, so force past the
+          # unmerged-work guard here.
+          case WorktreeInventory.remove(
+                 socket.assigns.project,
+                 entry,
+                 Keyword.put(opts, :force, true)
+               ) do
+            :ok ->
+              put_flash(socket, :info, "Removed #{branch}")
+
+            {:error, reason} ->
+              put_flash(socket, :error, "Remove failed: #{format_reason(reason)}")
+          end
+
+        nil ->
+          put_flash(socket, :error, "Unknown worktree #{branch} — refresh and retry")
+      end
+
+    {:noreply, reload_worktrees(socket)}
+  end
+
+  @spec find_worktree(Phoenix.LiveView.Socket.t(), String.t()) :: Entry.t() | nil
+  defp find_worktree(socket, branch) do
+    case socket.assigns.worktrees do
+      entries when is_list(entries) -> Enum.find(entries, &(&1.branch == branch))
+      _not_loaded -> nil
+    end
+  end
+
+  @spec worktree_dom_id(Entry.t()) :: String.t()
+  defp worktree_dom_id(%Entry{branch: branch}), do: "wt-" <> String.replace(branch, "/", "-")
+
+  @spec format_reason(term()) :: String.t()
+  defp format_reason(reason) when is_binary(reason), do: reason
+  defp format_reason(reason), do: inspect(reason)
+
   # The platform's own "repo" project (seeded row whose root_path is the BEAM cwd). It is the
   # safe home the console falls back to, so it must never be deregistered. `nil` before seeding.
   @spec platform_id() :: Ecto.UUID.t() | nil
@@ -298,6 +429,15 @@ defmodule RepoBuilderWeb.ProjectsLive do
               value="true"
               checked={@register_form["create_dir"] == "true"}
             /> Create the folder if it doesn't exist yet
+          </label>
+          <label class="flex items-center gap-2 text-xs text-zinc-400">
+            <input
+              type="checkbox"
+              name="git_init"
+              value="true"
+              checked={@register_form["git_init"] == "true"}
+            /> Run <code class="font-mono">git init</code>
+            if not already a git repo
           </label>
           <button class="rounded bg-cyan-700 px-3 py-1 text-sm" type="submit">
             Profile &amp; register
@@ -564,6 +704,112 @@ defmodule RepoBuilderWeb.ProjectsLive do
               </span>
             </li>
             <li :if={@runs == []} class="text-zinc-400">No runs yet for this project.</li>
+          </ul>
+        </div>
+
+        <div id="worktrees-panel" class="rounded border border-zinc-700 p-4 space-y-2">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <h3 class="font-semibold">
+              Worktrees<span :if={is_list(@worktrees)}> · {length(@worktrees)}</span>
+            </h3>
+            <div class="flex flex-wrap items-center gap-2 text-xs">
+              <button
+                id="isolation-toggle"
+                phx-click="toggle_isolation"
+                title="Isolation mode for new runs on this project (click to toggle)"
+                class="rounded bg-zinc-700 px-2 py-0.5"
+              >
+                isolation: {@project.isolation_mode} ⇄
+              </button>
+              <button phx-click="refresh_worktrees" class="rounded bg-zinc-700 px-2 py-0.5">
+                Refresh
+              </button>
+              <button
+                phx-click="gc_worktrees"
+                data-confirm="Reclaim every MERGED worktree older than the configured GC age? Their adw/* branches are deleted too (the commits are already on the trunk)."
+                class="rounded bg-zinc-700 px-2 py-0.5"
+              >
+                GC merged
+              </button>
+              <button phx-click="prune_worktrees" class="rounded bg-zinc-700 px-2 py-0.5">
+                Prune registry
+              </button>
+            </div>
+          </div>
+
+          <p :if={is_nil(@worktrees)} class="text-sm text-zinc-400">Loading worktrees…</p>
+          <p :if={@worktrees == []} class="text-sm text-zinc-400">
+            No worktrees for this project.
+          </p>
+
+          <ul :if={is_list(@worktrees) and @worktrees != []} class="space-y-1 text-sm">
+            <li
+              :for={wt <- @worktrees}
+              id={worktree_dom_id(wt)}
+              class="flex flex-wrap items-center gap-2 border-t border-zinc-800 py-1"
+            >
+              <span class="font-mono text-cyan-400" title={wt.path}>{wt.branch}</span>
+              <span :if={wt.run_status} class="text-xs text-zinc-400">{wt.run_status}</span>
+              <span
+                :if={wt.merge_status == :merged}
+                class="text-xs text-emerald-400"
+                title={"merged @ #{wt.merged_sha}"}
+              >
+                merged @ {String.slice(wt.merged_sha || "", 0, 7)}
+              </span>
+              <span :if={wt.merge_status == :failed} class="text-xs text-red-400">
+                merge failed
+              </span>
+              <span :if={is_nil(wt.merge_status)} class="text-xs text-zinc-500">unmerged</span>
+              <span
+                :if={is_integer(wt.ahead)}
+                class="text-xs text-zinc-400"
+                title={wt.shortstat || ""}
+              >
+                +{wt.ahead}/−{wt.behind}
+              </span>
+              <span
+                :if={is_nil(wt.run_id)}
+                class="rounded bg-amber-900 px-1.5 text-xs text-amber-200"
+                title="Present on disk/in git but no run row knows it"
+              >
+                orphaned
+              </span>
+              <span
+                :if={not wt.on_disk? and not wt.in_git?}
+                class="rounded bg-zinc-700 px-1.5 text-xs text-zinc-300"
+                title="A run row remembers this worktree but nothing remains on disk"
+              >
+                missing on disk
+              </span>
+              <span class="ml-auto flex gap-1">
+                <button
+                  :if={wt.merge_status != :merged}
+                  phx-click="merge_worktree"
+                  phx-value-branch={wt.branch}
+                  data-confirm={"Merge #{wt.branch} into the trunk?"}
+                  class="rounded bg-emerald-800 px-2 py-0.5 text-xs"
+                >
+                  Merge
+                </button>
+                <button
+                  phx-click="remove_worktree"
+                  phx-value-branch={wt.branch}
+                  data-confirm="Remove this worktree? Uncommitted files in it are lost (the branch is kept)."
+                  class="rounded bg-zinc-700 px-2 py-0.5 text-xs"
+                >
+                  Remove
+                </button>
+                <button
+                  phx-click="remove_worktree_branch"
+                  phx-value-branch={wt.branch}
+                  data-confirm="Remove this worktree AND delete its branch? Unmerged commits are destroyed."
+                  class="rounded bg-red-800 px-2 py-0.5 text-xs"
+                >
+                  Remove + branch
+                </button>
+              </span>
+            </li>
           </ul>
         </div>
       </div>

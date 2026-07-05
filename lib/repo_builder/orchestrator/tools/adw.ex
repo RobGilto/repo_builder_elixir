@@ -77,6 +77,15 @@ defmodule RepoBuilder.Orchestrator.Tools.Adw do
     with {:ok, type} <- resolve_workflow_type(args) do
       name = "orch-adw-#{System.unique_integer([:positive])}"
 
+      # Out-of-scope audit-trail (issue-adw-engine-launch-cwd): start_adw_via_engine/4
+      # has the same defect shape as the ADW Builder launch fixed in
+      # `lib/repo_builder_web/live/console_live/adw_builder_panel.ex` — it does NOT pass
+      # `cwd:` / `isolation_mode:` / `project_id:` to `WorkflowEngine.start_workflow/2`,
+      # so the run's step sessions fall back to the per-session managed scratch
+      # workspace instead of the operator's active project. Tracked separately because
+      # the orchestrator session runtime contract is different (orchestrator_id, not
+      # project_id, owns the launch) and the user-reported bug is on the ADW Builder
+      # surface only.
       with {:ok, workflow} <- WorkflowEngine.create_workflow_of_type(name, type, harness),
            {:ok, run_id, _pid} <-
              WorkflowEngine.start_workflow(workflow,
@@ -248,7 +257,9 @@ defmodule RepoBuilder.Orchestrator.Tools.Adw do
     {project_id, isolation_mode} =
       case adw_target_project(orchestrator_id, cwd) do
         %Project{id: id, isolation_mode: mode} -> {id, mode}
-        nil -> {nil, nil}
+        # No resolvable project: the platform isolation default (ships :worktree,
+        # worktree-panel-and-gc plan); a non-git cwd still falls through to direct.
+        nil -> {nil, Projects.default_isolation()}
       end
 
     opts = [

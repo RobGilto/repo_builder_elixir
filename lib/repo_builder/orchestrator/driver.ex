@@ -13,6 +13,8 @@ defmodule RepoBuilder.Orchestrator.Driver do
   Progress entry against the prior:
 
     * real progress (`made_progress` and not `looping`) → `reset_stall`;
+    * a `transient` entry (a turn that died on a transient provider condition — rate limit /
+      overload) → ladder-NEUTRAL (neither bump nor reset; the tick cadence is the backoff);
     * otherwise → `bump_stall`;
     * `stall_count` in `[max_stall, escalate_after_stall)` → the next turn is a REPLAN turn
       (revise the Task Ledger, don't push the same step — Magentic-One stagnation rule);
@@ -150,6 +152,12 @@ defmodule RepoBuilder.Orchestrator.Driver do
 
       Map.get(state.acted, id) == latest.id ->
         state
+
+      # A transient provider failure (rate limit / overload; issue rate-limit-stall) is
+      # ladder-NEUTRAL: neither bump nor reset. Mark it acted so it is never re-processed;
+      # the tick cadence (`min_drive_interval_ms`) is the backoff and the next tick retries.
+      latest.transient ->
+        put_in(state.acted[id], latest.id)
 
       true ->
         _ =

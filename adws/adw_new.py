@@ -46,20 +46,59 @@ def make_script(name: str, steps: list[str], local: bool) -> str:
     )
 
     # plan_f3: HTML-first planning into specs/ via /plan_f3 (no classify_issue).
+    # Fixed: build_plan returns AgentPromptResponse (not a tuple), synthesize issue from
+    # run.json, set up logger, and persist state.plan_file + output.spec_file.
     plan_f3_block = """    # Plan_f3: HTML-first planning into specs/ via /plan_f3 (no classify_issue).
     print(f"\\n=== PLAN_F3 PHASE ===")
     from adw_modules.workflow_ops import build_plan
-    plan_resp, plan_err = build_plan(issue, "/plan_f3", adw_id, logger, working_dir=script_dir)
-    if plan_err:
-        sys.exit(f"plan_f3 step failed: {plan_err}")"""
+    from adw_modules.utils import setup_logger
+    logger = setup_logger(adw_id, "adw_plan_f3")
+    from adw_modules import local_ops
+    from adw_modules.state import ADWState
+    # Synthesize a local GitHubIssue from the run record so build_plan can use it.
+    run = local_ops.load_run(adw_id)
+    if run is None:
+        print("plan_f3 step failed: no run record found")
+        sys.exit(1)
+    issue = local_ops.synthesize_issue(run)
+    plan_resp = build_plan(issue, "/plan_f3", adw_id, logger, working_dir=script_dir)
+    if not plan_resp.success:
+        print(f"plan_f3 step failed: {plan_resp.output}")
+        sys.exit(1)
+    spec_file = plan_resp.output.strip().strip("`")
+    # Persist spec path to state so chained build step finds it.
+    state = ADWState.load(adw_id, logger) or ADWState(adw_id)
+    state.update(plan_file=spec_file)
+    state.save("adw_plan_f3")
+    # Record spec_file on the run record for the orchestrator UI.
+    local_ops.update_run(adw_id, output={"spec_file": spec_file})"""
 
     # feature: direct /feature planning (no classify_issue, no /bug-/chore rerouting).
+    # Same fix as plan_f3_block: correct build_plan call + issue synthesis + logger + state persistence.
     feature_block = """    # Feature: direct /feature planning (no classify_issue, no /bug-/chore rerouting).
     print(f"\\n=== FEATURE PHASE ===")
     from adw_modules.workflow_ops import build_plan
-    plan_resp, plan_err = build_plan(issue, "/feature", adw_id, logger, working_dir=script_dir)
-    if plan_err:
-        sys.exit(f"feature step failed: {plan_err}")"""
+    from adw_modules.utils import setup_logger
+    logger = setup_logger(adw_id, "adw_feature")
+    from adw_modules import local_ops
+    from adw_modules.state import ADWState
+    # Synthesize a local GitHubIssue from the run record so build_plan can use it.
+    run = local_ops.load_run(adw_id)
+    if run is None:
+        print("feature step failed: no run record found")
+        sys.exit(1)
+    issue = local_ops.synthesize_issue(run)
+    plan_resp = build_plan(issue, "/feature", adw_id, logger, working_dir=script_dir)
+    if not plan_resp.success:
+        print(f"feature step failed: {plan_resp.output}")
+        sys.exit(1)
+    spec_file = plan_resp.output.strip().strip("`")
+    # Persist spec path to state so chained build step finds it.
+    state = ADWState.load(adw_id, logger) or ADWState(adw_id)
+    state.update(plan_file=spec_file)
+    state.save("adw_feature")
+    # Record spec_file on the run record for the orchestrator UI.
+    local_ops.update_run(adw_id, output={"spec_file": spec_file})"""
 
     # Real-merge ship for _local_iso scripts: no adw_ship_local_iso.py exists,
     # so ship is inlined via the shared trunk-aware merge helper (merge_ops).

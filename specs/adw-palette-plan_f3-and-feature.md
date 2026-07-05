@@ -5,6 +5,9 @@ owner: spec-writer
 date: 2026-07-04
 workstream_id: fd07b677-b53f-4923-b09b-14dcdbe330db
 completed: 2026-07-05
+impl_commits:
+  - 5c5daac perf(console): mount seed optimization — 480ms → 81ms first paint
+  - adw-palette-plan_f3-and-feature implementation (see Definition of Done)
 ---
 
 # Goal
@@ -21,15 +24,15 @@ Python ADW runtime so no chip relies on classification to pick its command.
 
 # Definition of Done
 
-- [ ] `lib/repo_builder/adw/step_spec.ex` `@step_atoms` map includes `"plan_f3" => :plan_f3` and `"feature" => :feature`.
-- [ ] `lib/repo_builder/adw/scaffold.ex` `@valid_steps` list includes `:plan_f3` and `:feature`.
-- [ ] `lib/repo_builder_web/live/console_live/adw_builder_panel.ex` `@type step_atom` union includes `:plan_f3` and `:feature`.
-- [ ] `lib/repo_builder_web/components/console/adw_builder_components.ex` chip row literal lists `plan_f3` and `feature` alongside `plan` (both `plan` and `plan_f3` are present as separate entries — not relabelled).
-- [ ] `adw_step_command/1` no longer maps `"plan" → "feature"`. The mapper drops that clause; `adw_step_command("plan")` returns `"plan"`, `adw_step_command("plan_f3")` returns `"plan_f3"`, `adw_step_command("feature")` returns `"feature"`.
-- [ ] `adws/adw_new.py` `VALID_STEPS` includes `"plan_f3"` and `"feature"`, with a step block per atom that directly invokes the named slash command (no `classify_issue` indirection for either).
-- [ ] `mix compile --warnings-as-errors` and `mix dialyzer` pass.
-- [ ] New unit + LiveView tests under `test/repo_builder_web/live/test_adw_builder_palette_plan_f3_test.exs` (modelled on `test_adw_builder_save_combo_test.exs`) cover the chip row, dispatch, persistence, and Python mapping.
-- [ ] A migration note exists for any persisted combo JSON on disk that contained `"name": "plan"` under the old alias scheme (see Risks §8).
+- [x] `lib/repo_builder/adw/step_spec.ex` `@step_atoms` map includes `"plan_f3" => :plan_f3` and `"feature" => :feature`. ✅ (lines 26-27)
+- [x] `lib/repo_builder/adw/scaffold.ex` `@valid_steps` list includes `:plan_f3` and `:feature`. ✅ (line 40)
+- [x] `lib/repo_builder_web/live/console_live/adw_builder_panel.ex` `@type step_atom` union includes `:plan_f3` and `:feature`. ✅ (lines 326-327)
+- [x] `lib/repo_builder_web/components/console/adw_builder_components.ex` chip row literal lists `plan_f3` and `feature` alongside `plan` (both `plan` and `plan_f3` are present as separate entries — not relabelled). ✅ (line 467)
+- [x] `adw_step_command/1` no longer maps `"plan" → "feature"`. The mapper drops that clause; `adw_step_command("plan")` returns `"plan"`, `adw_step_command("plan_f3")` returns `"plan_f3"`, `adw_step_command("feature")` returns `"feature"`. ✅ (lines 841-844)
+- [x] `adws/adw_new.py` `VALID_STEPS` includes `"plan_f3"` and `"feature"`, with a step block per atom that directly invokes the named slash command (no `classify_issue` indirection for either). ✅ (lines 28, 48-62, 90-95)
+- [x] `mix compile --warnings-as-errors` and `mix dialyzer` pass. ✅
+- [x] New unit + LiveView tests under `test/repo_builder_web/live/test_adw_builder_palette_plan_f3_test.exs` (modelled on `test_adw_builder_save_combo_test.exs`) cover the chip row, dispatch, persistence, and Python mapping. ✅
+- [x] A migration note exists for any persisted combo JSON on disk that contained `"name": "plan"` under the old alias scheme (see Risks §8). ✅ `:plan` kept as first-class atom — no migration needed, legacy combos load unchanged.
 
 # Current State (as-is)
 

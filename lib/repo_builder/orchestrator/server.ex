@@ -60,6 +60,10 @@ defmodule RepoBuilder.Orchestrator.Server do
       # minimal Progress entry on flush IFF the brain recorded none since this instant, so
       # the ledger never gaps regardless of harness (in-process Fake or out-of-band MCP).
       field :turn_started_at, DateTime.t(), enforce: false
+      # Set when this turn saw a transient provider condition (rate limit / overload;
+      # issue rate-limit-stall). A not-ok terminal then auto-records `:transient` instead of
+      # `:error`, so the drive-loop stall ladder treats throttling as ladder-neutral.
+      field :transient_error?, boolean(), default: false
     end
   end
 
@@ -227,6 +231,9 @@ defmodule RepoBuilder.Orchestrator.Server do
       reasoning_effort: orchestrator.reasoning_effort,
       # Operator-chosen working directory (nil ⇒ managed per-orchestrator workspace).
       # The runtime writes `.mcp.json`/per-session config here and resumes turns in it.
+      # Deliberately NO `isolation_mode` here: worktree-by-default applies to WORKERS
+      # only (agent_ops/adw dispatch). The orchestrator brain must keep observing the
+      # operator's real tree — isolating it would blind it to in-flight work.
       cwd: orchestrator.working_dir,
       # Interactive orchestrator turns get a shorter idle watchdog than the worker-grade
       # session default (5 min): a byte-silent orchestrator turn beyond this is treated as
@@ -300,14 +307,21 @@ defmodule RepoBuilder.Orchestrator.Server do
 
     state = %State{state | acc_cost: Decimal.add(state.acc_cost, delta)}
     _ = flush(state, if(event.ok, do: :idle, else: :error))
-    _ = auto_record_progress(state, if(event.ok, do: :ok, else: :error))
+    _ = auto_record_progress(state, if(event.ok, do: :ok, else: not_ok_outcome(state)))
     {:stop, :normal, %State{state | flushed?: true}}
   end
 
   def handle_info({:harness_event, %Event.Error{}}, %State{} = state) do
     _ = flush(state, :error)
-    _ = auto_record_progress(state, :error)
+    _ = auto_record_progress(state, not_ok_outcome(state))
     {:stop, :normal, %State{state | flushed?: true}}
+  end
+
+  # A transient provider condition (rate limit / overload; issue rate-limit-stall) surfaced
+  # by the harness adapter. Flag the turn so its not-ok terminal auto-records `:transient`,
+  # keeping throttling ladder-neutral in the drive loop rather than counting it as a stall.
+  def handle_info({:harness_event, %Event.Status{kind: :rate_limit}}, %State{} = state) do
+    {:noreply, %State{state | transient_error?: true}}
   end
 
   # Hard turn-deadline fired (self-healing Phase 4): a turn already flushed is a no-op; an
@@ -318,7 +332,7 @@ defmodule RepoBuilder.Orchestrator.Server do
   def handle_info(:turn_deadline, %State{} = state) do
     _ = Session.Supervisor.stop_session(state.agent_id)
     _ = flush(state, :error)
-    _ = auto_record_progress(state, :error)
+    _ = auto_record_progress(state, not_ok_outcome(state))
 
     Logger.warning(
       "orchestrator turn #{state.agent_id} hit the hard turn deadline; force-flushed"
@@ -382,7 +396,7 @@ defmodule RepoBuilder.Orchestrator.Server do
   # Backstop the Progress Ledger (self-healing Phase 3): if the brain recorded no progress
   # entry since this turn started, write a minimal one so the ledger never gaps. A no-op when
   # no goal is set, or when the brain already recorded explicitly. Best-effort.
-  @spec auto_record_progress(State.t(), :ok | :error) :: :ok
+  @spec auto_record_progress(State.t(), :ok | :error | :transient) :: :ok
   defp auto_record_progress(%State{turn_started_at: nil}, _outcome), do: :ok
 
   defp auto_record_progress(%State{} = state, outcome) do
@@ -393,6 +407,12 @@ defmodule RepoBuilder.Orchestrator.Server do
       state.turn_started_at
     )
   end
+
+  # A not-ok terminal is `:transient` when this turn saw a transient provider condition
+  # (rate limit / overload), else `:error` (issue rate-limit-stall).
+  @spec not_ok_outcome(State.t()) :: :error | :transient
+  defp not_ok_outcome(%State{transient_error?: true}), do: :transient
+  defp not_ok_outcome(%State{}), do: :error
 
   # Mirror Orchestrators.add_usage's nil/negative-safe token clamp so coalescing keeps
   # identical cumulative/context semantics.

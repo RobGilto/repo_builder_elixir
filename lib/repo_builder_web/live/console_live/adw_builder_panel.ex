@@ -11,7 +11,7 @@ defmodule RepoBuilderWeb.ConsoleLive.AdwBuilderPanel do
 
   alias Phoenix.LiveView.Socket
   alias RepoBuilder.Adw.{Combos, StepSpec}
-  alias RepoBuilder.{WorkflowEngine, Workflows}
+  alias RepoBuilder.{Projects, WorkflowEngine, Workflows}
   alias RepoBuilder.WorkflowEngine.Catalog
   alias RepoBuilder.Workflows.TitleHumanizer
   alias RepoBuilderWeb.ConsoleLive.Shared
@@ -431,13 +431,21 @@ defmodule RepoBuilderWeb.ConsoleLive.AdwBuilderPanel do
         %{"input" => initial_prompt, "spec" => spec}
       end
 
+    # Thread the operator's active project into the run (agentic-layer adaptor seam,
+    # fix ADW Builder target-repo launch): a `nil` active_project_id ⇒ the existing
+    # no-cwd / managed-scratch behavior (every pre-existing caller is unchanged); a
+    # resolved project ⇒ `cwd: project.root_path, isolation_mode: project.isolation_mode`
+    # so each step session runs IN the operator's repo and the typed spec path resolves.
+    project_opts = active_project_target_repo_opts(socket)
+
     with {:ok, wf} <-
            Workflows.create_workflow(%{
              name: "#{name}-#{System.unique_integer([:positive])}",
              type: "custom",
              steps: step_list
            }),
-         {:ok, _run_id, _pid} <- WorkflowEngine.start_workflow(wf, inputs: inputs) do
+         {:ok, _run_id, _pid} <-
+           WorkflowEngine.start_workflow(wf, [inputs: inputs] ++ project_opts) do
       # Fire-and-forget Fast-tier title humanization (machine-looking name ⇒ friendly).
       _ = TitleHumanizer.maybe_humanize_async(wf, socket.assigns.orchestrator_id)
 
@@ -459,4 +467,31 @@ defmodule RepoBuilderWeb.ConsoleLive.AdwBuilderPanel do
   @spec blank?(String.t() | nil) :: boolean()
   defp blank?(nil), do: true
   defp blank?(value) when is_binary(value), do: String.trim(value) == ""
+
+  # Resolve the operator's active project into the three target-repo seam opts that
+  # `WorkflowEngine.start_workflow/2` accepts (agentic-layer adaptor, §7). Extracted
+  # from `launch_adw_builder/4` so the handler clause stays shallow (credo max-depth +
+  # cyclomatic). A `nil` `active_project_id` (project-less console) or a stale project
+  # id ⇒ `[]`, preserving the pre-fix no-cwd / managed-scratch behavior for every
+  # pre-existing caller (back-compat).
+  @spec active_project_target_repo_opts(Socket.t()) :: keyword()
+  defp active_project_target_repo_opts(socket) do
+    case socket.assigns[:active_project_id] do
+      nil ->
+        []
+
+      project_id ->
+        case Projects.fetch_project(project_id) do
+          {:ok, project} ->
+            [
+              project_id: project.id,
+              cwd: project.root_path,
+              isolation_mode: project.isolation_mode
+            ]
+
+          {:error, :not_found} ->
+            []
+        end
+    end
+  end
 end

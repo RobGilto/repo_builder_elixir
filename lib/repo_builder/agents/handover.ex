@@ -101,13 +101,16 @@ defmodule RepoBuilder.Agents.Handover do
     instead of starting new work.
     #{original_ask_block(original_ask)}
     Do this, in order:
-    1. Write a handover document to `ai_docs/<descriptive-name>-handover.md` in the working
+    1. If you are working in an isolated git worktree (your cwd is on an `adw/*` branch),
+       COMMIT all work NOW: `git add -A && git commit -m "wip: handover"`. The branch is the
+       durable artifact — uncommitted changes do not reliably survive retirement.
+    2. Write a handover document to `ai_docs/<descriptive-name>-handover.md` in the working
        directory. Begin it with a header that is a RECEIPT of the original ask (quote it
        verbatim), then an "## Achieved" section (what you completed) and a "## Remaining"
        section (what is left to do, in enough detail that a FRESH worker can continue).
-    2. End your reply with EXACTLY this token, on its own line:
+    3. End your reply with EXACTLY this token, on its own line:
        `:handover <relative-path-to-doc>` (e.g. `:handover ai_docs/elixir-port-handover.md`).
-    3. STOP. Do not start any new work after emitting the `:handover` signal — you will be
+    4. STOP. Do not start any new work after emitting the `:handover` signal — you will be
        retired once it is seen.
     """
     |> String.trim_trailing()
@@ -124,7 +127,9 @@ defmodule RepoBuilder.Agents.Handover do
       "HAS BEEN RETIRED (deleted) — do NOT try to `command_agent` or `check_agent_status` " <>
       "it again. Its handover document is at `#{doc_path}` (a receipt of the original ask " <>
       "+ what it achieved + what remains). To continue the task, READ that document and " <>
-      "spawn a FRESH worker seeded with it if the work isn't finished."
+      "spawn a FRESH worker seeded with it if the work isn't finished. If the worker was " <>
+      "worktree-isolated, spawn the replacement with `worktree_run_id` set to the retired " <>
+      "worker's agent id so it continues the SAME adw/* branch (its commits carry over)."
   end
 
   @doc """
@@ -152,13 +157,16 @@ defmodule RepoBuilder.Agents.Handover do
     detected you are near the end of your usable context window. You cannot reliably count
     your own tokens, so trust this signal. When you see it:
 
-    1. Write a handover document to `ai_docs/<descriptive-name>-handover.md` in the working
+    1. If you are working in an isolated git worktree (your cwd is on an `adw/*` branch),
+       COMMIT all work NOW: `git add -A && git commit -m "wip: handover"`. The branch is the
+       durable artifact — uncommitted changes do not reliably survive retirement.
+    2. Write a handover document to `ai_docs/<descriptive-name>-handover.md` in the working
        directory. Start it with a header that is a RECEIPT of the original ask (quote the
        request verbatim), then an "## Achieved" section (what you completed) and a
        "## Remaining" section (what is left, in enough detail for a fresh worker to continue).
-    2. End your final message with EXACTLY `:handover <relative-path>`
+    3. End your final message with EXACTLY `:handover <relative-path>`
        (e.g. `:handover ai_docs/elixir-port-handover.md`).
-    3. STOP — do NOT keep working after emitting `:handover`. You will be retired (your
+    4. STOP — do NOT keep working after emitting `:handover`. You will be retired (your
        session reaped) once the signal is seen; a fresh worker continues from your document.
     """
     |> String.trim_trailing()
