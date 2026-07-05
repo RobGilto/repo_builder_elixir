@@ -74,6 +74,11 @@ defmodule RepoBuilderWeb.Telemetry do
         unit: {:native, :millisecond},
         description: "Wall-clock time for a LiveView handle_params callback to complete"
       ),
+      summary("repo_builder.console.seed.stop.duration",
+        tags: [:seed],
+        unit: {:native, :millisecond},
+        description: "Wall-clock time of one ConsoleLive mount/hydration seed step"
+      ),
 
       # Database Metrics
       summary("repo_builder.repo.query.total_time",

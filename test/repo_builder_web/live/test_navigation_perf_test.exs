@@ -71,12 +71,16 @@ defmodule RepoBuilderWeb.NavigationPerfTest do
   end
 
   describe "mount timing" do
-    test "ConsoleLive mount completes under 500 ms", %{conn: conn} do
+    test "ConsoleLive mount completes under 250 ms", %{conn: conn} do
+      # Tightened from 500 ms after the Phase 2/3 seed optimization
+      # (specs/console-mount-seed-optimization.html): mount no longer runs the
+      # cost full-scans or the history backfill, so a regression re-inflating it
+      # must fail here.
       TelemetryCapture.capture(fn ->
         {:ok, lv, _} = live(conn, ~p"/")
         render(lv)
       end)
-      |> TelemetryCapture.assert_mount_under(RepoBuilderWeb.ConsoleLive, 500)
+      |> TelemetryCapture.assert_mount_under(RepoBuilderWeb.ConsoleLive, 250)
     end
 
     test "PlanningLive mount completes under 100 ms", %{conn: conn} do

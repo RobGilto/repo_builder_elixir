@@ -18,7 +18,8 @@ defmodule RepoBuilder.Telemetry.LiveViewPerf do
   @events [
     [:phoenix, :live_view, :mount, :stop],
     [:phoenix, :live_view, :handle_event, :stop],
-    [:phoenix, :live_view, :handle_params, :stop]
+    [:phoenix, :live_view, :handle_params, :stop],
+    [:repo_builder, :console, :seed, :stop]
   ]
 
   @spec attach() :: :ok
@@ -54,6 +55,15 @@ defmodule RepoBuilder.Telemetry.LiveViewPerf do
         _cfg
       ) do
     Logger.info("[lv_perf] params #{short_name(meta[:socket])} #{to_ms(duration)} ms")
+  end
+
+  def handle_event(
+        [:repo_builder, :console, :seed, :stop],
+        %{duration: duration},
+        %{seed: seed},
+        _cfg
+      ) do
+    Logger.info("[lv_perf] seed #{seed} #{to_ms(duration)} ms")
   end
 
   @spec to_ms(integer()) :: integer()

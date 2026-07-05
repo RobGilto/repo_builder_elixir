@@ -17,6 +17,20 @@ defmodule RepoBuilder.Workflows do
   @spec get_workflow(Ecto.UUID.t()) :: Workflow.t() | nil
   def get_workflow(id), do: Repo.get(Workflow, id)
 
+  @doc """
+  Batch lookup: the workflows for a set of ids as `%{id => Workflow.t()}` in one
+  query. Absent/unknown ids are simply not in the map. Replaces per-run
+  `get_workflow/1` loops (console-mount-seed-optimization Phase 2 N+1 fix).
+  """
+  @spec get_workflows_by_ids([Ecto.UUID.t()]) :: %{Ecto.UUID.t() => Workflow.t()}
+  def get_workflows_by_ids([]), do: %{}
+
+  def get_workflows_by_ids(ids) do
+    from(w in Workflow, where: w.id in ^ids)
+    |> Repo.all()
+    |> Map.new(&{&1.id, &1})
+  end
+
   @spec create_workflow(map()) :: {:ok, Workflow.t()} | {:error, Ecto.Changeset.t()}
   def create_workflow(params) do
     %Workflow{}

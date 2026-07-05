@@ -481,13 +481,19 @@ defmodule RepoBuilder.Logs do
   defp clamp_offset(offset) when is_integer(offset) and offset > 0, do: offset
   defp clamp_offset(_offset), do: 0
 
-  @doc "Sum of all priced `cost_usd` across an agent's logs (unpriced rows contribute nothing)."
+  @doc """
+  Sum of all priced `cost_usd` across an agent's logs (unpriced rows contribute
+  nothing). Aggregates in SQL — never loads rows into the BEAM (the pre-SQL
+  version full-scanned the agent's rows and summed in Elixir, dominating
+  ConsoleLive's mount; specs/console-mount-seed-optimization.html Phase 2).
+  """
   @spec cost_rollup!(Ecto.UUID.t()) :: Decimal.t()
   def cost_rollup!(agent_id) do
     AgentLog
     |> where([l], l.agent_id == ^agent_id)
-    |> Repo.all()
-    |> Enum.reduce(Decimal.new(0), fn log, acc -> add_cost(acc, log.usage) end)
+    |> select([l], sum(fragment("COALESCE((usage->>'cost_usd')::numeric, 0)")))
+    |> Repo.one()
+    |> to_rollup_decimal()
   end
 
   @doc """
@@ -495,7 +501,7 @@ defmodule RepoBuilder.Logs do
   scan instead of N per-agent scans). Returns `%{agent_id => Decimal.t()}` for
   every id in `agent_ids` that has logs; absent ids are simply not in the map
   (caller treats them as unpriced/zero). Unpriced rows (NULL `cost_usd`)
-  contribute nothing, matching `cost_rollup!/1`'s `add_cost/2` semantics.
+  contribute nothing, matching `cost_rollup!/1`'s semantics.
   """
   @spec cost_rollup_for_agents!([Ecto.UUID.t()]) :: %{Ecto.UUID.t() => Decimal.t()}
   def cost_rollup_for_agents!([]), do: %{}
@@ -515,14 +521,22 @@ defmodule RepoBuilder.Logs do
   @doc """
   Sum of all priced `cost_usd` across an orchestrator's logs (issue-d). Unpriced
   rows (NULL cost) contribute nothing, preserving the nil-vs-0.0 distinction.
+  SQL aggregation, same rationale as `cost_rollup!/1`.
   """
   @spec orchestrator_cost_rollup!(Ecto.UUID.t()) :: Decimal.t()
   def orchestrator_cost_rollup!(orchestrator_id) do
     AgentLog
     |> where([l], l.orchestrator_id == ^orchestrator_id)
-    |> Repo.all()
-    |> Enum.reduce(Decimal.new(0), fn log, acc -> add_cost(acc, log.usage) end)
+    |> select([l], sum(fragment("COALESCE((usage->>'cost_usd')::numeric, 0)")))
+    |> Repo.one()
+    |> to_rollup_decimal()
   end
+
+  # A SUM over zero rows is SQL NULL — normalize to Decimal-0 so every rollup
+  # keeps the pre-SQL contract (always a Decimal; callers nilify zero for "—").
+  @spec to_rollup_decimal(Decimal.t() | integer() | nil) :: Decimal.t()
+  defp to_rollup_decimal(nil), do: Decimal.new(0)
+  defp to_rollup_decimal(sum), do: Decimal.new(to_string(sum))
 
   @doc """
   Context-window occupancy of a persisted `usage` embed: the prompt side only —
@@ -712,10 +726,6 @@ defmodule RepoBuilder.Logs do
   end
 
   defp counter_key(_log), do: nil
-
-  @spec add_cost(Decimal.t(), Usage.t() | nil) :: Decimal.t()
-  defp add_cost(acc, %Usage{cost_usd: %Decimal{} = cost}), do: Decimal.add(acc, cost)
-  defp add_cost(acc, _usage), do: acc
 
   # A runtime-SYNTHESIZED `Event.Error` (idle timeout, non-zero provider exit) has
   # no `raw` wire frame, so `scrubbed.raw` is nil/empty and the diagnostic would be

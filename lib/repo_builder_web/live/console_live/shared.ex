@@ -775,20 +775,31 @@ defmodule RepoBuilderWeb.ConsoleLive.Shared do
   """
   @spec seed_workflow_progress(Socket.t()) :: Socket.t()
   def seed_workflow_progress(socket) do
-    progress =
-      Workflows.list_recent_runs(50, socket.assigns.show_hidden?)
-      |> Map.new(fn run -> {run.id, workflow_view(run)} end)
+    runs = Workflows.list_recent_runs(50, socket.assigns.show_hidden?)
+
+    # One batched lookup for every run's Workflow (title/type) — previously a
+    # per-run Repo.get, i.e. up to 50 sequential queries on every mount
+    # (console-mount-seed-optimization Phase 2 N+1 fix).
+    workflows_by_id =
+      runs
+      |> Enum.map(& &1.workflow_id)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+      |> Workflows.get_workflows_by_ids()
+
+    progress = Map.new(runs, fn run -> {run.id, workflow_view(run, workflows_by_id)} end)
 
     assign(socket, :workflow_progress, progress)
   end
 
   # Build a per-step workflow view from a run (seed/refetch path): full status + cost
   # from the row, the derived per-step progress (ordered, branching-safe), a derived
-  # duration, and a human-friendly `title` (loaded from the run's `Workflow`).
+  # duration, and a human-friendly `title` (from the pre-fetched workflows map — the
+  # seed loop batches the lookups; a per-run Repo.get here would be an N+1).
   # Inference-only spec — the concrete view map narrows below `map()` under :underspecs.
-  defp workflow_view(run) do
+  defp workflow_view(run, workflows_by_id) do
     progress = Workflows.run_progress(run)
-    workflow = run.workflow_id && Workflows.get_workflow(run.workflow_id)
+    workflow = run.workflow_id && Map.get(workflows_by_id, run.workflow_id)
 
     %{
       run_id: run.id,

@@ -62,6 +62,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
   alias RepoBuilderWeb.ConsoleLive.CostPanel
   alias RepoBuilderWeb.ConsoleLive.ExternalApisPanel
   alias RepoBuilderWeb.ConsoleLive.LogsPanel
+  alias RepoBuilderWeb.ConsoleLive.MountSeeds
   alias RepoBuilderWeb.ConsoleLive.SettingsPanel
   alias RepoBuilderWeb.ConsoleLive.Shared
   alias RepoBuilderWeb.ConsoleLive.TemplatesPanel
@@ -311,31 +312,36 @@ defmodule RepoBuilderWeb.ConsoleLive do
         max_file_size: 10_000_000
       )
 
+    # Every seed runs through MountSeeds.span/3 so its cost is individually visible
+    # ([:repo_builder, :console, :seed] telemetry → dev "[lv_perf] seed …" log lines
+    # + LiveDashboard summary; specs/console-mount-seed-optimization.html).
     socket =
       if connected?(socket) do
         socket
-        |> assign(:projects, Projects.list_projects())
-        |> assign_default_project()
-        |> load_agents()
-        |> seed_agent_costs()
-        |> Shared.seed_context_tokens()
-        |> Shared.seed_counters()
-        |> seed_lanes()
-        |> Shared.seed_workflow_progress()
-        |> Shared.seed_budget()
-        |> Shared.seed_planf3_image_policy()
+        |> MountSeeds.span(:list_projects, &assign(&1, :projects, Projects.list_projects()))
+        |> MountSeeds.span(:default_project, &assign_default_project/1)
+        |> MountSeeds.span(:load_agents, &load_agents/1)
+        |> MountSeeds.span(:agent_costs, &seed_agent_costs/1)
+        # context_tokens + counters are NOT seeded here: backfill_events owns both
+        # at its tail (it must re-derive them anyway), so seeding them in the chain
+        # ran the same two agent_logs aggregates twice per mount. Do not re-add.
+        |> MountSeeds.span(:lanes, &seed_lanes/1)
+        |> MountSeeds.span(:budget, &Shared.seed_budget/1)
+        |> MountSeeds.span(:planf3_image_policy, &Shared.seed_planf3_image_policy/1)
         # assign_orchestrator must precede backfill_events: it reads the persisted
         # display timezone into assigns, which backfill_events uses to format row times.
         # It must also precede seed_cost/seed_orchestrator_cost, which read orchestrator_id.
-        |> assign_orchestrator()
-        |> seed_cost()
-        |> seed_orchestrator_cost()
-        |> Shared.backfill_events()
+        |> MountSeeds.span(:orchestrator, &assign_orchestrator/1)
+        |> MountSeeds.span(:costs, &seed_costs/1)
         # seed_log_manager / assign_template_rows / load_external_apis are NOT called
         # here: those tabs are closed on mount, so their data is lazy-loaded on tab
         # open (SettingsPanel "select_settings_tab") instead of taxing every mount.
-        |> Shared.seed_definitions()
-        |> subscribe_feeds()
+        |> MountSeeds.span(:definitions, &Shared.seed_definitions/1)
+        |> MountSeeds.span(:subscribe_feeds, &subscribe_feeds/1)
+        # Deferred hydration (Phase 3): backfill_events + seed_workflow_progress run
+        # in handle_info(:seed_history) AFTER the first paint. Sent after
+        # subscribe_feeds so no live event can precede the subscription.
+        |> tap(fn _ -> send(self(), :seed_history) end)
         |> tap(fn _ -> PiModels.refresh_async() end)
       else
         socket
@@ -384,8 +390,7 @@ defmodule RepoBuilderWeb.ConsoleLive do
         |> Shared.assign_orchestrator_selection(orchestrator)
         |> refresh_definitions_for()
         |> resubscribe_orchestrator_queue(previous_id, orchestrator.id)
-        |> seed_cost()
-        |> seed_orchestrator_cost()
+        |> seed_costs()
         |> Shared.backfill_events()
 
       {:error, _reason} ->
@@ -562,27 +567,30 @@ defmodule RepoBuilderWeb.ConsoleLive do
     }
   end
 
-  # The header grand total = Σ worker-own spend + the orchestrator's OWN spend. The
-  # orchestrator term was previously omitted, so a reconnect under-counted by the
-  # orchestrator's own turns until new live events arrived.
-  @spec seed_cost(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  defp seed_cost(socket) do
-    workers =
-      Enum.reduce(socket.assigns.agents, nil, fn agent, acc ->
-        accumulate_cost(acc, Logs.cost_rollup!(agent.id))
-      end)
+  # The header grand total = Σ worker-own spend + the orchestrator's OWN spend, and
+  # the ORCHESTRATOR panel badge = that own spend alone. One seed computes both so
+  # the orchestrator rollup runs ONCE (it previously ran twice: seed_cost +
+  # seed_orchestrator_cost) and the worker side is one batched GROUP BY instead of
+  # one full rollup query per agent (console-mount-seed-optimization Phase 2).
+  @spec seed_costs(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp seed_costs(socket) do
+    own = orchestrator_own_cost(socket)
 
-    cost = accumulate_cost(workers, orchestrator_own_cost(socket))
-    assign(socket, :cost, nilify_acc(cost))
+    workers =
+      socket.assigns.agents
+      |> Enum.map(& &1.id)
+      |> Logs.cost_rollup_for_agents!()
+      |> Map.values()
+      |> Enum.reduce(nil, &accumulate_cost(&2, &1))
+
+    socket
+    |> assign(:cost, nilify_acc(accumulate_cost(workers, own)))
+    |> assign(:orchestrator_cost, nilify_acc(own))
   end
 
   # The orchestrator's OWN spend (`agent_logs` keyed by `orchestrator_id`, not
   # `agent_id`) — disjoint from the worker rollups, distinct from the whole-tree budget
   # scope. Feeds the ORCHESTRATOR panel badge so the three badges reconcile.
-  @spec seed_orchestrator_cost(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  defp seed_orchestrator_cost(socket) do
-    assign(socket, :orchestrator_cost, nilify_acc(orchestrator_own_cost(socket)))
-  end
 
   @spec orchestrator_own_cost(Phoenix.LiveView.Socket.t()) :: Decimal.t() | nil
   defp orchestrator_own_cost(socket) do
@@ -928,6 +936,24 @@ defmodule RepoBuilderWeb.ConsoleLive do
   end
 
   # --- event / lane handlers (one clause per canonical variant) ---
+
+  # Deferred post-paint hydration (console-mount-seed-optimization Phase 3): the
+  # connected mount paints the shell and sends itself :seed_history; this fills the
+  # center stream + chat pane + workflow swimlane right after the first diff.
+  # backfill_events ends in `stream(:events, rows, reset: true)`, so this late
+  # backfill is authoritative — any rows a live event appended in the mount→here
+  # gap are replaced by the persisted history (which re-includes them once the
+  # async Logs.Writer insert lands; an unpersisted in-gap shard may drop from the
+  # center stream only — the accepted race in the plan's Questionables).
+  @impl true
+  def handle_info(:seed_history, socket) do
+    socket =
+      socket
+      |> MountSeeds.span(:backfill_events, &Shared.backfill_events/1)
+      |> MountSeeds.span(:workflow_progress, &Shared.seed_workflow_progress/1)
+
+    {:noreply, socket}
+  end
 
   # Ephemeral explain result (issue-explain): ignore a superseded request (a second
   # EXPLAIN issued while one was running); otherwise flip the modal to its result.

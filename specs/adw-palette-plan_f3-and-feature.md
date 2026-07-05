@@ -1,9 +1,10 @@
 ---
 title: "ADW Builder palette — surface `plan_f3` and `feature` as first-class distinct steps"
-status: draft
+status: complete
 owner: spec-writer
 date: 2026-07-04
 workstream_id: fd07b677-b53f-4923-b09b-14dcdbe330db
+completed: 2026-07-05
 ---
 
 # Goal
