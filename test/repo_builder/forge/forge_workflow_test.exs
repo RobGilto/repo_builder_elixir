@@ -11,7 +11,9 @@ defmodule RepoBuilder.Forge.WorkflowTest do
 
   alias RepoBuilder.Forge
   alias RepoBuilder.Forge.Workflow
+  alias RepoBuilder.Orchestrator.DesignResolver
   alias RepoBuilder.Plugins
+  alias RepoBuilder.Plugins.DesignSystem
   alias RepoBuilder.Projects
 
   @valid_command """
@@ -33,6 +35,8 @@ defmodule RepoBuilder.Forge.WorkflowTest do
 
   Output the result.
   """
+
+  @valid_design_system ~s({"surface":"web","stack":"elixir","framework":"phoenix","paradigm":"none","tokens":{"accent":"one accent; no purple gradient"},"components":[{"name":"input","tag":"<.input>","package":"core_components","when_to_use":"every form field"}],"rules":["Reach for an existing component tag before hand-rolling markup."],"references":["lib/repo_builder_web/components/core_components.ex"]})
 
   setup do
     uniq = System.unique_integer([:positive])
@@ -107,6 +111,63 @@ defmodule RepoBuilder.Forge.WorkflowTest do
     assert Plugins.installed?("smoke-test")
     assert Plugins.active?(project.id, "smoke-test")
     refute Plugins.active?(other.id, "smoke-test")
+  end
+
+  test "a valid design system is validated, packaged, installed, and resolves for its project",
+       %{counter: counter} do
+    {:ok, project} =
+      Projects.create_project(%{
+        name: "forge-ds-#{System.unique_integer([:positive])}",
+        root_path: "/tmp/forge-ds-#{System.unique_integer([:positive])}",
+        stack: %{"language" => "elixir", "surface" => "web", "framework" => "phoenix"}
+      })
+
+    {:ok, artifact} =
+      Forge.request(%{
+        kind: "design_system",
+        spec: "phoenix design system",
+        project_id: project.id
+      })
+
+    runner =
+      canned_runner(counter, [
+        %{path: "design/web-phoenix.json", content: @valid_design_system}
+      ])
+
+    assert {:ok, final} = Workflow.run(artifact, generate_runner: runner)
+    assert final.status == :installed
+    # id derived from the descriptor's surface-framework.
+    assert final.plugin_id == "web-phoenix"
+    assert Agent.get(counter, & &1) == 1
+
+    # The forged descriptor parses through the strict boundary and is wired: an active
+    # :design_system plugin makes the resolver source the design system from the plugin.
+    assert Plugins.installed?("web-phoenix")
+    assert Plugins.active?(project.id, "web-phoenix")
+    assert {:ok, resolved} = DesignResolver.resolve(project)
+    assert resolved.source == :plugin
+    assert %DesignSystem{framework: "phoenix"} = resolved.descriptor
+  end
+
+  test "a malformed design system is rejected by validation (never installed)", %{
+    counter: counter
+  } do
+    {:ok, artifact} = Forge.request(%{kind: "design_system", spec: "a broken design system"})
+    # Unknown surface → DesignSystem.parse returns {:error, :unknown_surface}.
+    bad = [
+      %{
+        path: "design/broken.json",
+        content: ~s({"surface":"holographic","stack":"x","framework":"y"})
+      }
+    ]
+
+    runner = canned_runner(counter, bad)
+
+    assert {:ok, final} = Workflow.run(artifact, generate_runner: runner)
+    assert final.status == :failed
+    assert final.error["reason"] =~ "validation"
+    # initial attempt + one retry (config max_retries: 1).
+    assert Agent.get(counter, & &1) == 2
   end
 
   test "a malformed generation retries then fails cleanly", %{counter: counter} do

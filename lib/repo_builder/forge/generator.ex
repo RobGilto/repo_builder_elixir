@@ -8,15 +8,16 @@ defmodule RepoBuilder.Forge.Generator do
   Adding a generator kind is a deliberate edit here (a new extension point); the open
   side is the natural-language `spec` an operator forges with.
 
-      :command  → command_pack    (.claude/commands/<name>.md)
-      :agent    → agent_template  (.claude/agents/<name>.md)
-      :skill    → skill           (skills/<name>/SKILL.md)
-      :workflow → workflow_type    (workflows/<slug>.json)
+      :command       → command_pack    (.claude/commands/<name>.md)
+      :agent         → agent_template  (.claude/agents/<name>.md)
+      :skill         → skill           (skills/<name>/SKILL.md)
+      :workflow      → workflow_type    (workflows/<slug>.json)
+      :design_system → design_system   (design/<surface>-<framework>.json)
   """
   alias RepoBuilder.Forge.Generator.Def
 
   @typedoc "The closed set of generator kinds (open spec, closed contract)."
-  @type kind :: :command | :agent | :skill | :workflow
+  @type kind :: :command | :agent | :skill | :workflow | :design_system
 
   @type def_t :: Def.t()
 
@@ -46,6 +47,12 @@ defmodule RepoBuilder.Forge.Generator do
       template: "workflow.md",
       contribution_kind: :workflow_type,
       asset_subdir: "workflows"
+    },
+    design_system: %Def{
+      kind: :design_system,
+      template: "design_system.md",
+      contribution_kind: :design_system,
+      asset_subdir: "design"
     }
   }
 

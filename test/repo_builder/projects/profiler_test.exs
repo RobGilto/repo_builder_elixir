@@ -84,4 +84,58 @@ defmodule RepoBuilder.Projects.ProfilerTest do
     assert profile.stack["language"] == "unknown"
     assert profile.claude_commands == []
   end
+
+  describe "UI surface + framework detection (design-system-plugins)" do
+    test "a Phoenix mix.exs → web/phoenix", %{base: base} do
+      root = mkrepo(base, "phx", [{"mix.exs", ~s(defp deps, do: [{:phoenix, "~> 1.8"}])}])
+      profile = Profiler.profile(root)
+      assert profile.stack["surface"] == "web"
+      assert profile.stack["framework"] == "phoenix"
+    end
+
+    test "a Ratatouille mix.exs → tui/ratatouille (TUI dep pins the surface)", %{base: base} do
+      root = mkrepo(base, "rat", [{"mix.exs", ~s(defp deps, do: [{:ratatouille, "~> 0.5"}])}])
+      profile = Profiler.profile(root)
+      assert profile.stack["surface"] == "tui"
+      assert profile.stack["framework"] == "ratatouille"
+    end
+
+    test "a React package.json → web/react", %{base: base} do
+      root = mkrepo(base, "react", [{"package.json", ~s({"dependencies":{"react":"^19"}})}])
+      profile = Profiler.profile(root)
+      assert profile.stack["surface"] == "web"
+      assert profile.stack["framework"] == "react"
+    end
+
+    test "an Ink package.json → tui/ink", %{base: base} do
+      root = mkrepo(base, "ink", [{"package.json", ~s({"dependencies":{"ink":"^5"}})}])
+      profile = Profiler.profile(root)
+      assert profile.stack["surface"] == "tui"
+      assert profile.stack["framework"] == "ink"
+    end
+
+    test "a bubbletea go.mod → tui/bubbletea", %{base: base} do
+      root =
+        mkrepo(base, "bt", [
+          {"go.mod", "module x\n\nrequire github.com/charmbracelet/bubbletea v1.2.0\n"}
+        ])
+
+      profile = Profiler.profile(root)
+      assert profile.stack["surface"] == "tui"
+      assert profile.stack["framework"] == "bubbletea"
+    end
+
+    test "a plain elixir repo with no UI dep → surface none", %{base: base} do
+      root = mkrepo(base, "plain", [{"mix.exs", "defmodule X.MixProject do end"}])
+      profile = Profiler.profile(root)
+      assert profile.stack["surface"] == "none"
+      assert profile.stack["framework"] == "none"
+    end
+
+    test "a bare directory → surface none", %{base: base} do
+      root = mkrepo(base, "bare2", [])
+      profile = Profiler.profile(root)
+      assert profile.stack["surface"] == "none"
+    end
+  end
 end

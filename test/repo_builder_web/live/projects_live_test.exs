@@ -51,6 +51,22 @@ defmodule RepoBuilderWeb.ProjectsLiveTest do
     assert html =~ "elixir@1.0.0"
   end
 
+  test "the dashboard renders the resolved design system with its source badge", %{conn: conn} do
+    {:ok, project} =
+      Projects.create_project(%{
+        "name" => "ds-show-#{System.unique_integer([:positive])}",
+        "root_path" => "/tmp/ds-show",
+        "stack" => %{"language" => "elixir", "surface" => "web", "framework" => "phoenix"}
+      })
+
+    {:ok, view, html} = live(conn, ~p"/projects/#{project.id}")
+
+    assert html =~ "Design system"
+    assert has_element?(view, "#project-design-system")
+    assert html =~ "web-phoenix"
+    assert html =~ "builtin"
+  end
+
   test "the command-pack picker pins a pack and re-resolves", %{conn: conn} do
     root = fixture_repo()
     {:ok, project} = Projects.create_and_profile(%{"name" => "pin", "root_path" => root})

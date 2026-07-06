@@ -36,6 +36,7 @@ defmodule RepoBuilder.Orchestrator.Tools.AgentOps do
   alias RepoBuilder.Harness.ModelResolver
   alias RepoBuilder.Logs
   alias RepoBuilder.Orchestrator.Breaker
+  alias RepoBuilder.Orchestrator.DesignContract
   alias RepoBuilder.Orchestrator.Queue
   alias RepoBuilder.Orchestrator.Template
   alias RepoBuilder.Orchestrator.Templates
@@ -78,6 +79,7 @@ defmodule RepoBuilder.Orchestrator.Tools.AgentOps do
           args["system_prompt"]
           |> blank_to_nil()
           |> prepend_api_instructions(apis)
+          |> prepend_design_contract(project_id)
           |> prepend_stack_contract(project_id)
           |> with_reporting_clause(),
         # The worker's `provider` column is a closed enum that can't hold pi's open
@@ -602,6 +604,19 @@ defmodule RepoBuilder.Orchestrator.Tools.AgentOps do
   @spec prepend_stack_contract(String.t() | nil, Ecto.UUID.t() | nil) :: String.t() | nil
   defp prepend_stack_contract(prompt, project_id) do
     case StackLayers.Contract.render(project_id) do
+      "" -> prompt
+      contract when is_binary(prompt) -> contract <> "\n\n" <> prompt
+      contract -> contract
+    end
+  end
+
+  # Fold the project's design contract (design-system subsystem) onto the front of a UI
+  # worker's charter so the component vocabulary + tokens + paradigm lead. Sits BETWEEN the
+  # stack contract and the task body (stack → design → task). Empty for non-UI projects
+  # (generic base) ⇒ the prompt is unchanged (back-compatible).
+  @spec prepend_design_contract(String.t() | nil, Ecto.UUID.t() | nil) :: String.t() | nil
+  defp prepend_design_contract(prompt, project_id) do
+    case DesignContract.render(project_id) do
       "" -> prompt
       contract when is_binary(prompt) -> contract <> "\n\n" <> prompt
       contract -> contract

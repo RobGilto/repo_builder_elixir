@@ -921,6 +921,31 @@
     }
   },
   {
+    "name": "resolve_design_system",
+    "description": "Resolve the bound project's active DESIGN SYSTEM (design-system-plugins) — the stack-aware component vocabulary a UI worker builds within, for its detected surface (web/TUI) and framework (Phoenix, React, Ink, Bubble Tea, Ratatui, Textual, Ratatouille, …). Returns the design `tokens`, the ordered `components` inventory (each a real tag/package + when-to-use + example), the `rules` (do/don't + the anti-AI-slop bias + per-framework code-gen rules), and the `paradigm` (immediate/mvu/retained) that dictates how much scaffolding a full app needs. Call it before building or reviewing any UI so output follows a known system instead of regressing to generic markup — a compact version already leads the worker's charter; this returns the FULL inventory + examples. Narrow with `section` (tokens/components/rules/references) or `component` (one component by name). Resolution precedence: an active :design_system plugin → the builtin for the surface/framework → the language's default TUI framework → generic.",
+    "summary": "Resolve this project's active design system: tokens + component inventory + rules + paradigm for its detected UI surface/framework (see Design system).",
+    "input_schema": {
+      "properties": {
+        "component": {
+          "description": "Optional: filter the component inventory to those whose name contains this string.",
+          "type": "string"
+        },
+        "section": {
+          "description": "Optional: return only this slice of the descriptor instead of the whole thing.",
+          "enum": [
+            "tokens",
+            "components",
+            "rules",
+            "references"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    }
+  },
+  {
     "name": "compact_self",
     "description": "Compact your OWN context window. Your workstreams are durable external memory, so compacting is SAFE — the platform reseeds the next turn with your `list_workstreams` index (rehydrate-on-resume) and you wake re-oriented. Use it when `report_cost` shows high context usage instead of degrading or stalling. Returns once compaction is scheduled; in-flight workers keep running and return by workstream.",
     "summary": "Compact your OWN context window — safe because workstreams are durable (see Durable memory).",

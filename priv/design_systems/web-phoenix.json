@@ -1,0 +1,33 @@
+{
+  "surface": "web",
+  "stack": "elixir",
+  "framework": "phoenix",
+  "paradigm": "none",
+  "tokens": {
+    "styling": "Tailwind v4 utility classes + the app's design tokens; extract repeated clusters to function components",
+    "accent": "one theme accent + neutral ramp; AA contrast; no purple-gradient default",
+    "icons": "always the core_components <.icon name=\"hero-...\"> component; never Heroicons modules",
+    "spacing": "4/8px grid via Tailwind spacing scale"
+  },
+  "components": [
+    { "name": "input", "tag": "<.input>", "package": "core_components", "when_to_use": "every form field; drives errors + labels", "example": "<.input field={@form[:email]} type=\"email\" label=\"Email\" />" },
+    { "name": "button", "tag": "<.button>", "package": "core_components", "when_to_use": "one primary action per view; secondary/tertiary otherwise" },
+    { "name": "table", "tag": "<.table>", "package": "core_components", "when_to_use": "tabular data with row streams" },
+    { "name": "icon", "tag": "<.icon>", "package": "core_components", "when_to_use": "any icon; hero-* names only", "example": "<.icon name=\"hero-x-mark\" class=\"w-5 h-5\" />" },
+    { "name": "app layout", "tag": "<Layouts.app>", "package": "core_components", "when_to_use": "wrap every LiveView template's inner content", "example": "<Layouts.app flash={@flash} current_scope={@current_scope}>...</Layouts.app>" },
+    { "name": "form", "tag": "<.form>", "package": "phoenix_component", "when_to_use": "always via to_form/2; give it a unique DOM id", "example": "<.form for={@form} id=\"user-form\" phx-submit=\"save\">" }
+  ],
+  "rules": [
+    "Reach for an existing core_components tag before hand-rolling HEEx/Tailwind.",
+    "Begin every LiveView template with <Layouts.app flash={@flash} ...>; never call <.flash_group> outside layouts.ex.",
+    "Forms are always driven by a to_form/2 assign and the <.input> component; never access a changeset in the template.",
+    "Use LiveView streams for collections (flat memory); set phx-update=\"stream\" + a DOM id on the parent and each child.",
+    "Petal Components or daisyUI (both HEEx, Tailwind v4) are the sanctioned richer libraries when core_components is insufficient; hand-write bespoke components for a unique look rather than pulling a JSX generator (HEEx is not JSX).",
+    "Follow the ui-ux-foundations rubric: hierarchy, AA contrast, visible focus, and none of the AI-slop tells."
+  ],
+  "references": [
+    "lib/repo_builder_web/components/core_components.ex",
+    "plugin_library/ui-ux-mvp/skills/web-ui-polish/SKILL.md",
+    "plugin_library/ui-ux-mvp/skills/ui-ux-foundations/SKILL.md"
+  ]
+}

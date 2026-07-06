@@ -858,6 +858,42 @@ defmodule RepoBuilder.Orchestrator.ToolCatalog do
         }
       },
       %{
+        name: "resolve_design_system",
+        summary:
+          "Resolve this project's active design system: tokens + component inventory + rules + paradigm for its detected UI surface/framework (see Design system).",
+        description:
+          "Resolve the bound project's active DESIGN SYSTEM (design-system-plugins) — the " <>
+            "stack-aware component vocabulary a UI worker builds within, for its detected surface " <>
+            "(web/TUI) and framework (Phoenix, React, Ink, Bubble Tea, Ratatui, Textual, " <>
+            "Ratatouille, …). Returns the design `tokens`, the ordered `components` inventory " <>
+            "(each a real tag/package + when-to-use + example), the `rules` (do/don't + the " <>
+            "anti-AI-slop bias + per-framework code-gen rules), and the `paradigm` " <>
+            "(immediate/mvu/retained) that dictates how much scaffolding a full app needs. Call " <>
+            "it before building or reviewing any UI so output follows a known system instead of " <>
+            "regressing to generic markup — a compact version already leads the worker's charter; " <>
+            "this returns the FULL inventory + examples. Narrow with `section` (tokens/components/" <>
+            "rules/references) or `component` (one component by name). Resolution precedence: an " <>
+            "active :design_system plugin → the builtin for the surface/framework → the language's " <>
+            "default TUI framework → generic.",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "section" => %{
+              "type" => "string",
+              "enum" => ["tokens", "components", "rules", "references"],
+              "description" =>
+                "Optional: return only this slice of the descriptor instead of the whole thing."
+            },
+            "component" => %{
+              "type" => "string",
+              "description" =>
+                "Optional: filter the component inventory to those whose name contains this string."
+            }
+          },
+          "required" => []
+        }
+      },
+      %{
         name: "compact_self",
         summary:
           "Compact your OWN context window — safe because workstreams are durable (see Durable memory).",

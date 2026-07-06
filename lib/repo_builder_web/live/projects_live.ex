@@ -13,6 +13,7 @@ defmodule RepoBuilderWeb.ProjectsLive do
   alias RepoBuilder.Commands
   alias RepoBuilder.FileBrowser
   alias RepoBuilder.Harness.Registry
+  alias RepoBuilder.Orchestrator.DesignResolver
   alias RepoBuilder.Orchestrators
   alias RepoBuilder.Projects
   alias RepoBuilder.Projects.Worktree
@@ -55,6 +56,7 @@ defmodule RepoBuilderWeb.ProjectsLive do
       |> assign(secrets: Secrets.list_names(project.id))
       |> assign(secret_form: %{"name" => "", "value" => ""})
       |> assign(orchestrator: orchestrator, model_rows: model_rows(orchestrator))
+      |> assign(design_system: resolve_design(project))
       |> assign_stack_layers(project.id)
       # Worktree inventory shells out to git per entry — load it async so the show
       # page's first paint never blocks on it (console-mount-perf discipline).
@@ -621,6 +623,37 @@ defmodule RepoBuilderWeb.ProjectsLive do
           </div>
         </div>
 
+        <div class="rounded border border-zinc-700 p-4 space-y-2">
+          <div>
+            <h3 class="font-semibold">Design system</h3>
+            <p class="text-xs text-zinc-500">
+              The UI component vocabulary + tokens injected into every UI worker's charter,
+              resolved from the detected surface/framework. A builtin ships per framework; an
+              active design-system plugin overrides it.
+            </p>
+          </div>
+          <div :if={@design_system} id="project-design-system" class="text-sm space-y-1">
+            <div>
+              <span class="font-mono">{@design_system.name}</span>
+              <span class="ml-2 rounded bg-zinc-800 px-2 py-0.5 text-xs text-zinc-300">
+                {to_string(@design_system.source)}
+              </span>
+            </div>
+            <div class="text-xs text-zinc-400">
+              surface: {to_string(@design_system.descriptor.surface)} · framework: {@design_system.descriptor.framework} · paradigm: {to_string(
+                @design_system.descriptor.paradigm
+              )}
+            </div>
+          </div>
+          <p
+            :if={is_nil(@design_system)}
+            id="project-design-system-empty"
+            class="text-xs text-zinc-500"
+          >
+            No design system resolved.
+          </p>
+        </div>
+
         <div class="rounded border border-zinc-700 p-4 space-y-3">
           <div>
             <h3 class="font-semibold">Secrets</h3>
@@ -823,6 +856,16 @@ defmodule RepoBuilderWeb.ProjectsLive do
   defp pack_ids do
     packs = Commands.list_packs() |> Enum.map(& &1.id) |> Enum.uniq()
     Enum.uniq(["auto" | Enum.sort(packs)])
+  end
+
+  # The resolved design system for the show page's read-only card (design-system-plugins).
+  # `nil` only when even the generic builtin is missing.
+  @spec resolve_design(Projects.Project.t()) :: DesignResolver.t() | nil
+  defp resolve_design(project) do
+    case DesignResolver.resolve(project) do
+      {:ok, resolved} -> resolved
+      {:error, :none} -> nil
+    end
   end
 
   # Stack-layers card assigns (stack-layers subsystem): the per-type catalog options, the

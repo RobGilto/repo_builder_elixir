@@ -31,6 +31,7 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
   alias RepoBuilder.Harness.Registry
 
   alias RepoBuilder.Orchestrator.{
+    DesignContract,
     Orchestrator,
     Reflections,
     SurfaceDetector,
@@ -87,6 +88,7 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
     #{working_dir_block(orchestrator)}
     #{project_primer_block(orchestrator)}
     #{project_stack_block(orchestrator)}
+    #{project_design_block(orchestrator)}
     #{project_secrets_block(orchestrator)}
     #{registered_apis_block(orchestrator)}
 
@@ -325,6 +327,17 @@ defmodule RepoBuilder.Orchestrator.SystemPrompt do
   defp project_stack_block(%Orchestrator{} = orchestrator) do
     case resolve_project(orchestrator) do
       %Projects.Project{} = project -> Contract.render(project.id)
+      _no_project -> ""
+    end
+  end
+
+  # Inject the active project's design contract (design-system subsystem) so the
+  # orchestrator frames UI tasks with the resolved component vocabulary + tokens. Same
+  # back-compat contract: no project / non-UI project (generic base) ⇒ "" (prompt unchanged).
+  @spec project_design_block(Orchestrator.t()) :: String.t()
+  defp project_design_block(%Orchestrator{} = orchestrator) do
+    case resolve_project(orchestrator) do
+      %Projects.Project{} = project -> DesignContract.render(project.id)
       _no_project -> ""
     end
   end

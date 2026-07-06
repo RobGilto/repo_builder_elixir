@@ -1,0 +1,25 @@
+{
+  "surface": "any",
+  "stack": "generic",
+  "framework": "generic",
+  "paradigm": "none",
+  "tokens": {
+    "accent": "one accent color only; never a purple/violet gradient as the default",
+    "neutral_ramp": "a single neutral ramp (e.g. slate 50..900) for surfaces and text",
+    "spacing": "a 4/8px modular grid; never hand-pick arbitrary margins",
+    "type_scale": "~1.25 ratio, cap ~4 sizes in normal use; 1-2 font families",
+    "radius": "small/medium radii only; no heavy soft drop-shadows on everything",
+    "contrast": "meet WCAG AA (4.5:1 body, 3:1 large text/UI boundaries)"
+  },
+  "components": [],
+  "rules": [
+    "Establish a clear visual hierarchy: exactly one primary action per view.",
+    "Restrained palette: 1 accent + a neutral ramp; never encode meaning by color alone.",
+    "Visible focus rings on every interactive element; full keyboard operability.",
+    "Reject the AI-slop tells: purple gradients, oversized shadowed cards, the generic centered-hero + three-feature-cards layout, emoji-as-icons, dead-end navigation.",
+    "A 'decent MVP' passes the ui-ux-foundations rubric, not pixel-perfection."
+  ],
+  "references": [
+    "plugin_library/ui-ux-mvp/skills/ui-ux-foundations/SKILL.md"
+  ]
+}

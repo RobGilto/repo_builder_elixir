@@ -28,13 +28,21 @@ defmodule RepoBuilder.Forge.GeneratorsPresentTest do
       "## Report"
     ],
     "skill.md" => ["{{PROJECT_CONTEXT}}", "{{SPEC}}", "gerund", "THIRD PERSON", "< 500 lines"],
-    "workflow.md" => ["{{PROJECT_CONTEXT}}", "{{SPEC}}", "on_success", "on_failure", "slug"]
+    "workflow.md" => ["{{PROJECT_CONTEXT}}", "{{SPEC}}", "on_success", "on_failure", "slug"],
+    "design_system.md" => [
+      "{{PROJECT_CONTEXT}}",
+      "{{SPEC}}",
+      "surface",
+      "framework",
+      "paradigm",
+      "components"
+    ]
   }
 
   @spec dir() :: String.t()
   defp dir, do: Path.expand(@generators_dir, File.cwd!())
 
-  test "all four generator templates exist with their required markers" do
+  test "all five generator templates exist with their required markers" do
     for {file, markers} <- @required do
       path = Path.join(dir(), file)
       assert File.exists?(path), "missing generator template: #{path}"

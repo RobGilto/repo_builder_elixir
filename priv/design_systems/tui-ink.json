@@ -1,0 +1,29 @@
+{
+  "surface": "tui",
+  "stack": "node",
+  "framework": "ink",
+  "paradigm": "retained",
+  "tokens": {
+    "styling": "flexbox props on <Box> (Yoga layout) + inline color/dimColor on <Text>; a restrained accent",
+    "layout": "flex containers with borderStyle/padding; size scroll viewports via measureElement"
+  },
+  "components": [
+    { "name": "Box", "tag": "<Box>", "package": "ink", "when_to_use": "flex container, borders, spacing" },
+    { "name": "Text", "tag": "<Text>", "package": "ink", "when_to_use": "all visible text + inline style" },
+    { "name": "Static", "tag": "<Static>", "package": "ink", "when_to_use": "append-only output (logs/chat) that must never re-render" },
+    { "name": "TextInput", "tag": "<TextInput>", "package": "@inkjs/ui", "when_to_use": "single-line input (also EmailInput/PasswordInput/ConfirmInput)" },
+    { "name": "Select / MultiSelect", "tag": "<Select>", "package": "@inkjs/ui", "when_to_use": "single/multi choice menus" },
+    { "name": "Spinner / ProgressBar", "tag": "<Spinner>", "package": "@inkjs/ui", "when_to_use": "indeterminate/determinate progress" }
+  ],
+  "rules": [
+    "Default widgets to @inkjs/ui — never the stale standalone ink-* packages (ink-progress-bar 2019, ink-multi-select 2020, ink-table 2023 predate ink@6/7).",
+    "Put append-only output in <Static> and memoize hot subtrees — Ink has a repaint ceiling (~30 FPS) and laggs on high-frequency streaming/large live tables.",
+    "Guard useInput with a raw-mode TTY check (isRawModeSupported); never console.log into the managed region — use <Static> or useStdout().write.",
+    "If you hit Ink's ceiling (high perf, large scroll buffers, code/diff views, 3D, SSH), OpenTUI is the successor; otherwise stay on Ink for Node-first stability.",
+    "Never scaffold abandoned TUI libs (blessed/neo-blessed/blessed-contrib)."
+  ],
+  "references": [
+    "specs/tui-framework-decision-reference.md#21-ink--jsts-react-for-the-terminal",
+    "plugin_library/ui-ux-mvp/skills/tui-ux-polish/SKILL.md"
+  ]
+}

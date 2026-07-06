@@ -1,0 +1,30 @@
+{
+  "surface": "tui",
+  "stack": "rust",
+  "framework": "ratatui",
+  "paradigm": "immediate",
+  "tokens": {
+    "styling": "Style (fg/bg/Modifier) + the Stylize trait (\"x\".red().bold().on_blue()); Span -> Line -> Text; ratatui-macros for span!/line!/text!",
+    "layout": "Cassowary constraint solver: Layout::new(dir, [Constraint...]).split(area); Length/Percentage/Ratio/Min/Max/Fill; Flex for leftover space; recomputed every draw"
+  },
+  "components": [
+    { "name": "Block", "tag": "Block", "package": "ratatui::widgets", "when_to_use": "borders/titles — wrap almost every widget" },
+    { "name": "List", "tag": "List + ListState", "package": "ratatui::widgets", "when_to_use": "selectable list (StatefulWidget — own the ListState)" },
+    { "name": "Table", "tag": "Table + TableState", "package": "ratatui::widgets", "when_to_use": "tabular data (StatefulWidget)" },
+    { "name": "Paragraph", "tag": "Paragraph", "package": "ratatui::widgets", "when_to_use": "wrapped/scrolled text" },
+    { "name": "Clear", "tag": "Clear", "package": "ratatui::widgets", "when_to_use": "blank a Rect to render popups/modals over content" },
+    { "name": "input / editor / tree", "tag": "tui-input / tui-textarea / tui-tree-widget", "package": "crates.io", "when_to_use": "single-line input, multi-line editor, tree — core deliberately omits these" }
+  ],
+  "rules": [
+    "Immediate-mode: YOU own the loop and state. Generate the full harness — raw mode, alt screen, terminal.draw each frame, event loop, quit.",
+    "Restore the terminal on panic: ratatui::init()/restore() + color-eyre panic hook (near-mandatory) — else a crash leaves the terminal broken.",
+    "Store ListState/TableState/ScrollbarState in the app struct (not per-frame) — creating fresh state each frame resets selection/scroll.",
+    "On Windows filter KeyEventKind::Press (double events). Async = tokio + EventStream + mpsc/select! into one loop; never block draw.",
+    "Ratatui is pre-1.0 (0.x breaks on minor) — pin the exact version. Want Elm structure over it -> tui-realm.",
+    "Never scaffold tui-rs (dead — Ratatui is its successor)."
+  ],
+  "references": [
+    "specs/tui-framework-decision-reference.md#23-ratatui--rust-immediate-mode",
+    "plugin_library/ui-ux-mvp/skills/tui-ux-polish/SKILL.md"
+  ]
+}

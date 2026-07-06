@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plan: Stack-Aware Design System &amp; Component Inventory</title>
+<style>
+  :root{
+    /* Synced visual identity — professional, focused, minimal.
+       Deliberately avoids the anti-AI-slop palette this plan itself polices:
+       one calm teal accent over a slate neutral ramp, no purple gradients,
+       no heavy drop-shadows. The plan dogfoods the design language it ships. */
+    --accent:#0e7c86;         /* deep teal — the single accent */
+    --accent-soft:#0e7c8615;  /* accent tint for surfaces */
+    --accent-line:#0e7c8640;
+    --ink:#0f172a;            /* primary text */
+    --muted:#475569;          /* secondary text */
+    --faint:#94a3b8;          /* tertiary / metadata */
+    --bg:#f7f8fa;             /* page */
+    --surface:#ffffff;        /* cards */
+    --line:#e2e8f0;           /* hairlines */
+    --ok:#0e7c86;
+    --warn:#b45309;
+    --fail:#b91c1c;
+    --wip:#0891a3;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --maxw:900px;
+    --step-0:1rem; --step-1:1.25rem; --step-2:1.5625rem; --step-3:1.953rem; --step-4:2.44rem;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    font-size:var(--step-0);line-height:1.6;-webkit-font-smoothing:antialiased}
+  main{max-width:var(--maxw);margin:0 auto;padding:3rem 1.5rem 6rem}
+  h1{font-size:var(--step-4);line-height:1.15;letter-spacing:-.02em;margin:0 0 .5rem}
+  h2{font-size:var(--step-3);line-height:1.2;letter-spacing:-.015em;margin:3rem 0 1rem;
+    padding-bottom:.4rem;border-bottom:2px solid var(--line)}
+  h3{font-size:var(--step-1);line-height:1.3;margin:1.75rem 0 .5rem}
+  h4{font-size:var(--step-0);text-transform:uppercase;letter-spacing:.06em;
+    color:var(--muted);margin:1.25rem 0 .4rem}
+  p{margin:.6rem 0}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{font-family:var(--mono);font-size:.86em;background:var(--accent-soft);
+    color:var(--ink);padding:.1em .4em;border-radius:5px;border:1px solid var(--accent-line)}
+  pre{background:#0f172a;color:#e2e8f0;padding:1.1rem 1.25rem;border-radius:8px;
+    overflow-x:auto;font-family:var(--mono);font-size:.82rem;line-height:1.55;margin:1rem 0}
+  pre code{background:none;border:none;color:inherit;padding:0}
+  header{border-bottom:1px solid var(--line);padding-bottom:1.5rem}
+  .lede{font-size:var(--step-1);color:var(--muted);line-height:1.5;margin:.75rem 0 0;max-width:62ch}
+  details.meta{margin-top:1.25rem;font-size:.9rem}
+  details.meta summary{cursor:pointer;color:var(--accent);font-weight:600;
+    text-transform:uppercase;letter-spacing:.06em;font-size:.78rem}
+  dl{display:grid;grid-template-columns:auto 1fr;gap:.3rem 1rem;margin:.9rem 0 0}
+  dl dt{color:var(--faint);font-family:var(--mono);font-size:.78rem;text-transform:uppercase;letter-spacing:.04em}
+  dl dd{margin:0;font-family:var(--mono);font-size:.8rem;color:var(--muted);word-break:break-word}
+  figure{margin:1.5rem 0;text-align:center}
+  figure img{max-width:100%;height:auto;border-radius:10px;border:1px solid var(--line);display:block;margin:0 auto}
+  figcaption{color:var(--faint);font-size:.85rem;margin-top:.6rem;font-style:italic}
+  section{scroll-margin-top:2rem}
+  .files ul{list-style:none;padding:0;margin:.5rem 0}
+  .files li{padding:.5rem 0;border-bottom:1px solid var(--line);font-size:.94rem}
+  .tag{display:inline-block;font-family:var(--mono);font-size:.66rem;text-transform:uppercase;
+    letter-spacing:.05em;padding:.12em .5em;border-radius:4px;margin-right:.5rem;vertical-align:middle}
+  .tag.existing{background:#e2e8f0;color:var(--muted)}
+  .tag.new{background:var(--accent);color:#fff}
+  .phase{background:var(--surface);border:1px solid var(--line);border-radius:12px;
+    padding:1.25rem 1.5rem;margin:1.25rem 0}
+  .phase h3{margin-top:.25rem}
+  .status{font-family:var(--mono);font-weight:700;font-size:.9em}
+  ul.checklist{list-style:none;padding:0;margin:.4rem 0 1rem}
+  ul.checklist li{padding:.28rem 0 .28rem 0;font-size:.92rem;line-height:1.5}
+  ul.checklist li .status{margin-right:.5rem;color:var(--faint)}
+  .loop{background:var(--accent-soft);border:1px solid var(--accent-line);border-left:3px solid var(--accent);
+    border-radius:8px;padding:.75rem 1rem;font-size:.9rem;color:var(--muted);margin:.75rem 0 .25rem}
+  #validation ul.checklist li,#questionables details{font-size:.92rem}
+  #questionables details,#amendments details,#notes details{background:var(--surface);border:1px solid var(--line);
+    border-radius:8px;padding:.6rem .9rem;margin:.6rem 0}
+  #questionables summary,#amendments summary{cursor:pointer;font-weight:600;color:var(--ink)}
+  .qa-answer{color:var(--muted);margin:.5rem 0 0;font-size:.92rem}
+  table{width:100%;border-collapse:collapse;margin:1rem 0;font-size:.88rem}
+  th,td{text-align:left;padding:.5rem .6rem;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-size:.72rem}
+  .callout{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:8px;padding:.9rem 1.1rem;margin:1rem 0}
+  .pill{display:inline-block;font-family:var(--mono);font-size:.72rem;background:var(--accent-soft);
+    border:1px solid var(--accent-line);color:var(--accent);padding:.1em .5em;border-radius:20px;margin:0 .2em .2em 0}
+  .legend code{background:none;border:none;padding:0;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+
+  <!-- ===== HEADER + UPDATABLE METADATA ===== -->
+  <header>
+    <h1>Stack-Aware Design System &amp; Component Inventory</h1>
+    <p class="lede">Give the orchestrator a design language it resolves per techstack and follows every
+      time — machine-readable tokens, a component vocabulary, and anti-slop rules — so agents build
+      UI from a known system instead of regressing to generic Tailwind.</p>
+    <details class="meta">
+      <summary>Metadata</summary>
+      <dl>
+        <dt>created</dt>      <dd>2026-07-06T10:48:46Z</dd>
+        <dt>modified</dt>     <dd>2026-07-06T10:48:46Z, 2026-07-06T11:05:20Z, 2026-07-06T12:53:06Z, 2026-07-06T11:51:36Z</dd>
+        <dt>commits</dt>      <dd>—</dd>
+        <dt>agent name</dt>   <dd>sdlc_planner, sdlc_planner, sdlc_implementor, sdlc_implementor</dd>
+        <dt>session id</dt>   <dd>6b07006e-582c-46a2-9be6-b486f8b7adee, 6b07006e-582c-46a2-9be6-b486f8b7adee, 6b07006e-582c-46a2-9be6-b486f8b7adee, 6b07006e-582c-46a2-9be6-b486f8b7adee</dd>
+        <dt>back refs</dt>    <dd>ai_docs/quality-gate-plugins.md, ai_docs/agentic-layer-adaptor.md, ai_docs/plugin-authoring.md, plugin_library/ui-ux-mvp/, specs/tui-framework-decision-reference.md</dd>
+        <dt>forward refs</dt> <dd>—</dd>
+      </dl>
+    </details>
+  </header>
+
+  <!-- Hero image — synced to the :root visual identity. -->
+  <figure>
+    <img src="stack-aware-design-system-component-inventory/hero.png" alt="An orchestrator core resolving one design-system descriptor and injecting it into swimlane agents building a clean UI">
+    <figcaption>The orchestrator resolves one design system per techstack and injects it into every agent's charter.</figcaption>
+  </figure>
+
+  <!-- ===== PURPOSE / PROBLEM / SOLUTION ===== -->
+  <section id="purpose">
+    <h2>Purpose</h2>
+    <p>Add a first-class, <strong>stack-aware design-system layer</strong> to the platform so that when an
+      agent builds or polishes a UI, it works from a <em>known component vocabulary and token set</em>
+      resolved from the target project's detected <strong>surface and framework</strong> — <em>web</em>
+      (Phoenix/HEEx, React/JSX, Svelte, …) <strong>or terminal/TUI</strong> (Ink, Bubble Tea, Ratatui,
+      Textual, and Elixir's own Ratatouille + Owl) — not from whatever generic markup or stale library its
+      training data reaches for. The layer is a data-defined descriptor (tokens + component inventory +
+      rules + paradigm), <strong>resolved</strong> <code>plugin → builtin-per-(surface,framework) →
+      generic</code>, <strong>injected</strong> into every worker's charter, and <strong>pullable</strong>
+      on demand through an MCP tool. It is distributed as an ordinary plugin, so adding a design system for
+      a new framework — web <em>or</em> terminal — is one package with zero core change.</p>
+  </section>
+
+  <section id="problem">
+    <h2>Problem</h2>
+    <p>The observed symptom — "the design and UI is not good" — is not a missing generator; it is a
+      <strong>missing design system</strong>. Agents produce functional CRUD, but nothing tells them what
+      "good" looks like for <em>this</em> project: which components exist, what the spacing/type/color tokens
+      are, which patterns to avoid. Output therefore regresses to a generic mean (the same purple-gradient,
+      three-feature-card, heavy-shadow slop the platform's own <code>ui-ux-foundations</code> skill already
+      names as failures).</p>
+    <p>The platform already ships close analogs but none closes this gap:</p>
+    <ul>
+      <li><span class="pill">exists</span> <code>plugin_library/ui-ux-mvp</code> — four <code>:skill</code>
+        bundles of <em>cross-surface prose principles</em> (foundations rubric, anti-slop list, web/desktop/TUI
+        polish). Valuable, but <strong>opt-in</strong>, <strong>generic</strong>, and <strong>not stack-aware</strong>:
+        no component vocabulary, no tokens, no per-framework resolution, no automatic injection.</li>
+      <li><span class="pill">exists</span> Capability tokens (<code>{{TEST_COMMAND}}</code> …) and the
+        five-stage <code>:quality_gate</code> — proof the "resolve a stack-aware descriptor, serve it to agents"
+        pattern works — but there is <strong>no UI/design token, no design descriptor, and no design field</strong>
+        anywhere in <code>Projects.Capabilities</code> or the token registry.</li>
+    </ul>
+    <p>The research the operator gathered (v0, Magic Patterns, 21st.dev vs. Petal, daisyUI, Fluxon, Google
+      Stitch's <code>DESIGN.md</code>) converges on one durable conclusion: <em>for a server-rendered stack you
+      don't want a JSX generator — you want a component library that ships an agent-readable schema (MCP or a
+      rules file), injected through the same mechanism you already orchestrate with.</em> That is exactly a
+      seam this platform can own natively, at near-zero recurring cost.</p>
+    <p><strong>The same gap — and the same fix — applies to terminal UIs.</strong> When an agent builds a TUI it
+      faces a <em>harder</em> version of the problem: it must first pick the right framework for the language
+      (there is no single default), then use that framework's real widget vocabulary and paradigm instead of
+      hand-rolling escape codes or reaching for a <em>dead</em> library (blessed, npyscreen, tui-rs — all
+      abandoned, yet heavily represented in training data). The platform already ships a
+      <code>tui-ux-polish</code> skill in <code>ui-ux-mvp</code>, and the operator's verified
+      <code>specs/tui-framework-decision-reference.md</code> already encodes the language→framework router, the
+      per-framework component maps, the paradigm fork (immediate-mode / Elm-MVU / retained), the code-gen rules,
+      and the maintenance-risk flags. That knowledge is currently <em>inert prose</em>: nothing resolves it per
+      project or injects it into a worker. This plan turns it into the same resolvable, injectable, MCP-servable
+      descriptor as the web surface. Notably, <code>repo_builder</code>'s own Elixir/BEAM stack routes to
+      <strong>Ratatouille + Owl</strong> — a TUI control surface can be driven from the same node.</p>
+    <figure>
+      <img src="stack-aware-design-system-component-inventory/problem.png" alt="Left: a generic UI with purple gradient and three identical cards, crossed out. Right: a systemized interface built from labeled component tags on a neutral grid">
+      <figcaption>Without a design system, every agent regresses to the same generic mean.</figcaption>
+    </figure>
+  </section>
+
+  <section id="solution">
+    <h2>Solution</h2>
+    <p>Introduce a <strong>Design System subsystem</strong> that structurally mirrors the quality-gate stack
+      (the closest working analog) and composes two existing injection patterns. Six moving parts, each with a
+      direct template already in the codebase:</p>
+    <table>
+      <thead><tr><th>Part</th><th>What it is</th><th>Mirrors (template in-repo)</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Kind</strong></td><td>A closed <code>:design_system</code> contribution kind (the one sanctioned core edit)</td><td><code>plugins/contribution.ex</code></td></tr>
+        <tr><td><strong>Descriptor</strong></td><td>Never-raises wire→domain domain: <code>surface</code> (web|tui), <code>framework</code>, <code>paradigm</code>, <code>tokens</code>, <code>components[]</code>, <code>rules</code>, <code>references</code></td><td><code>plugins/quality_gate.ex</code></td></tr>
+        <tr><td><strong>Resolver</strong></td><td>Precedence <code>plugin → priv/design_systems/&lt;surface&gt;-&lt;framework&gt;.json → generic</code>, token-filled, provenance-tagged; TUI adds a language→framework fallback (the reference's §1 router)</td><td><code>orchestrator/gate_resolver.ex</code></td></tr>
+        <tr><td><strong>Contract</strong></td><td><code>render/1</code> project → a worker-facing markdown block, folded into every worker's charter + the orchestrator prompt</td><td><code>stack_layers/contract.ex</code></td></tr>
+        <tr><td><strong>MCP tool</strong></td><td><code>resolve_design_system</code> — the platform-native Petal-MCP analog; returns tokens + inventory + rules JSON</td><td><code>orchestrator/tools/quality_gate.ex</code></td></tr>
+        <tr><td><strong>Builtins + plugin</strong></td><td>Web: <code>{generic,web-phoenix,web-react}.json</code>. TUI: <code>{tui-ratatouille,tui-ink,tui-bubbletea,tui-ratatui,tui-textual}.json</code>. Plus a sample plugin proving zero-core extensibility</td><td><code>priv/quality_gates/*.json</code> + <code>plugin_library/quality-gates-elixir</code></td></tr>
+      </tbody>
+    </table>
+    <p>Three supporting facts shape the design. First, the coarse <code>Projects.Profiler</code> stack is
+      <em>language-level only</em> (<code>"elixir"</code>, <code>"node"</code>) — it does not distinguish Phoenix
+      from bare Elixir or React from bare Node. So the linchpin is a small <strong>surface- and
+      framework-detection</strong> enhancement to the Profiler (grep <code>mix.exs</code> for <code>:phoenix</code>
+      vs <code>:ratatouille</code>/<code>:owl</code>; <code>package.json</code> deps for
+      <code>react</code>/<code>svelte</code> vs <code>ink</code>/<code>@opentui/*</code>; <code>go.mod</code> for
+      <code>bubbletea</code>; <code>Cargo.toml</code> for <code>ratatui</code>; <code>pyproject.toml</code> for
+      <code>textual</code>), producing <code>surface</code> + <code>framework</code> keys the resolver keys on.
+      Second, TUI framework choice is a <strong>two-step decision</strong> (language → framework, with override
+      rules), so when no TUI dep is detected the resolver applies the reference doc's §1 stack-router default for
+      the language (Elixir → Ratatouille+Owl, Go → Bubble Tea, Rust → Ratatui, Python → Textual, JS → Ink).
+      Third, the existing <code>ui-ux-mvp</code> skills (including <code>tui-ux-polish</code>) stay as the
+      <em>prose/rubric</em> layer; the descriptor's <code>rules</code> <strong>reference</strong> them and the
+      verified <code>tui-framework-decision-reference.md</code> rather than duplicating them. The descriptor is
+      the machine-readable, surface- and framework-specific <em>vocabulary + tokens + paradigm</em>; the skills
+      and reference are the human-readable <em>principles</em>; the review stage uses both.</p>
+    <p>Per surface, the inventory points at concrete, current vocabularies: <strong>web</strong> — Phoenix at
+      <code>core_components.ex</code> + Petal/daisyUI, React at shadcn/Tailwind; <strong>TUI</strong> — Ink at
+      <code>@inkjs/ui</code> (not stale <code>ink-*</code>), Bubble Tea at Bubbles+Lip Gloss+Huh, Ratatui at its
+      widgets + <code>tui-input</code>/<code>tui-textarea</code>, Textual at its widget set + TCSS, and Elixir at
+      Ratatouille (TEA) + Owl. Each TUI descriptor also carries the <em>paradigm</em> (immediate-mode / Elm-MVU /
+      retained) that dictates how much scaffolding the agent must generate, and the reference's per-framework
+      code-gen rules and dead-dep flags. This is the free, ownable, antifragile layer the research recommends
+      building <em>first</em> — a paid generator could plug in later via the existing
+      <code>harness_adapter</code>/<code>mcp_tools</code> seams, but only after the design language exists.</p>
+    <figure>
+      <img src="stack-aware-design-system-component-inventory/solution.png" alt="A four-stage pipeline: detect framework, resolve descriptor (plugin over builtin over generic), inject plus MCP tool, agent builds UI">
+      <figcaption>Detect → resolve (plugin&nbsp;&gt;&nbsp;builtin&nbsp;&gt;&nbsp;generic) → inject &amp; expose → agents build from the system.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== RELEVANT FILES ===== -->
+  <section id="files" class="files">
+    <h2>Relevant Files</h2>
+
+    <h3>Existing Files</h3>
+    <ul>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/plugins/contribution.ex</code> — add <code>:design_system</code> to the closed <code>@type kind</code> (L31–40) + <code>@kinds</code> (L42) + a moduledoc bullet; parsing/validation/<code>Activation</code> bucket then become automatic.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/plugins/quality_gate.ex</code> — the exact template for the new descriptor domain (typedstruct + nested <code>Wire</code> module + never-raises <code>parse/1</code>/<code>from_wire/1</code>/<code>normalize/2</code>).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/gate_resolver.ex</code> — template for the resolver: <code>descriptor/1</code> precedence chain (L81–96), <code>@stack_gates</code> map (L31–40), <code>builtin_path/1</code> via <code>Application.app_dir</code> (L123–126), token fill (L143–200).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/plugins/activation.ex</code> — kind-generic effective-set engine; the resolver's plugin layer calls <code>Activation.contributions(project_id, :design_system)</code> (accessor L66). No edit needed — <code>compute/1</code> buckets any registered kind.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/projects/profiler.ex</code> — add framework detection to <code>detect_stack/1</code> (L71–82); markers at L33–41. Produces the <code>framework</code> signal the resolver keys on.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/projects/context_primer.ex</code> — add a "Design system: &lt;name&gt;" line to <code>capability_lines/1</code> (L52–70) so it appears in the primed block.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/stack_layers/contract.ex</code> — template for <code>DesignContract.render/1</code> (project → worker-facing markdown, or <code>""</code> when none).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/tools.ex</code> — the <code>create_agent/2</code> chokepoint that folds the stack contract onto a worker's persisted <code>system_prompt</code> (add the design block, ordered stack-contract → design → task → reporting); also the tool dispatch table (add <code>resolve_design_system</code>).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/system_prompt.ex</code> — inject the design block into the orchestrator prompt as a sibling of <code>project_stack_block/1</code> (L324–330) / <code>project_primer_block/1</code> (L300–319).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/tool_catalog.ex</code> — add the <code>resolve_design_system</code> schema entry (mirror <code>run_quality_gate</code> at L803–860).</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/orchestrator/tools/quality_gate.ex</code> — three-file template for the new MCP handler.</li>
+      <li><span class="tag existing">existing</span> <code>priv/quality_gates/elixir.json</code> — shape template for a builtin descriptor JSON.</li>
+      <li><span class="tag existing">existing</span> <code>plugin_library/quality-gates-elixir/</code> — template for the sample distribution plugin (manifest + asset).</li>
+      <li><span class="tag existing">existing</span> <code>plugin_library/ui-ux-mvp/skills/ui-ux-foundations/SKILL.md</code> + <code>skills/tui-ux-polish/SKILL.md</code> — the prose anti-slop rubric and TUI polish skill the descriptor's <code>rules</code> reference (do not duplicate).</li>
+      <li><span class="tag existing">existing</span> <code>specs/tui-framework-decision-reference.md</code> — the verified TUI knowledge base: the §1 language→framework router (drives the resolver's TUI fallback), §3 cross-framework component maps (the TUI descriptors' vocabularies), §4.1 paradigm fork, §4.3 dead-dep flags, §5 per-framework code-gen rules, §2.7 Elixir/Ratatouille+Owl. Vendored as the citable source for every TUI builtin.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder_web/components/core_components.ex</code> — the platform's own HEEx component set; the Phoenix builtin inventory names these plus Petal/daisyUI.</li>
+      <li><span class="tag existing">existing</span> <code>lib/repo_builder/forge/generator.ex</code> — optional Phase 6: add a <code>:design_system</code> generator to <code>@defs</code> (L25–50) so operators can forge a bespoke descriptor from a repo's real components.</li>
+      <li><span class="tag existing">existing</span> <code>ai_docs/quality-gate-plugins.md</code> + <code>.claude/commands/conditional_docs.md</code> — template for the authoring doc, and the router row to add.</li>
+      <li><span class="tag existing">existing</span> <code>config/config.exs</code> — optional <code>config :repo_builder, :design_systems</code> (builtin dir override) + Forge generator config (L454–459).</li>
+    </ul>
+
+    <h3>New Files</h3>
+    <ul>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/plugins/design_system.ex</code> — descriptor domain: <code>%DesignSystem{stack, framework, tokens, components, rules, references}</code> + nested <code>Wire</code> + never-raises <code>parse/1</code>/<code>read/1</code>/<code>from_wire/1</code>.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/orchestrator/design_resolver.ex</code> — <code>resolve/1</code> precedence chain + <code>@stack_designs</code> map + <code>ResolvedDesign</code>/provenance, mirroring <code>GateResolver</code>.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/orchestrator/design_contract.ex</code> — <code>render/1</code>: project id → compact worker-facing markdown (tokens summary + top component tags + rules link), or <code>""</code> when none.</li>
+      <li><span class="tag new">new</span> <code>lib/repo_builder/orchestrator/tools/design_system.ex</code> — MCP handler for <code>resolve_design_system</code> (returns tokens + inventory + rules JSON for the bound project).</li>
+      <li><span class="tag new">new</span> <code>priv/design_systems/generic.json</code> — surface/framework-agnostic tokens + foundations-rubric rules (the always-resolvable base).</li>
+      <li><span class="tag new">new</span> <code>priv/design_systems/web-phoenix.json</code>, <code>web-react.json</code> — HEEx/core_components + Petal/daisyUI, and shadcn/ui + Tailwind, respectively.</li>
+      <li><span class="tag new">new</span> <code>priv/design_systems/tui-ratatouille.json</code> (Elixir/BEAM — the repo's own stack: TEA + Owl), <code>tui-ink.json</code> (@inkjs/ui), <code>tui-bubbletea.json</code> (Bubbles+Lip Gloss+Huh), <code>tui-ratatui.json</code> (widgets + tui-input/tui-textarea), <code>tui-textual.json</code> (widgets + TCSS) — each with <code>paradigm</code>, component vocabulary from the reference's §3 map, and §5 code-gen rules.</li>
+      <li><span class="tag new">new</span> <code>plugin_library/design-system-phoenix/</code> (and/or <code>design-system-tui-bubbletea/</code>) — sample plugin(s) proving an active plugin's design system wins over the builtin (zero core change).</li>
+      <li><span class="tag new">new</span> <code>priv/forge/generators/design_system.md</code> — optional Phase 6 generator prompt template (<code>{{PROJECT_CONTEXT}}</code> + <code>{{SPEC}}</code> slots).</li>
+      <li><span class="tag new">new</span> <code>ai_docs/design-system-plugins.md</code> — authoring reference for design-system descriptors + stacks.</li>
+      <li><span class="tag new">new</span> <code>test/repo_builder/plugins/design_system_test.exs</code>, <code>.../orchestrator/design_resolver_test.exs</code>, <code>.../orchestrator/design_contract_test.exs</code>, <code>.../orchestrator/tools/design_system_test.exs</code> — the boundary/precedence/injection/tool tests.</li>
+    </ul>
+  </section>
+
+  <!-- ===== IMPLEMENTATION PHASES ===== -->
+  <section id="phases">
+    <h2>Implementation Phases</h2>
+    <p><strong>IMPORTANT:</strong> Execute every phase and task step by step, in order, top to bottom.</p>
+    <p class="legend">Status markers: <code>[]</code> idle · <code>[wip]</code> in progress · <code>[x]</code> complete · <code>[f]</code> failed. All start as <code>[]</code>; the Build Plan workflow updates them as it works.</p>
+    <div class="callout"><strong>Green-gate law.</strong> Every phase ends by running the five-command gate
+      (<code>compile --warnings-as-errors</code> · <code>format --check-formatted</code> · <code>credo --strict</code> ·
+      <code>test --warnings-as-errors</code> · <code>dialyzer</code>). Nothing lands red. Every new public function
+      carries an <code>@spec</code>; every struct is a <code>typedstruct</code> with <code>@enforce_keys</code>; all
+      external JSON crosses a TypeCheck wire→domain boundary and never raises.</div>
+
+    <!-- Phase 1 -->
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 1: Descriptor domain + builtin descriptors</h3>
+      <p>Add the closed <code>:design_system</code> contribution kind and the never-raises descriptor domain, then
+        ship the three builtin JSON descriptors. This is the data spine everything else resolves and injects.</p>
+
+      <h4>1. Register the contribution kind</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Add <code>:design_system</code> to <code>@type kind</code> and <code>@kinds</code> in <code>plugins/contribution.ex</code>, with a moduledoc bullet ("a JSON descriptor: tokens + component inventory + rules").</li>
+        <li><code class="status">[x]</code> Confirm <code>Contribution.cast_kind/1</code> + <code>from_wire/1</code> accept it and reject <code>:unknown_kind</code> unchanged (they key off <code>@kinds</code>).</li>
+      </ul>
+
+      <h4>2. Descriptor domain module</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Create <code>RepoBuilder.Plugins.DesignSystem</code> mirroring <code>quality_gate.ex</code>: <code>typedstruct</code> parent (<code>surface</code> — closed <code>:web | :tui</code>, <code>stack</code>, <code>framework</code>, <code>paradigm</code> — closed <code>:immediate | :mvu | :retained | :none</code> for TUIs, <code>tokens :: map()</code>, <code>components :: [Component.t()]</code>, <code>rules :: [String.t()]</code>, <code>references :: [String.t()]</code>) + nested <code>Component</code> struct (<code>name</code>, <code>tag</code>, <code>import</code>/<code>package</code>, <code>when_to_use</code>, <code>example</code>). The web/TUI split is data, not two code paths.</li>
+        <li><code class="status">[x]</code> Add the nested permissive <code>Wire</code> module (<code>@type! wire</code>, string-keyed) + <code>conforms?/1</code>, matching the QualityGate compile-time nesting pattern (type_check 0.13.7 workaround).</li>
+        <li><code class="status">[x]</code> Implement total <code>parse/1</code> (<code>Jason.decode/1</code> → <code>from_map/1</code>), <code>read/1</code> (reads a <code>.json</code> path), <code>from_wire/1</code>, <code>normalize/2</code>, <code>parse_component/1</code> — every malformed case returns a tagged <code>@type reason</code>; never raises; never <code>String.to_atom/1</code> on untrusted keys.</li>
+      </ul>
+
+      <h4>3. Builtin descriptors — web</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Author <code>priv/design_systems/generic.json</code>: a restrained token set (1 accent + neutral ramp, 4/8px spacing grid, ~1.25 type scale) and <code>rules</code> that cite the <code>ui-ux-foundations</code> anti-slop list + MVP rubric (reference, do not inline the full prose).</li>
+        <li><code class="status">[x]</code> Author <code>priv/design_systems/web-phoenix.json</code>: components pointing at <code>core_components.ex</code> (<code>&lt;.input&gt;</code>, <code>&lt;.button&gt;</code>, <code>&lt;.table&gt;</code>, <code>&lt;.icon&gt;</code>, <code>&lt;Layouts.app&gt;</code>) plus Petal/daisyUI vocabulary; HEEx examples; rules ("reach for an existing component tag before hand-rolling Tailwind"; the Phoenix v1.8 guidelines).</li>
+        <li><code class="status">[x]</code> Author <code>priv/design_systems/web-react.json</code>: shadcn/ui component vocabulary + Tailwind tokens + JSX examples.</li>
+      </ul>
+
+      <h4>4. Builtin descriptors — TUI</h4>
+      <p>One descriptor per (surface, framework), each sourced from <code>tui-framework-decision-reference.md</code>
+        §2 (capsules), §3 (component map), §4.1 (paradigm), §5 (code-gen rules). Lead with Elixir (the repo's own
+        stack) + the four majors.</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>tui-ratatouille.json</code> — <code>paradigm: :mvu</code>; components: Ratatouille view elements + Owl prompts/tables/progress; rules: "drive from the same BEAM node via TEA subscriptions on PubSub/GenServer msgs; use Owl for prompt/output, Ratatouille for full-screen"; note the termbox feature ceiling + Go/Rust sidecar escape hatch.</li>
+        <li><code class="status">[x]</code> <code>tui-ink.json</code> — <code>paradigm: :retained</code>; components: <code>@inkjs/ui</code> (TextInput/Select/Spinner/…), <code>&lt;Box&gt;</code>/<code>&lt;Text&gt;</code>/<code>&lt;Static&gt;</code>; rules: append-only output in <code>&lt;Static&gt;</code>, memoize hot subtrees, guard <code>useInput</code> raw-mode, prefer <code>@inkjs/ui</code> over stale <code>ink-*</code>.</li>
+        <li><code class="status">[x]</code> <code>tui-bubbletea.json</code> — <code>paradigm: :mvu</code>; components: Bubbles (list/table/viewport/textinput/…), Lip Gloss, Huh forms; rules: scaffold Model/Init/Update/View, all async via <code>Cmd</code>, forward+bubble child Update/Cmd, pin ONE major (v1 vs v2 <code>charm.land</code>/<code>tea.KeyPressMsg</code>).</li>
+        <li><code class="status">[x]</code> <code>tui-ratatui.json</code> — <code>paradigm: :immediate</code>; components: Block/List/Table/Tabs/Gauge/Chart/Scrollbar/Clear + <code>tui-input</code>/<code>tui-textarea</code>/<code>tui-tree-widget</code>; rules: generate the full harness (raw mode, alt screen, panic-restore via <code>ratatui::init/restore</code> + <code>color-eyre</code>), store <code>*State</code> in the app struct, filter <code>KeyEventKind::Press</code>, pin exact 0.x.</li>
+        <li><code class="status">[x]</code> <code>tui-textual.json</code> — <code>paradigm: :retained</code>; components: the Textual widget set (DataTable/Tree/Input/Button/…), TCSS; rules: never block the loop (<code>@work</code>), setup in <code>on_mount</code> not <code>compose</code>, styling in <code>.tcss</code>, <code>@on(...)</code> handlers; flag single-maintainer/no-single-binary risk.</li>
+        <li><code class="status">[x]</code> Encode the §4.3 <strong>dead-dep bias</strong> in each descriptor's <code>rules</code> (never scaffold blessed/npyscreen/tui-rs/termui; prefer the actively-maintained pick).</li>
+      </ul>
+
+      <h4>5. Testing Strategy</h4>
+      <p>ExUnit boundary tests over the descriptor domain and every builtin (web + TUI). Prove the wire→domain layer never raises and that every shipped JSON parses.</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>mix test test/repo_builder/plugins/design_system_test.exs</code> — round-trips a valid web AND a valid TUI descriptor; an unknown <code>surface</code>/<code>paradigm</code>, malformed JSON, missing fields, non-map, unknown-shaped component each return a tagged <code>{:error, reason}</code> (never raise).</li>
+        <li><code class="status">[x]</code> A test iterates <code>priv/design_systems/*.json</code> (all web + TUI builtins) and asserts each <code>DesignSystem.read/1</code> is <code>{:ok, _}</code> — proves no shipped builtin is broken.</li>
+        <li><code class="status">[x]</code> <code>mix compile --warnings-as-errors &amp;&amp; mix format --check-formatted &amp;&amp; mix credo --strict &amp;&amp; mix test --warnings-as-errors &amp;&amp; mix dialyzer</code> — the full green gate.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- Phase 2 -->
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 2: Framework detection + resolver</h3>
+      <p>Teach the Profiler to detect the frontend framework, then build the resolver whose precedence chain
+        (<code>plugin → builtin-per-stack → generic</code>) is a line-for-line analog of <code>GateResolver</code>.</p>
+
+      <h4>1. Surface + framework detection (the linchpin)</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Extend <code>Projects.Profiler.detect_stack/1</code> to add <code>"surface"</code> + <code>"framework"</code> keys. Detect TUI deps first (they pin the surface): <code>mix.exs</code> <code>:ratatouille</code>/<code>:owl</code>; <code>package.json</code> <code>ink</code>/<code>@opentui/*</code>; <code>go.mod</code> <code>bubbletea</code>; <code>Cargo.toml</code> <code>ratatui</code>; <code>pyproject.toml</code> <code>textual</code>/<code>rich</code> → <code>surface: "tui"</code> + the matching framework. Else detect web: <code>:phoenix</code>/<code>:phoenix_live_view</code>, <code>react</code>/<code>svelte</code>/<code>vue</code> → <code>surface: "web"</code>. Else <code>surface: "none"</code>. Fail-silent, never raises.</li>
+        <li><code class="status">[x]</code> Round-trip both keys through <code>Projects.profile_attrs/1</code> so they persist on <code>project.stack</code> (JSONB, string-keyed).</li>
+      </ul>
+
+      <h4>2. Resolver</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Create <code>RepoBuilder.Orchestrator.DesignResolver</code> mirroring <code>gate_resolver.ex</code>: <code>resolve/1</code> → <code>descriptor/1</code> precedence <code>{:plugin, …} → {:builtin, …} → {:generic, …}</code>; first that parses wins, tagged with <code>source</code>.</li>
+        <li><code class="status">[x]</code> Plugin layer: <code>Activation.contributions(project_id, :design_system)</code> → highest-priority active plugin's <code>abs_path</code> → <code>DesignSystem.read/1</code>.</li>
+        <li><code class="status">[x]</code> Builtin layer: <code>@stack_designs</code> map keying on <code>{surface, framework}</code> → descriptor name (e.g. <code>{"web","phoenix"} → "web-phoenix"</code>, <code>{"tui","bubbletea"} → "tui-bubbletea"</code>); path via <code>Application.app_dir(:repo_builder, "priv/design_systems/#{name}.json")</code>.</li>
+        <li><code class="status">[x]</code> <strong>TUI language→framework fallback</strong>: when <code>surface == "tui"</code> but no framework was detected, apply the reference's §1 router by language (<code>elixir→ratatouille</code>, <code>go→bubbletea</code>, <code>rust→ratatui</code>, <code>python→textual</code>, <code>node→ink</code>) as an <code>@tui_defaults</code> map before falling to <code>generic</code>. This encodes "there is no single TUI default — pick by language."</li>
+        <li><code class="status">[x]</code> Return a typed <code>ResolvedDesign</code> (<code>descriptor</code> + <code>source</code> provenance). Optional: if a <code>{{…}}</code> token appears in any example, fill via <code>Projects.CapabilityTokens</code> (reuse, don't fork).</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>Unit tests for detection + the precedence chain, using the SQL sandbox and an activated fake plugin.</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>mix test test/repo_builder/projects/profiler_test.exs</code> — a Phoenix repo detects <code>{surface: "web", framework: "phoenix"}</code>; a React <code>package.json</code> → <code>{web, react}</code>; a <code>bubbletea</code> <code>go.mod</code> → <code>{tui, bubbletea}</code>; a <code>ratatouille</code> <code>mix.exs</code> → <code>{tui, ratatouille}</code>; a bare repo → <code>{none, none}</code>.</li>
+        <li><code class="status">[x]</code> <code>mix test test/repo_builder/orchestrator/design_resolver_test.exs</code> — a Phoenix project resolves <code>web-phoenix</code> (<code>source: :builtin</code>); a <code>tui</code>+<code>go</code> project with no explicit framework resolves <code>tui-bubbletea</code> via the language fallback; an unknown stack falls to <code>generic</code>; an active <code>:design_system</code> plugin wins (<code>source: :plugin</code>).</li>
+        <li><code class="status">[x]</code> Full green gate (all five commands) green.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- Phase 3 -->
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 3: Contract render + charter injection</h3>
+      <p>Turn the resolved descriptor into a compact worker-facing charter block and fold it into every worker's
+        persisted system prompt at the single <code>create_agent/2</code> chokepoint, plus surface it in the
+        orchestrator prompt and the primed context — the "followed every time" guarantee.</p>
+
+      <h4>1. Contract renderer</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Create <code>RepoBuilder.Orchestrator.DesignContract.render/1</code> (project id → markdown), mirroring <code>StackLayers.Contract.render/1</code>: a <strong>compact</strong> block — surface + framework + (for TUI) the <em>paradigm</em> and its one-line scaffolding rule (e.g. "Bubble Tea = Elm/MVU: Model/Init/Update/View, async via Cmd"), token summary + the top N component tags + a one-line "resolve full inventory via <code>resolve_design_system</code>" pointer + the rules link. Returns <code>""</code> when the resolver yields the empty <code>generic</code> for a non-UI project (fully back-compatible). Keep it small — do NOT inline the whole inventory (that's what the MCP tool is for).</li>
+      </ul>
+
+      <h4>2. Injection points</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Fold the block into the worker's persisted <code>agents.system_prompt</code> at the <code>create_agent/2</code> chokepoint in <code>orchestrator/tools.ex</code>, ordered <strong>stack-contract → design → task body → reporting clause</strong> (design leads for the worker's life, like the stack contract).</li>
+        <li><code class="status">[x]</code> Add a design block to the orchestrator prompt in <code>system_prompt.ex</code> as a sibling of <code>project_stack_block/1</code>.</li>
+        <li><code class="status">[x]</code> Add a "Design system: &lt;name/source&gt;" line to <code>ContextPrimer.capability_lines/1</code> so it shows in the primed block and the <code>/projects</code> UI.</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <p>Render purity + injection-presence tests. The contract render is pure (project in / string out), like the stack contract.</p>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>mix test test/repo_builder/orchestrator/design_contract_test.exs</code> — a Phoenix project renders a non-empty block naming a core component tag; a project resolving <code>generic</code>-empty renders <code>""</code>.</li>
+        <li><code class="status">[x]</code> A <code>create_agent</code> test asserts the persisted worker <code>system_prompt</code> contains the design block ahead of the task body (order preserved).</li>
+        <li><code class="status">[x]</code> Full green gate green.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- Phase 4 -->
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 4: <code>resolve_design_system</code> MCP tool</h3>
+      <p>Expose the full inventory on demand through an MCP tool — the platform-native analog of the Petal MCP
+        server — so a worker pulls the exact component schema instead of hand-rolling markup. The
+        <code>run_quality_gate</code> three-file shape is the template.</p>
+
+      <h4>1. Tool (three-file shape)</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Add the <code>resolve_design_system</code> schema to <code>orchestrator/tool_catalog.ex</code> (mirror <code>run_quality_gate</code>): optional params <code>component</code> (filter to one) and <code>section</code> (<code>tokens</code>|<code>components</code>|<code>rules</code>).</li>
+        <li><code class="status">[x]</code> Add dispatch in <code>orchestrator/tools.ex</code> → new handler <code>orchestrator/tools/design_system.ex</code>; resolve the orchestrator's bound project via the same <code>resolve_project_*</code> helper the gate tool uses → <code>DesignResolver.resolve/1</code> → JSON-friendly map (tokens + inventory + rules + provenance).</li>
+      </ul>
+
+      <h4>2. Testing Strategy</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> <code>mix test test/repo_builder/orchestrator/tools/design_system_test.exs</code> — the tool returns the resolved Phoenix inventory for a bound web project AND the Bubble Tea inventory (with <code>paradigm</code>) for a bound Go/TUI project; <code>component</code> filter narrows to one; unbound project falls to <code>generic</code>; the map is JSON-serializable.</li>
+        <li><code class="status">[x]</code> Full green gate green.</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- Phase 5 -->
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 5: Plugin distribution + docs</h3>
+      <p>Prove zero-core extensibility with a sample distribution plugin, wire the discovery surface, and write the
+        authoring reference so a new framework's design system is one package.</p>
+
+      <h4>1. Sample plugin (extensibility proof)</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Create <code>plugin_library/design-system-phoenix/</code> (manifest <code>agentic.plugin/1</code> + <code>design/web-phoenix.json</code>, contribution <code>{kind: "design_system", path: "design/web-phoenix.json"}</code>), mirroring <code>quality-gates-elixir</code>. Add a second TUI sample (e.g. <code>design-system-tui-bubbletea/</code>) so the extensibility proof spans both surfaces.</li>
+        <li><code class="status">[x]</code> Verify: install + activate for a project → <code>DesignResolver</code> returns it with <code>source: :plugin</code>, overriding the builtin — the "add a design system (web OR terminal) = one package, zero core change" claim, tested.</li>
+      </ul>
+
+      <h4>2. Discovery + docs</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Surface the resolved design system read-only on <code>/projects/:id</code> (name + source badge) — reuse the existing project detail LiveView; no new route required.</li>
+        <li><code class="status">[x]</code> Write <code>ai_docs/design-system-plugins.md</code> (descriptor format, the "add a stack in N steps" recipe, the plugin-wins-over-builtin rule) mirroring <code>ai_docs/quality-gate-plugins.md</code>; add a router row to <code>.claude/commands/conditional_docs.md</code>.</li>
+      </ul>
+
+      <h4>3. Testing Strategy</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> A plugin test installs <code>design-system-phoenix</code> in the sandbox, activates it, and asserts resolver precedence + LiveView renders the source badge.</li>
+        <li><code class="status">[x]</code> Full green gate green; <code>mix test --warnings-as-errors</code> across the whole suite (no regressions to the existing 1,700+ tests).</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+
+    <!-- Phase 6 -->
+    <div class="phase">
+      <h3><code class="status">[x]</code> Phase 6 (stretch): Forge generator for bespoke design systems</h3>
+      <p>An operator points Forge at a target repo, an agent reads its real component library, and Forge emits a
+        project-specific descriptor packaged as a plugin — the "generate a <code>DESIGN.md</code> once, commit it"
+        idea, made native. Built by adding a <code>:design_system</code> generator to the closed Forge catalog; the
+        forged plugin installs and activates through the existing lifecycle and the resolver sources it as
+        <code>:plugin</code>.</p>
+
+      <h4>1. Generator</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> Add <code>:design_system</code> to <code>Forge.Generator.@defs</code> (L25–50) → <code>{template: "design_system.md", contribution_kind: :design_system, asset_subdir: "design"}</code> + extend the <code>@type kind</code> union.</li>
+        <li><code class="status">[x]</code> Vendor <code>priv/forge/generators/design_system.md</code> with <code>{{PROJECT_CONTEXT}}</code> + <code>{{SPEC}}</code> slots (instruct the agent to enumerate the repo's existing components + tokens into the descriptor JSON shape).</li>
+        <li><code class="status">[x]</code> Add a total <code>validate(:design_system, files)</code> clause in <code>forge/validator.ex</code> (asset parses via <code>DesignSystem.parse/1</code>) + teach <code>Packager.derive_id/2</code> the new kind (id = <code>&lt;surface&gt;-&lt;framework&gt;</code>). Also made <code>DesignResolver</code>'s plugin layer read a contribution path that is either the descriptor file (sample plugins) or the asset dir (forged plugins).</li>
+      </ul>
+
+      <h4>2. Testing Strategy</h4>
+      <ul class="checklist">
+        <li><code class="status">[x]</code> A Forge test drives the generator with an injected <code>generate_runner</code> (fixture, no live harness): a valid descriptor validates → packages → installs → activates → <code>DesignResolver.resolve/1</code> returns <code>source: :plugin</code>; a malformed (unknown-surface) descriptor is rejected by validation and never installs.</li>
+        <li><code class="status">[x]</code> Full green gate green (compile · format · credo · test · dialyzer). Dialyzer unchanged (10 skipped, 0 unnecessary).</li>
+      </ul>
+      <div class="loop">🔁 <strong>Do not exit this phase until every box above is checked.</strong> If any command fails, fix the cause and re-run — loop until all pass.</div>
+    </div>
+  </section>
+
+  <!-- ===== GLOBAL VALIDATION ===== -->
+  <section id="validation">
+    <h2>Validation Commands</h2>
+    <p>Execute these to validate the entire plan is complete:</p>
+    <ul class="checklist">
+      <li><code class="status">[x]</code> <code>mix compile --warnings-as-errors</code> — the new modules compile clean; the closed <code>:design_system</code> kind adds no warnings.</li>
+      <li><code class="status">[x]</code> <code>mix format --check-formatted</code> — canonical formatting.</li>
+      <li><code class="status">[x]</code> <code>mix credo --strict</code> — every new public function has an <code>@spec</code> (the enforced <code>Readability.Specs</code> gate).</li>
+      <li><code class="status">[x]</code> <code>mix test --warnings-as-errors</code> — descriptor boundary, framework detection, resolver precedence, contract injection, MCP tool, and plugin-override tests all green; no regression to the existing suite.</li>
+      <li><code class="status">[x]</code> <code>mix dialyzer</code> — success typing + contract checking clean (no new ignore filters; TypeCheck <code>Wire</code> nesting kept Dialyzer-clean like <code>QualityGate.Wire</code>).</li>
+      <li><code class="status">[x]</code> <code>iex</code> smoke: register a Phoenix target project → <code>DesignResolver.resolve(project.id)</code> returns <code>web-phoenix</code>; register a Go/Bubble Tea repo → returns <code>tui-bubbletea</code> (via detection or the language fallback) with its <code>paradigm</code>; activate a design-system plugin and it flips to <code>source: :plugin</code>.</li>
+    </ul>
+    <div class="loop">🔁 <strong>The plan is not complete until every box is checked and every command passes. If a step is genuinely impossible, mark it <code>[f]</code> and move on if possible.</strong></div>
+  </section>
+
+  <!-- ===== QUESTIONABLES ===== -->
+  <section id="questionables">
+    <h2>Questionables</h2>
+    <p>Open decisions surfaced rather than silently resolved. Each carries a recommendation; flag before building
+      if you disagree.</p>
+
+    <details open>
+      <summary>Q1 — New <code>:design_system</code> contribution kind, or reuse <code>:context_fragment</code> + <code>:capability</code>?</summary>
+      <p class="qa-answer"><strong>Recommend: new kind.</strong> The closed-contract doctrine explicitly sanctions a
+        deliberate kind edit for a genuinely new extension point. A design system is a <em>stack-resolved,
+        token-filled, MCP-servable descriptor</em> — not free prose. Reusing <code>:context_fragment</code> would lose
+        per-stack resolution, the MCP tool structure, and provenance; <code>:capability</code> is currently unwired
+        (no consumer). One atom added to <code>contribution.ex</code> unlocks parse/validate/activation buckets for free.</p>
+    </details>
+    <details>
+      <summary>Q2 — Where does framework granularity come from — Profiler detection or the stack-layers <code>:frontend</code> catalog?</summary>
+      <p class="qa-answer"><strong>Recommend: add lightweight detection to the Profiler</strong> so a design system resolves
+        automatically on register, independent of whether an operator has composed stack-layers. The coarse Profiler stack
+        is language-only today, so this is the linchpin (Phase 2). A composed <code>:frontend</code> stack-layer MAY later
+        override the detected framework, but detection must not depend on it.</p>
+    </details>
+    <details>
+      <summary>Q3 — Auto-inject into every worker, or on-demand MCP pull only?</summary>
+      <p class="qa-answer"><strong>Recommend: both, split by size.</strong> Inject a <em>compact</em> block always (tokens +
+        top component tags + a pointer) so the design language leads every turn — the root-cause fix. Serve the <em>full</em>
+        inventory (all components, examples) through <code>resolve_design_system</code> so the prompt never bloats. This is
+        precisely the "small charter + rich schema on call" division the Petal rules.md + MCP server pairing uses.</p>
+    </details>
+    <details>
+      <summary>Q4 — Full native subsystem now, or richer plugins on existing seams first?</summary>
+      <p class="qa-answer"><strong>Recommend: native subsystem (Phases 1–3 are the MVP).</strong> The root-cause fix requires
+        automatic per-stack resolution + injection, which an opt-in <code>:skill</code> plugin structurally cannot do. Phases
+        4–6 (MCP tool, distribution, Forge) are additive and independently shippable. The existing <code>ui-ux-mvp</code>
+        skills are kept and referenced, not replaced.</p>
+    </details>
+    <details>
+      <summary>Q5 — Relationship to the existing <code>ui-ux-mvp</code> skills?</summary>
+      <p class="qa-answer">Keep them as the <strong>prose/rubric layer</strong>. The descriptor's <code>rules</code> reference the
+        <code>ui-ux-foundations</code> anti-slop list and MVP rubric rather than duplicating them. Descriptor = machine-readable
+        stack-specific <em>vocabulary + tokens</em>; skills = human-readable cross-surface <em>principles</em>; the review stage
+        uses both. No content is copied between them.</p>
+    </details>
+    <details>
+      <summary>Q6 — Do paid generators (v0, Fluxon, Magic Patterns) fit here?</summary>
+      <p class="qa-answer"><strong>Out of scope for this plan; possible later.</strong> The research is clear: pay for a generator
+        only <em>after</em> a design language exists, or you pay to generate inconsistency faster. This plan builds that free,
+        ownable layer first. A paid tier could plug in afterward via the existing <code>harness_adapter</code> (a generator-as-harness)
+        or the reserved <code>mcp_tools</code> kind — no new seam required. For Phoenix specifically, JSX generators don't apply
+        (HEEx ≠ JSX); the Petal-vocabulary-via-descriptor approach is the correct native analog.</p>
+    </details>
+    <details>
+      <summary>Q7 — How is the <em>surface</em> (web vs TUI) determined when a repo could build both?</summary>
+      <p class="qa-answer"><strong>Recommend: detect from deps, let the goal/plan override.</strong> The Profiler pins
+        <code>surface: "tui"</code> when it finds a TUI dep (ink/bubbletea/ratatui/textual/ratatouille), else <code>"web"</code>
+        when it finds a web framework, else <code>"none"</code>. When a repo has both (e.g. a Phoenix app with a companion
+        Bubble Tea CLI), the <strong>run's goal is the tiebreaker</strong>: the Planning-Mode Wizard (<code>/plan</code>) already
+        picks workflow/harness/model, so add an optional <em>surface</em> pick there that overrides detection for that run.
+        Default to the detected surface; never force a choice when detection is unambiguous. This keeps the common case
+        zero-friction while handling the polyglot repo.</p>
+    </details>
+    <details>
+      <summary>Q8 — TUI framework selection is a two-step decision — where does the router live?</summary>
+      <p class="qa-answer"><strong>Recommend: as data in the resolver (<code>@tui_defaults</code>), sourced from the reference §1.</strong>
+        Unlike web (framework usually detected directly), TUI has "no single default — pick by language" plus override rules
+        (single-binary → Go/Rust; max FPS → Ratatui; browser-serve → Textual). Encode the language→framework defaults as a map
+        the resolver consults after dep-detection fails, and surface the override rules as descriptor <code>rules</code> the agent
+        reads — not as branching code. The reference doc stays the human-editable source of truth; the map is its machine mirror.</p>
+    </details>
+  </section>
+
+  <!-- ===== NOTES ===== -->
+  <section id="notes">
+    <h2>Notes</h2>
+
+    <h3>Why this maps so cleanly (three templates, no new infrastructure)</h3>
+    <p>Every part has a working in-repo analog, so this is composition, not invention:</p>
+    <ul>
+      <li><strong>Resolution</strong> is <code>GateResolver.descriptor/1</code> renamed — same <code>plugin → builtin-per-stack → generic</code> chain, same <code>Application.app_dir</code> builtin path, same provenance tagging.</li>
+      <li><strong>Injection</strong> is <code>StackLayers.Contract</code> renamed — same <code>create_agent/2</code> chokepoint, same "leads every turn for the worker's life" property.</li>
+      <li><strong>The MCP tool</strong> is <code>run_quality_gate</code>'s three-file shape (<code>tool_catalog.ex</code> schema + <code>tools.ex</code> dispatch + <code>tools/&lt;name&gt;.ex</code> handler).</li>
+      <li><strong>Distribution</strong> is <code>quality-gates-&lt;stack&gt;</code> plugins renamed — a builtin default that an active plugin overrides.</li>
+    </ul>
+
+    <h3>Descriptor JSON shape (illustrative — <code>priv/design_systems/phoenix.json</code>)</h3>
+    <pre><code>{
+  "stack": "elixir",
+  "framework": "phoenix",
+  "tokens": {
+    "accent": "one accent; never a purple gradient",
+    "neutral_ramp": "slate 50..900",
+    "spacing": "4/8px grid",
+    "type_scale": "~1.25, cap 4 sizes",
+    "radius": "sm/md only; no heavy drop-shadows"
+  },
+  "components": [
+    { "name": "input",  "tag": "&lt;.input field={@form[:x]} /&gt;",
+      "import": "core_components", "when_to_use": "every form field",
+      "example": "&lt;.input field={@form[:email]} type=\"email\" /&gt;" },
+    { "name": "button", "tag": "&lt;.button&gt;", "import": "core_components",
+      "when_to_use": "one primary action per view" },
+    { "name": "table",  "tag": "&lt;.table&gt;", "import": "core_components" },
+    { "name": "icon",   "tag": "&lt;.icon name=\"hero-...\" /&gt;", "import": "core_components",
+      "when_to_use": "always; never Heroicons modules" }
+  ],
+  "rules": [
+    "Reach for an existing component tag before hand-rolling HEEx/Tailwind.",
+    "Begin LiveView templates with &lt;Layouts.app flash={@flash} ...&gt;.",
+    "Follow ui-ux-foundations: hierarchy, AA contrast, no AI-slop tells."
+  ],
+  "references": [
+    "lib/repo_builder_web/components/core_components.ex",
+    "plugin_library/ui-ux-mvp/skills/ui-ux-foundations/SKILL.md"
+  ]
+}</code></pre>
+    <div class="callout"><strong>Typed-standard reminders (hard gate).</strong> No <code>String.to_atom/1</code> on JSON keys;
+      <code>Jason.decode/1</code> (not <code>decode!/1</code>) at the boundary; a <code>typedstruct</code> with
+      <code>@enforce_keys</code> and an explicit <code>@type t</code> per struct; nested <code>Wire</code> module to keep
+      TypeCheck macros Dialyzer-clean; every public function gets an <code>@spec</code> (<code>@impl</code> callbacks exempt).
+      No new dependencies — everything reuses <code>jason</code>, <code>type_check</code>, <code>typedstruct</code> already pinned.</div>
+
+    <h3>TUI surface: the routing + component data (from the verified reference)</h3>
+    <p>The <code>tui</code> builtins are populated directly from <code>specs/tui-framework-decision-reference.md</code>.
+      The §1 router becomes the resolver's language fallback; the §3 component map becomes each descriptor's
+      <code>components[]</code>; §4.1 becomes <code>paradigm</code>; §5 becomes <code>rules</code>.</p>
+    <table>
+      <thead><tr><th>Language / stack</th><th>Default framework</th><th>Paradigm</th><th>Builtin</th></tr></thead>
+      <tbody>
+        <tr><td>Elixir / BEAM <em>(repo's own)</em></td><td>Ratatouille + Owl</td><td>Elm / MVU</td><td><code>tui-ratatouille.json</code></td></tr>
+        <tr><td>Go</td><td>Bubble Tea (+ Bubbles, Lip Gloss, Huh)</td><td>Elm / MVU</td><td><code>tui-bubbletea.json</code></td></tr>
+        <tr><td>Rust</td><td>Ratatui (+ tui-input/textarea)</td><td>Immediate-mode</td><td><code>tui-ratatui.json</code></td></tr>
+        <tr><td>Python</td><td>Textual (Rich for one-shot)</td><td>Retained + TCSS</td><td><code>tui-textual.json</code></td></tr>
+        <tr><td>JS / TS / Node</td><td>Ink (+ @inkjs/ui); OpenTUI if perf/3D/SSH</td><td>Retained (React)</td><td><code>tui-ink.json</code></td></tr>
+      </tbody>
+    </table>
+    <p>The descriptor's <code>paradigm</code> is load-bearing: it tells the agent <em>how much scaffolding to generate</em>
+      — an immediate-mode Ratatui app needs a full hand-written loop + panic-restore harness, an MVU Bubble Tea app needs
+      Model/Init/Update/View, a retained Textual app needs almost none. The §4.3 dead-dep flags become explicit "never
+      scaffold" rules (blessed, npyscreen, tui-rs, termui), biasing agents away from the abandoned libraries that dominate
+      training data.</p>
+
+    <h3>Descriptor JSON shape (illustrative — <code>priv/design_systems/tui-bubbletea.json</code>)</h3>
+    <pre><code>{
+  "surface": "tui",
+  "stack": "go",
+  "framework": "bubbletea",
+  "paradigm": "mvu",
+  "tokens": { "styling": "Lip Gloss chained styles; adaptive light/dark; cache styles outside the render hot path" },
+  "components": [
+    { "name": "list",     "package": "bubbles/list",     "when_to_use": "selectable list w/ fuzzy filter + pagination + help" },
+    { "name": "table",    "package": "bubbles/table",    "when_to_use": "tabular data" },
+    { "name": "viewport", "package": "bubbles/viewport", "when_to_use": "scroll long content / rendered markdown" },
+    { "name": "form",     "package": "huh",              "when_to_use": "prompts / wizard (Group = page)",
+      "example": "huh.NewSelect[string]().Options(...).Value(&amp;choice)" }
+  ],
+  "rules": [
+    "Scaffold Model/Init/Update/View; state mutates ONLY in Update.",
+    "Route ALL async work through a Cmd (func() Msg); never block Update/View.",
+    "return m, cmd; forward+bubble child Update/Cmd or spinners stop.",
+    "Pin ONE major: v1 github.com/charmbracelet + tea.KeyMsg, OR v2 charm.land + tea.KeyPressMsg — never mix.",
+    "Never scaffold blessed/npyscreen/tui-rs (dead)."
+  ],
+  "references": [
+    "specs/tui-framework-decision-reference.md#22-charm--bubble-tea--go",
+    "plugin_library/ui-ux-mvp/skills/tui-ux-polish/SKILL.md"
+  ]
+}</code></pre>
+
+    <h3>Rejected approaches</h3>
+    <ul>
+      <li><strong>A JSX/React generator (v0/21st.dev) in the pipeline.</strong> The primary target is Phoenix; HEEx ≠ JSX, so a prompt-to-JSX service does not apply, and 21st.dev is a stalled repo with an unpatched prompt-injection issue. Rejected as the core mechanism.</li>
+      <li><strong>Reusing <code>:context_fragment</code> for the whole thing.</strong> Loses per-stack resolution, MCP structure, and provenance (see Q1).</li>
+      <li><strong>Adding UI commands to <code>Projects.Capabilities</code> tokens only.</strong> Tokens are single string values; a component <em>inventory</em> needs structured records + examples. Tokens complement (Q3) but cannot carry the vocabulary.</li>
+    </ul>
+
+    <h3>Future work</h3>
+    <ul>
+      <li>A surface-aware <code>design</code> quality-gate stage — <code>web-ui-polish</code>'s playwright-cli recipe for web, a VHS/teatest or snapshot recipe for TUIs — scoring the MVP rubric to close the loop from "inject the system" to "verify the output follows it".</li>
+      <li><strong>Desktop as the third surface</strong> (the existing <code>desktop-ui-polish</code> skill already anticipates it): the same descriptor shape, <code>surface: "desktop"</code>, framework builtins for the target toolkit.</li>
+      <li>More builtins once the first pair per surface is proven — web: Svelte/Vue/plain-HTML; TUI: OpenTUI, tview, Spectre.Console (the reference already scopes these).</li>
+      <li>Optional paid tier via <code>harness_adapter</code>/<code>mcp_tools</code> (Q6), gated behind an existing design language.</li>
+    </ul>
+
+    <figure>
+      <img src="stack-aware-design-system-component-inventory/architecture.png" alt="A layered stack: builtin descriptors at the base, resolver plus contract in the middle, worker charter plus MCP tool on top, with a plugin slotting in from the side to override">
+      <figcaption>The full layering: builtin descriptors → resolver + contract → worker charter &amp; MCP tool, with plugins overriding from the side.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== AMENDMENTS ===== -->
+  <section id="amendments">
+    <h2>Amendments</h2>
+    <details open>
+      <summary>2026-07-06T11:05:20Z — Incorporate TUI as a first-class surface</summary>
+      <p>Extended the design-system subsystem from web-only to <strong>multi-surface</strong> (web + TUI) after the operator
+        supplied the verified <code>specs/tui-framework-decision-reference.md</code>. Changes: the descriptor gains
+        <code>surface</code> (<code>:web | :tui</code>) and <code>paradigm</code> (<code>:immediate | :mvu | :retained</code>)
+        fields; builtins are renamed <code>web-*</code> and joined by <code>tui-{ratatouille,ink,bubbletea,ratatui,textual}.json</code>
+        (Elixir/Ratatouille led, as the repo's own stack); the resolver keys on <code>{surface, framework}</code> and adds a
+        <strong>language→framework fallback</strong> (<code>@tui_defaults</code>) encoding the reference's §1 router for the
+        "no single TUI default" case; Profiler detection extended to pin the surface from TUI deps across all five manifests;
+        the contract + MCP tool now carry <code>paradigm</code>; a TUI sample plugin joins the extensibility proof. Added
+        Q7 (how surface is determined — detect + goal override) and Q8 (where the two-step TUI router lives — as data).
+        Reason: the "missing design system" gap applies identically to terminal UIs, and the reference doc's routing,
+        component maps, paradigm fork, code-gen rules, and dead-dep flags were inert prose until resolved + injected by
+        this subsystem. No phase count change — TUI folds into Phases 1–5 as data, not new code paths.</p>
+    </details>
+    <details open>
+      <summary>2026-07-06T11:51:36Z — Implemented Phases 1–5 (green gate)</summary>
+      <p>Built the subsystem on the branch <code>feat/design-system-inventory</code>, mirroring the
+        quality-gate stack. <strong>Phase 1</strong>: <code>:design_system</code> contribution kind +
+        <code>RepoBuilder.Plugins.DesignSystem</code> (never-raises wire→domain, nested <code>Wire</code>) +
+        eight builtins under <code>priv/design_systems/</code> (generic, web-phoenix, web-react, and
+        tui-{ratatouille,ink,bubbletea,ratatui,textual}). <strong>Phase 2</strong>: surface+framework
+        detection in <code>Projects.Profiler</code> (all five manifests) + <code>Orchestrator.DesignResolver</code>
+        (plugin → builtin{surface,framework} → TUI language default → generic). <strong>Phase 3</strong>:
+        <code>Orchestrator.DesignContract</code> folded into the <code>create_agent/2</code> charter
+        (stack → design → task), the orchestrator prompt, and the context primer. <strong>Phase 4</strong>:
+        the <code>resolve_design_system</code> MCP tool (catalog + dispatch + handler; manifest snapshot
+        regenerated). <strong>Phase 5</strong>: two sample plugins (<code>design-system-phoenix</code>,
+        <code>design-system-tui-bubbletea</code>) proving plugin-over-builtin precedence, a read-only design
+        card on <code>/projects/:id</code>, <code>ai_docs/design-system-plugins.md</code>, and a conditional_docs
+        row. 65 new/touched tests pass; the full five-command gate is green (Dialyzer: added one justified
+        <code>:no_return</code> ignore for <code>DesignSystem.Wire</code>, matching <code>QualityGate.Wire</code>;
+        incidentally narrowed a pre-existing underspec in <code>projects/worktree.ex</code>). <strong>Phase 6</strong>
+        (Forge generator) intentionally DEFERRED — it was marked stretch/optional and Phases 1–5 deliver the
+        working subsystem. Not committed (awaiting review).</p>
+    </details>
+    <details open>
+      <summary>2026-07-06T12:53:06Z — Implemented Phase 6 (Forge generator) — subsystem now complete</summary>
+      <p>Built the previously-deferred stretch phase. Added a closed <code>:design_system</code> generator to
+        <code>Forge.Generator.@defs</code> (+ <code>@type kind</code>), vendored
+        <code>priv/forge/generators/design_system.md</code> (<code>{PROJECT_CONTEXT}</code> + <code>{SPEC}</code>
+        slots instructing the agent to enumerate the repo's real components/tokens into the descriptor shape), added a
+        total <code>Validator.validate(:design_system, files)</code> clause (asset parses through
+        <code>DesignSystem.parse/1</code>), and taught <code>Packager.derive_id/2</code> to name the forged plugin
+        <code>&lt;surface&gt;-&lt;framework&gt;</code> from the descriptor JSON. One robustness fix surfaced: the Forge
+        packages a contribution <code>path</code> as the asset <em>directory</em>, whereas the bundled sample plugins
+        declare the descriptor <em>file</em> — so <code>DesignResolver</code>'s plugin layer now reads either (a file, or
+        the first <code>.json</code> inside a dir), keeping both authoring paths working. Two new Forge-workflow tests
+        (valid → package/install/activate → resolver sources <code>:plugin</code>; malformed → rejected by validation,
+        never installed) plus the extended <code>generators_present_test</code> (now asserts five templates). Full green
+        gate green; Dialyzer unchanged (10 skips, 0 unnecessary). Remaining full-suite flakiness is pre-existing
+        git-worktree / FS-watcher async raciness (failing set varies run-to-run, none in the new modules, all pass in
+        isolation) — not introduced here. Not committed (awaiting review). <strong>All six phases complete.</strong></p>
+    </details>
+  </section>
+
+</main>
+</body>
+</html>

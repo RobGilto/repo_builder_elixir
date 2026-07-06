@@ -1,0 +1,12 @@
+{
+  "schema": "agentic.plugin/1",
+  "id": "design-system-phoenix",
+  "name": "Design System — Phoenix",
+  "version": "1.0.0",
+  "description": "A Phoenix/HEEx design system a project can activate to override the builtin default: core_components + Petal/daisyUI component vocabulary, a restrained token ramp, and the anti-AI-slop rules — resolved into every UI worker's charter and pullable via the resolve_design_system tool. Proves 'add a design system = one package, zero core change'.",
+  "author": "repo_builder",
+  "compat": { "platform": ">= 0.0.0" },
+  "contributions": [
+    { "kind": "design_system", "path": "design/web-phoenix.json" }
+  ]
+}

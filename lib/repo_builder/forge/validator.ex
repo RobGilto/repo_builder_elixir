@@ -18,8 +18,11 @@ defmodule RepoBuilder.Forge.Validator do
       body < 500 lines.
     * `:workflow` — `.json` parsing to `{slug, steps[]}`; kebab slug; every step edge ∈
       `done | abort | sibling-name`.
+    * `:design_system` — `.json` parsing through the strict `Plugins.DesignSystem` boundary
+      (valid surface/framework/paradigm + a well-formed component inventory).
   """
   alias RepoBuilder.Forge.Generator
+  alias RepoBuilder.Plugins.DesignSystem
   alias RepoBuilder.PromptStandard.Frontmatter
 
   @typedoc "One validation failure reason (a human-readable atom-ish string)."
@@ -40,6 +43,7 @@ defmodule RepoBuilder.Forge.Validator do
   def validate(:agent, files), do: validate_markdown(files, ".md", &agent_checks/2)
   def validate(:skill, files), do: validate_skill(files)
   def validate(:workflow, files), do: validate_workflow(files)
+  def validate(:design_system, files), do: validate_design_system(files)
 
   # --- markdown (command / agent) ---
 
@@ -184,6 +188,22 @@ defmodule RepoBuilder.Forge.Validator do
   @spec valid_edge?(String.t(), MapSet.t()) :: boolean()
   defp valid_edge?(target, names),
     do: target in ["done", "abort"] or MapSet.member?(names, target)
+
+  # --- design_system ---
+
+  @spec validate_design_system([file()]) :: :ok | {:error, [reason()]}
+  defp validate_design_system(files) do
+    case Enum.find(files, &String.ends_with?(&1.path, ".json")) do
+      nil ->
+        {:error, ["no .json design-system artifact was written"]}
+
+      %{content: content} ->
+        case DesignSystem.parse(content) do
+          {:ok, %DesignSystem{}} -> :ok
+          {:error, reason} -> {:error, ["design-system descriptor is invalid (#{reason})"]}
+        end
+    end
+  end
 
   # --- shared checks ---
 

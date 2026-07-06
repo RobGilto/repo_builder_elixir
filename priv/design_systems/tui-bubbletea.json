@@ -1,0 +1,30 @@
+{
+  "surface": "tui",
+  "stack": "go",
+  "framework": "bubbletea",
+  "paradigm": "mvu",
+  "tokens": {
+    "styling": "Lip Gloss chained styles (Bold/Foreground/Padding/Border/Align); adaptive light/dark; cache styles outside the render hot path",
+    "layout": "compute widths from lipgloss.Width() + WindowSizeMsg; JoinHorizontal/JoinVertical/Place to compose"
+  },
+  "components": [
+    { "name": "list", "tag": "list.Model", "package": "bubbles/list", "when_to_use": "selectable list with fuzzy filter + pagination + help built in" },
+    { "name": "table", "tag": "table.Model", "package": "bubbles/table", "when_to_use": "tabular data" },
+    { "name": "viewport", "tag": "viewport.Model", "package": "bubbles/viewport", "when_to_use": "scroll long content / rendered markdown (pair with Glamour)" },
+    { "name": "textinput / textarea", "tag": "textinput.Model", "package": "bubbles/textinput", "when_to_use": "single-line / multi-line input" },
+    { "name": "form", "tag": "huh.NewForm(...)", "package": "huh", "when_to_use": "prompts/wizard; Group = a page; WithAccessible(true) for screen readers", "example": "huh.NewSelect[string]().Options(...).Value(&choice)" },
+    { "name": "spinner / progress", "tag": "spinner.Model", "package": "bubbles/spinner", "when_to_use": "indeterminate/determinate progress" }
+  ],
+  "rules": [
+    "Always scaffold Model/Init/Update/View; state mutates ONLY in Update (a type-switch on Msg); View is pure.",
+    "Route ALL async work through a Cmd (func() Msg); never do I/O in Update/View. Use tea.Batch/Sequence/Tick.",
+    "Return m, cmd by value; embedded child components must forward msg to their Update AND bubble up their Cmd, or spinners/timers stop.",
+    "Pin ONE major version — v1 (github.com/charmbracelet/* + tea.KeyMsg) OR v2 (charm.land/* + tea.KeyPressMsg) — never mix; version-mixing is the top failure mode.",
+    "Within Charm: shell-only prompts -> Gum; wizard -> Huh; full app -> Bubble Tea+Bubbles+Lip Gloss; remote -> Wish (SSH); markdown -> Glamour.",
+    "Never scaffold abandoned TUI libs."
+  ],
+  "references": [
+    "specs/tui-framework-decision-reference.md#22-charm--bubble-tea--go-the-elm-architecture",
+    "plugin_library/ui-ux-mvp/skills/tui-ux-polish/SKILL.md"
+  ]
+}

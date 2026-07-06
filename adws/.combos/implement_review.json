@@ -1,0 +1,19 @@
+{
+  "flavor": "iso",
+  "harness": null,
+  "initial_prompt": null,
+  "name": "implement_review",
+  "script_path": "/data/1.Projects/repo_builder_elixir/adws/adw_implement_review_iso.py",
+  "spec": null,
+  "steps": [
+    {
+      "name": "build",
+      "prompt": null
+    },
+    {
+      "name": "review",
+      "prompt": null
+    }
+  ],
+  "updated_at": "2026-07-04T06:05:13.039168Z"
+}

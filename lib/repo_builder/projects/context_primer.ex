@@ -19,12 +19,23 @@ defmodule RepoBuilder.Projects.ContextPrimer do
     - Stack: #{stack_line(profile.stack)}
     - Git: #{git_line(profile)}
     #{capability_lines(profile.capabilities)}
+    - UI surface: #{design_line(profile.stack)}
     - Conventions: #{conventions_line(profile)}
     - Discovered ADWs: #{adw_line(profile.adws)}
     - Repo-local slash commands: #{commands_line(profile.claude_commands)}
     """
     |> String.trim_trailing()
   end
+
+  # The detected UI surface + framework (design-system subsystem). Drives which design
+  # system the resolver injects into UI workers. "none detected" for non-UI projects.
+  @spec design_line(%{optional(String.t()) => term()}) :: String.t()
+  defp design_line(%{"surface" => surface, "framework" => framework})
+       when surface in ["web", "tui"] and is_binary(framework) do
+    "#{surface} / #{framework}"
+  end
+
+  defp design_line(_stack), do: "none detected"
 
   @spec stack_line(map()) :: String.t()
   defp stack_line(%{"language" => language} = stack) do

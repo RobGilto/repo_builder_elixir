@@ -1,0 +1,30 @@
+{
+  "surface": "tui",
+  "stack": "python",
+  "framework": "textual",
+  "paradigm": "retained",
+  "tokens": {
+    "styling": "TCSS (.tcss files, hot-reloadable): real selectors (type/#id/.class/pseudo), theme tokens $primary/$surface/$error, built-in themes (textual-dark, nord, gruvbox, dracula, catppuccin)",
+    "layout": "TCSS layouts: vertical/horizontal/grid (grid-size, spans)/dock (pin header/footer/sidebar)/layers (z-order overlays); units cells/%/fr/auto"
+  },
+  "components": [
+    { "name": "Button / Input", "tag": "Button, Input", "package": "textual.widgets", "when_to_use": "actions and text fields (MaskedInput for masked)" },
+    { "name": "DataTable", "tag": "DataTable", "package": "textual.widgets", "when_to_use": "tabular data with selection" },
+    { "name": "Tree / DirectoryTree", "tag": "Tree", "package": "textual.widgets", "when_to_use": "hierarchies / file trees" },
+    { "name": "TabbedContent", "tag": "TabbedContent/TabPane", "package": "textual.widgets", "when_to_use": "tabbed view switching" },
+    { "name": "Log / RichLog", "tag": "RichLog", "package": "textual.widgets", "when_to_use": "streaming logs (Log = fast plain, RichLog = any Rich renderable)" },
+    { "name": "ModalScreen", "tag": "ModalScreen", "package": "textual.screen", "when_to_use": "dialogs/overlays (push/pop the screen stack)" }
+  ],
+  "rules": [
+    "Never block the event loop (the top bug) — use @work / @work(thread=True); @work(exclusive=True) for search-as-you-type.",
+    "Do setup in on_mount, not compose (compose must be fast/side-effect-free); query_one fails before mount.",
+    "Put styling in .tcss with IDs/classes (not inline styles.*); handle messages with @on(Widget.Event, \"#id\").",
+    "Update widgets from threads via call_from_thread. Use Textual for interactive multi-screen apps; Rich alone for one-shot/streamed formatted output.",
+    "Textual ships a Python runtime (no single binary) and is single-maintainer post-Textualize (still MIT/active) — weigh that on multi-year bets; textual-serve gives the same app in a browser.",
+    "Never scaffold npyscreen (stale)."
+  ],
+  "references": [
+    "specs/tui-framework-decision-reference.md#24-textual--rich--python",
+    "plugin_library/ui-ux-mvp/skills/tui-ux-polish/SKILL.md"
+  ]
+}

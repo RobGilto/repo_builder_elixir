@@ -74,10 +74,105 @@ defmodule RepoBuilder.Projects.Profiler do
            File.regular?(Path.join(root, marker))
          end) do
       {marker, language, build_tool} ->
-        %{"language" => language, "build_tool" => build_tool, "marker" => marker}
+        {surface, framework} = detect_surface_framework(root, language, marker)
+
+        %{
+          "language" => language,
+          "build_tool" => build_tool,
+          "marker" => marker,
+          "surface" => surface,
+          "framework" => framework
+        }
 
       nil ->
-        %{"language" => "unknown", "build_tool" => nil, "marker" => nil}
+        %{
+          "language" => "unknown",
+          "build_tool" => nil,
+          "marker" => nil,
+          "surface" => "none",
+          "framework" => "none"
+        }
+    end
+  end
+
+  # --- UI surface + framework detection (design-system-plugins) ---
+  #
+  # Decides the UI surface (`web` / `tui` / `none`) and framework from the language's
+  # manifest. TUI deps are checked FIRST because they pin the surface (a repo with both a
+  # web framework and a companion CLI resolves as its detected TUI dep; the run's goal can
+  # override downstream). Fail-silent: an unreadable manifest yields `{"none", "none"}`.
+  @spec detect_surface_framework(String.t(), String.t(), String.t()) ::
+          {String.t(), String.t()}
+  defp detect_surface_framework(root, language, marker) do
+    content = read_marker(root, marker)
+
+    case tui_framework(language, content) do
+      nil ->
+        case web_framework(language, content) do
+          nil -> {"none", "none"}
+          framework -> {"web", framework}
+        end
+
+      framework ->
+        {"tui", framework}
+    end
+  end
+
+  @spec read_marker(String.t(), String.t()) :: String.t()
+  defp read_marker(root, marker) do
+    case File.read(Path.join(root, marker)) do
+      {:ok, content} -> content
+      {:error, _} -> ""
+    end
+  end
+
+  # Language → TUI framework, from the manifest content. `nil` ⇒ no TUI dep.
+  @spec tui_framework(String.t(), String.t()) :: String.t() | nil
+  defp tui_framework("elixir", content),
+    do: if(content =~ ~r/:(ratatouille|owl)\b/, do: "ratatouille")
+
+  defp tui_framework("go", content), do: if(content =~ ~r/\bbubbletea\b/, do: "bubbletea")
+  defp tui_framework("rust", content), do: if(content =~ ~r/\bratatui\b/, do: "ratatui")
+  defp tui_framework("python", content), do: if(content =~ ~r/\btextual\b/, do: "textual")
+
+  defp tui_framework("node", content) do
+    deps = node_deps(content)
+    if "ink" in deps or Enum.any?(deps, &String.starts_with?(&1, "@opentui/")), do: "ink"
+  end
+
+  defp tui_framework(_language, _content), do: nil
+
+  # Language → web framework, from the manifest content. `nil` ⇒ no web framework dep.
+  @spec web_framework(String.t(), String.t()) :: String.t() | nil
+  defp web_framework("elixir", content), do: if(content =~ ~r/:phoenix\b/, do: "phoenix")
+
+  defp web_framework("node", content) do
+    deps = node_deps(content)
+
+    cond do
+      "react" in deps -> "react"
+      "svelte" in deps -> "svelte"
+      "vue" in deps -> "vue"
+      true -> nil
+    end
+  end
+
+  defp web_framework(_language, _content), do: nil
+
+  # Dependency names declared in a package.json (dependencies + devDependencies). Fail-silent:
+  # malformed JSON yields `[]`.
+  @spec node_deps(String.t()) :: [String.t()]
+  defp node_deps(content) do
+    case Jason.decode(content) do
+      {:ok, %{} = json} ->
+        [Map.get(json, "dependencies"), Map.get(json, "devDependencies")]
+        |> Enum.flat_map(fn
+          %{} = deps -> Map.keys(deps)
+          _ -> []
+        end)
+
+      _ ->
+        []
     end
   end
 

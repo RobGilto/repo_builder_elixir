@@ -105,7 +105,7 @@ defmodule RepoBuilder.Projects.Worktree do
   # Stage and commit everything in the worktree onto its own `adw/*` branch with an
   # explicit identity, so a missing global git config can't fail the emergency commit and
   # a target repo's commit hooks can't block it (`--no-verify`).
-  @spec safety_commit(String.t()) :: :ok | {:error, term()}
+  @spec safety_commit(String.t()) :: :ok | {:error, binary()}
   defp safety_commit(path) do
     with {_out, 0} <- git(path, ["add", "-A"]),
          {_out, 0} <-

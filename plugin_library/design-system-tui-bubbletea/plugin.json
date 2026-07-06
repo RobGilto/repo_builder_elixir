@@ -1,0 +1,12 @@
+{
+  "schema": "agentic.plugin/1",
+  "id": "design-system-tui-bubbletea",
+  "name": "Design System — Bubble Tea (TUI)",
+  "version": "1.0.0",
+  "description": "A Go/Bubble Tea terminal design system (Elm/MVU): the Bubbles + Lip Gloss + Huh component vocabulary, styling tokens, and the code-gen rules (Model/Init/Update/View, async via Cmd, pin one major). Proves a TUI design system is one package too — cross-surface extensibility with zero core change.",
+  "author": "repo_builder",
+  "compat": { "platform": ">= 0.0.0" },
+  "contributions": [
+    { "kind": "design_system", "path": "design/tui-bubbletea.json" }
+  ]
+}

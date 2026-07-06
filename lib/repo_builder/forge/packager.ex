@@ -77,6 +77,26 @@ defmodule RepoBuilder.Forge.Packager do
     end
   end
 
+  defp derive_id(%Def{kind: :design_system}, asset_src) do
+    # design/<name>.json → "<surface>-<framework>" inside the JSON (fall back to the filename).
+    case first_file(asset_src, ".json") do
+      nil ->
+        {:error, :empty_asset}
+
+      file ->
+        id =
+          with {:ok, json} <- File.read(file),
+               {:ok, %{"surface" => surface, "framework" => framework}}
+               when is_binary(surface) and is_binary(framework) <- Jason.decode(json) do
+            "#{surface}-#{framework}"
+          else
+            _ -> Path.rootname(Path.basename(file))
+          end
+
+        {:ok, id}
+    end
+  end
+
   defp derive_id(%Def{}, asset_src) do
     # commands/<name>.md, agents/<name>.md → the file basename.
     case first_file(asset_src, ".md") do

@@ -1,0 +1,30 @@
+{
+  "surface": "web",
+  "stack": "node",
+  "framework": "react",
+  "paradigm": "retained",
+  "tokens": {
+    "styling": "Tailwind utility classes + shadcn/ui theme tokens (CSS variables); one accent + neutral ramp",
+    "components_source": "shadcn/ui — copy components into the repo (not a dependency) and theme via tokens",
+    "spacing": "Tailwind spacing scale on a 4px grid",
+    "contrast": "WCAG AA; visible focus-visible rings"
+  },
+  "components": [
+    { "name": "Button", "tag": "<Button>", "package": "@/components/ui/button", "when_to_use": "one primary action per view; use variant/size props" },
+    { "name": "Input", "tag": "<Input>", "package": "@/components/ui/input", "when_to_use": "text fields; pair with <Label> and form state" },
+    { "name": "Dialog", "tag": "<Dialog>", "package": "@/components/ui/dialog", "when_to_use": "modal flows" },
+    { "name": "Table", "tag": "<Table>", "package": "@/components/ui/table", "when_to_use": "tabular data" },
+    { "name": "Card", "tag": "<Card>", "package": "@/components/ui/card", "when_to_use": "grouped content — but avoid the generic three-identical-cards hero" },
+    { "name": "Select", "tag": "<Select>", "package": "@/components/ui/select", "when_to_use": "single choice from a list" }
+  ],
+  "rules": [
+    "Function components and hooks only; compose shadcn/ui primitives rather than hand-rolling raw Tailwind.",
+    "Theme through the design tokens (CSS variables), not ad-hoc color values.",
+    "Handle loading, empty, and error states explicitly — never a blank screen.",
+    "Follow the ui-ux-foundations rubric: hierarchy, AA contrast, visible focus, and none of the AI-slop tells."
+  ],
+  "references": [
+    "plugin_library/ui-ux-mvp/skills/web-ui-polish/SKILL.md",
+    "plugin_library/ui-ux-mvp/skills/ui-ux-foundations/SKILL.md"
+  ]
+}

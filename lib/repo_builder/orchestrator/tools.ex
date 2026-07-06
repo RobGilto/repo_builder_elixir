@@ -35,6 +35,7 @@ defmodule RepoBuilder.Orchestrator.Tools do
     AgentOps,
     AgentTemplates,
     Cost,
+    DesignSystem,
     Focus,
     Ledger,
     LogLookup,
@@ -183,6 +184,9 @@ defmodule RepoBuilder.Orchestrator.Tools do
 
   defp dispatch("run_quality_gate", orchestrator_id, args),
     do: QualityGate.run_quality_gate(orchestrator_id, args)
+
+  defp dispatch("resolve_design_system", orchestrator_id, args),
+    do: DesignSystem.resolve_design_system(orchestrator_id, args)
 
   defp dispatch(_tool, _orchestrator_id, _args), do: {:error, :unknown_tool}
 

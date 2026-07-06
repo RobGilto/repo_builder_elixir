@@ -1,0 +1,27 @@
+{
+  "surface": "web",
+  "stack": "elixir",
+  "framework": "phoenix",
+  "paradigm": "none",
+  "tokens": {
+    "provenance": "design-system-phoenix plugin (overrides the builtin web-phoenix)",
+    "styling": "Tailwind v4 + Petal Components / daisyUI on top of core_components; one accent + neutral ramp; AA contrast",
+    "icons": "core_components <.icon name=\"hero-...\">; never Heroicons modules",
+    "spacing": "4/8px grid"
+  },
+  "components": [
+    { "name": "input", "tag": "<.input>", "package": "core_components", "when_to_use": "every form field" },
+    { "name": "button", "tag": "<.button>", "package": "core_components", "when_to_use": "one primary action per view" },
+    { "name": "card", "tag": "<.card>", "package": "petal_components", "when_to_use": "grouped content — avoid the generic three-identical-cards hero" },
+    { "name": "modal", "tag": "<.modal>", "package": "petal_components", "when_to_use": "dialogs/overlays" }
+  ],
+  "rules": [
+    "Reach for a core_components or Petal tag before hand-rolling HEEx/Tailwind.",
+    "Begin LiveView templates with <Layouts.app flash={@flash} ...>.",
+    "Follow the ui-ux-foundations rubric; reject the AI-slop tells."
+  ],
+  "references": [
+    "lib/repo_builder_web/components/core_components.ex",
+    "plugin_library/ui-ux-mvp/skills/ui-ux-foundations/SKILL.md"
+  ]
+}

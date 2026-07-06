@@ -19,6 +19,7 @@
   {"lib/repo_builder/harness/wire.ex", :no_return},
   {"lib/repo_builder/plugins/manifest.ex", :no_return},
   {"lib/repo_builder/plugins/quality_gate.ex", :no_return},
+  {"lib/repo_builder/plugins/design_system.ex", :no_return},
   # Contract supertype — `leader_brain_attrs/2` (defp, no external callers) returns
   # `map()` in its spec to avoid exposing an internal implementation shape. The actual
   # runtime value is a fixed-key map `%{harness: _, provider: _, model: _, session_id: _}`

@@ -1,0 +1,29 @@
+{
+  "surface": "tui",
+  "stack": "elixir",
+  "framework": "ratatouille",
+  "paradigm": "mvu",
+  "tokens": {
+    "styling": "termbox attributes (color + bold/underline) via Ratatouille.Constants; a restrained accent + neutral cells",
+    "layout": "row/column/panel composition; size from the window dimensions on each render"
+  },
+  "components": [
+    { "name": "panel", "tag": "panel", "package": "Ratatouille.View", "when_to_use": "bordered/titled region — wrap most content", "example": "panel(title: \"Runs\", height: :fill) do ... end" },
+    { "name": "table", "tag": "table/table_row/table_cell", "package": "Ratatouille.View", "when_to_use": "tabular data" },
+    { "name": "label / text", "tag": "label", "package": "Ratatouille.View", "when_to_use": "styled text rows", "example": "label(content: \"hello\", attributes: [:bold])" },
+    { "name": "row / column", "tag": "row/column", "package": "Ratatouille.View", "when_to_use": "grid layout composition" },
+    { "name": "prompt / select", "tag": "Owl.IO.select", "package": "owl", "when_to_use": "interactive prompts + multiselect in mix tasks/CLIs", "example": "Owl.IO.select([\"a\", \"b\"], label: \"pick\")" },
+    { "name": "progress / live output", "tag": "Owl.ProgressBar / Owl.LiveScreen", "package": "owl", "when_to_use": "progress bars and live-updating output outside a full-screen app" }
+  ],
+  "rules": [
+    "Use the Elm Architecture: model/update/view/subscribe; view/2 is pure, all state changes flow through update/2 on messages.",
+    "Drive a control-surface TUI from the SAME BEAM node: turn PubSub/GenServer messages into TEA subscriptions.",
+    "Use Owl for prompt/output UX (colored tags, select, tables, progress); use Ratatouille for a full-screen interactive app — they compose.",
+    "Ratatouille is capped by termbox's feature set and is mature-but-quiet; if you need richer widgets, the pragmatic escape hatch is a Go (Bubble Tea) or Rust (Ratatui) sidecar over a port — but that adds a non-BEAM binary.",
+    "Never scaffold abandoned TUI libs (blessed/npyscreen/tui-rs)."
+  ],
+  "references": [
+    "specs/tui-framework-decision-reference.md#27-elixir--beam-your-repo_builder-stack",
+    "plugin_library/ui-ux-mvp/skills/tui-ux-polish/SKILL.md"
+  ]
+}

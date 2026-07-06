@@ -1,0 +1,23 @@
+{
+  "surface": "tui",
+  "stack": "go",
+  "framework": "bubbletea",
+  "paradigm": "mvu",
+  "tokens": {
+    "provenance": "design-system-tui-bubbletea plugin (overrides the builtin tui-bubbletea)",
+    "styling": "Lip Gloss chained styles; adaptive light/dark; cache styles outside the render hot path"
+  },
+  "components": [
+    { "name": "list", "package": "bubbles/list", "when_to_use": "selectable list with fuzzy filter + pagination + help" },
+    { "name": "table", "package": "bubbles/table", "when_to_use": "tabular data" },
+    { "name": "form", "package": "huh", "when_to_use": "prompts/wizard; Group = a page" }
+  ],
+  "rules": [
+    "Scaffold Model/Init/Update/View; mutate state only in Update; View is pure.",
+    "Route async work through a Cmd; never block Update/View.",
+    "Pin ONE major (v1 charmbracelet + tea.KeyMsg OR v2 charm.land + tea.KeyPressMsg)."
+  ],
+  "references": [
+    "specs/tui-framework-decision-reference.md#22-charm--bubble-tea--go-the-elm-architecture"
+  ]
+}

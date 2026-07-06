@@ -22,6 +22,10 @@ defmodule RepoBuilder.Plugins.Contribution do
     * `:quality_gate`     — a JSON gate descriptor: an ordered, stack-aware set of
       quality stages (format · lint · type · test · mutation) the orchestrator runs at
       each workstream phase's `:test` stage (see `RepoBuilder.Plugins.QualityGate`)
+    * `:design_system`    — a JSON descriptor: surface-/framework-specific design tokens,
+      a component inventory, rules, and paradigm the orchestrator resolves per project's
+      detected UI surface (web/TUI) and injects into a worker's charter (see
+      `RepoBuilder.Plugins.DesignSystem`)
     * `:harness_adapter`  — registered by a code plugin (see `RepoBuilder.Plugins.Code`)
     * `:mcp_tools`        — a tool-bundle descriptor (kind reserved; wiring is follow-on)
   """
@@ -36,10 +40,11 @@ defmodule RepoBuilder.Plugins.Contribution do
           | :context_fragment
           | :capability
           | :quality_gate
+          | :design_system
           | :harness_adapter
           | :mcp_tools
 
-  @kinds ~w(command_pack workflow_type agent_template skill context_fragment capability quality_gate harness_adapter mcp_tools)a
+  @kinds ~w(command_pack workflow_type agent_template skill context_fragment capability quality_gate design_system harness_adapter mcp_tools)a
   @kind_strings Enum.map(@kinds, &Atom.to_string/1)
 
   typedstruct enforce: true do
